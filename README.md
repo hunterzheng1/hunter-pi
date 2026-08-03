@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前只完成本地契约基线；真实 Pi 交互、持久恢复与产品入口仍未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已完成双平台契约基线；真实 Pi 交互、持久恢复与产品入口仍未实现或验证。
 
 ## 当前状态
 
-**Task 2 domain/kernel/Fake 已在本地实现 / 尚无可日常使用产品。**
+**Task 2 domain/kernel/Fake 已完成双平台验证 / 尚无可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Fake 只证明 Hunter Pi 自有契约；`hpi` 命令、持久事件库、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。本 Task 2 提交的远端 Windows/Ubuntu CI 尚未运行，状态为 `PENDING`。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Fake 只证明 Hunter Pi 自有契约；`hpi` 命令、持久事件库、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 2 精确提交 `71542e91d5f92cb62cc6002cf64456fe3d7d8248` 及合并提交 `fb162bf2126b356750dd327cef7b8e2fb26cde09` 的 Windows/Ubuntu CI 均已实际通过。
 
 ## 开发基线
 

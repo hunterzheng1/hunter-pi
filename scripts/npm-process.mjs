@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 const credentialEnvironmentKeys = new Set(["node_auth_token", "npm_auth_token", "npm_token"]);
 export const subprocessOutputLimitBytes = 1024 * 1024;
@@ -64,18 +64,63 @@ export const summarizeProcessFailure = (label, failure) =>
   createProcessFailureSummary(label, failure, []);
 
 /**
+ * @param {string} candidate raw npm error path.
+ * @param {{ readonly cwd: string; readonly isolationRoot: string; readonly knownRoots?: Readonly<Record<string, string>> }} context path classification context.
+ * @returns {string} stable path scope without path content.
+ */
+const classifyNpmFailurePath = (candidate, context) => {
+  const unquotedCandidate = candidate.trim().replace(/^(?:"(.*)"|'(.*)')$/u, "$1$2");
+  const pathApi = win32.isAbsolute(unquotedCandidate) ? win32 : posix;
+  const normalizedCandidate = pathApi.normalize(unquotedCandidate);
+
+  /** @param {string} root */
+  const isInside = (root) => {
+    const relativePath = pathApi.relative(pathApi.normalize(root), normalizedCandidate);
+    return (
+      relativePath === "" ||
+      (relativePath !== ".." &&
+        !relativePath.startsWith(`..${pathApi.sep}`) &&
+        !pathApi.isAbsolute(relativePath))
+    );
+  };
+
+  if (isInside(pathApi.join(context.isolationRoot, "cache"))) {
+    return "npm-cache";
+  }
+  if (isInside(context.isolationRoot)) {
+    return "npm-isolation";
+  }
+  if (isInside(context.cwd)) {
+    return "working-directory";
+  }
+
+  for (const [label, root] of Object.entries(context.knownRoots ?? {})) {
+    if (/^[a-z][a-z0-9-]{0,31}$/u.test(label) && isInside(root)) {
+      return label;
+    }
+  }
+
+  return pathApi.isAbsolute(normalizedCandidate) ? "other-absolute" : "relative";
+};
+
+/**
  * @param {{ readonly status: number | null; readonly stderr: string; readonly stdout: string }} failure npm failure details.
+ * @param {{ readonly cwd: string; readonly isolationRoot: string; readonly knownRoots?: Readonly<Record<string, string>> }} [context] path classification context.
  * @returns {string} bounded, non-content-bearing diagnostic summary.
  */
-export const summarizeNpmFailure = (failure) => {
+export const summarizeNpmFailure = (failure, context) => {
   const output = `${failure.stdout}\n${failure.stderr}`;
   const npmCode = /^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/imu.exec(output)?.[1];
   const syscall = /^npm (?:error|ERR!) syscall ([A-Za-z0-9_.-]{1,32})\s*$/imu.exec(output)?.[1];
   const errno = /^npm (?:error|ERR!) errno (-?\d{1,12})\s*$/imu.exec(output)?.[1];
+  const failurePath = /^npm (?:error|ERR!) path (.+?)\s*$/imu.exec(output)?.[1];
   const metadata = [
     npmCode === undefined ? undefined : `npmCode ${npmCode}`,
     syscall === undefined ? undefined : `syscall ${syscall}`,
     errno === undefined ? undefined : `errno ${errno}`,
+    failurePath === undefined || context === undefined
+      ? undefined
+      : `pathScope ${classifyNpmFailurePath(failurePath, context)}`,
   ].filter((value) => value !== undefined);
 
   return createProcessFailureSummary("npm CLI", failure, metadata);
@@ -87,9 +132,10 @@ export const summarizeNpmFailure = (failure) => {
  * @param {readonly string[]} arguments_ npm CLI arguments.
  * @param {string} cwd working directory.
  * @param {string} isolationRoot npm-only configuration and cache root.
+ * @param {Readonly<Record<string, string>>} [knownRoots] additional stable diagnostic path scopes.
  * @returns {string} captured standard output.
  */
-export const runNpm = (arguments_, cwd, isolationRoot) => {
+export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
   const npmEntryPoint = process.env["npm_execpath"];
   if (npmEntryPoint === undefined || npmEntryPoint.length === 0) {
     throw new Error("npm_execpath is required to run this repository smoke test.");
@@ -114,11 +160,14 @@ export const runNpm = (arguments_, cwd, isolationRoot) => {
 
   if (result.status !== 0) {
     throw new Error(
-      summarizeNpmFailure({
-        status: result.status,
-        stderr: result.stderr,
-        stdout: result.stdout,
-      }),
+      summarizeNpmFailure(
+        {
+          status: result.status,
+          stderr: result.stderr,
+          stdout: result.stdout,
+        },
+        { cwd, isolationRoot, knownRoots },
+      ),
     );
   }
 

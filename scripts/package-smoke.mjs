@@ -38,6 +38,10 @@ const temporaryRoot = await mkdtemp(join(tmpdir(), "hunter-pi-package-smoke-"));
 const archiveDirectory = join(temporaryRoot, "archives");
 const consumerDirectory = join(temporaryRoot, "consumer");
 const npmIsolationRoot = join(temporaryRoot, "npm");
+const npmDiagnosticRoots = {
+  archives: archiveDirectory,
+  repository: repositoryRoot,
+};
 
 try {
   await mkdir(archiveDirectory);
@@ -61,6 +65,7 @@ try {
       ],
       repositoryRoot,
       npmIsolationRoot,
+      npmDiagnosticRoots,
     );
     const archivePath = join(archiveDirectory, readArchiveFilename(packOutput));
     dependencies[packageName] = pathToFileURL(archivePath).href;
@@ -86,6 +91,7 @@ try {
     ["install", "--ignore-scripts", "--no-audit", "--no-fund"],
     consumerDirectory,
     npmIsolationRoot,
+    npmDiagnosticRoots,
   );
 
   const importProbe = `await Promise.all(${JSON.stringify(

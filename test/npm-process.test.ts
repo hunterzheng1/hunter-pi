@@ -52,19 +52,29 @@ describe("isolated npm process support", () => {
   });
 
   it("retains allowlisted npm failure metadata but drops its path", () => {
-    const summary = summarizeNpmFailure({
-      status: 4_294_963_238,
-      stderr: [
-        "npm error code ENOENT",
-        "npm error syscall lstat",
-        "npm error path C:\\Users\\private-user\\AppData\\Roaming\\npm",
-        "npm error errno -4058",
-      ].join("\n"),
-      stdout: "",
-    });
+    const summary = summarizeNpmFailure(
+      {
+        status: 4_294_963_238,
+        stderr: [
+          "npm error code ENOENT",
+          "npm error syscall lstat",
+          "npm error path C:\\Users\\private-user\\Temp\\npm-isolation\\cache\\missing",
+          "npm error errno -4058",
+        ].join("\n"),
+        stdout: "",
+      },
+      {
+        cwd: "C:\\work\\consumer",
+        isolationRoot: "C:\\Users\\private-user\\Temp\\npm-isolation",
+        knownRoots: {
+          archives: "C:\\work\\archives",
+          repository: "C:\\work\\repository",
+        },
+      },
+    );
 
     expect(summary).toMatch(
-      /^npm CLI failed \(status 4294963238, npmCode ENOENT, syscall lstat, errno -4058, outputBytes \d+, outputSha256 [a-f0-9]{64}\)\.$/u,
+      /^npm CLI failed \(status 4294963238, npmCode ENOENT, syscall lstat, errno -4058, pathScope npm-cache, outputBytes \d+, outputSha256 [a-f0-9]{64}\)\.$/u,
     );
     expect(summary).not.toContain("AppData");
     expect(summary).not.toContain("private-user");

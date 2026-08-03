@@ -14,6 +14,7 @@ const workspaceManifests = [
 const rootFiles = [".npmrc", "package-lock.json", "package.json"];
 const temporaryRoot = await mkdtemp(join(tmpdir(), "hunter-pi-clean-install-"));
 const npmIsolationRoot = join(temporaryRoot, ".npm-isolation");
+const npmDiagnosticRoots = { fixture: temporaryRoot };
 
 try {
   for (const relativePath of [...rootFiles, ...workspaceManifests]) {
@@ -22,8 +23,13 @@ try {
     await copyFile(join(repositoryRoot, relativePath), destination);
   }
 
-  runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"], temporaryRoot, npmIsolationRoot);
-  runNpm(["ls", "--workspaces", "--depth=0"], temporaryRoot, npmIsolationRoot);
+  runNpm(
+    ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+    temporaryRoot,
+    npmIsolationRoot,
+    npmDiagnosticRoots,
+  );
+  runNpm(["ls", "--workspaces", "--depth=0"], temporaryRoot, npmIsolationRoot, npmDiagnosticRoots);
 
   process.stdout.write("Clean npm install smoke passed.\n");
 } finally {

@@ -4,9 +4,9 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 1 engineering skeleton / 尚无可日常使用产品。**
+**Task 1 engineering skeleton 已完成 / 尚无可日常使用产品。**
 
-本仓库已开始建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线。当前四个 workspace 只是后续契约的空入口；`hpi` 命令、安装包、真实 Pi 集成、插件兼容和自动更新仍未实现或验证。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线。当前四个 workspace 只是后续契约的空入口；`hpi` 命令、安装包、真实 Pi 集成、插件兼容和自动更新仍未实现或验证。
 
 ## 开发基线
 

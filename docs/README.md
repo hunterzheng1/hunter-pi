@@ -5,10 +5,10 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-03
-- Product status: **DESIGNED / TASK_1_IN_PROGRESS**
-- Active implementation: Task 1 engineering skeleton; no usable product yet
+- Product status: **DESIGNED / TASK_1_COMPLETE**
+- Next implementation: Task 2 domain/kernel contracts and deterministic Fake Host; **NOT_STARTED** in this status snapshot
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
-- Remote CI: **PENDING** — Windows/Ubuntu workflow configured; no remote result is claimed until GitHub runs the exact commit
+- Remote CI: **PASS** — exact Task 1 merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Real Pi integration: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**

@@ -51,6 +51,25 @@ describe("isolated npm process support", () => {
     expect(summary).not.toContain("private-user");
   });
 
+  it("retains allowlisted npm failure metadata but drops its path", () => {
+    const summary = summarizeNpmFailure({
+      status: 4_294_963_238,
+      stderr: [
+        "npm error code ENOENT",
+        "npm error syscall lstat",
+        "npm error path C:\\Users\\private-user\\AppData\\Roaming\\npm",
+        "npm error errno -4058",
+      ].join("\n"),
+      stdout: "",
+    });
+
+    expect(summary).toMatch(
+      /^npm CLI failed \(status 4294963238, npmCode ENOENT, syscall lstat, errno -4058, outputBytes \d+, outputSha256 [a-f0-9]{64}\)\.$/u,
+    );
+    expect(summary).not.toContain("AppData");
+    expect(summary).not.toContain("private-user");
+  });
+
   it("summarizes a package import failure without returning captured output", () => {
     const summary = summarizeProcessFailure("Package import probe", {
       status: 1,

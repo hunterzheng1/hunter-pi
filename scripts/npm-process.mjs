@@ -38,21 +38,48 @@ export const createIsolatedNpmEnvironment = (environment, isolationRoot) => {
 /**
  * @param {string} label stable process label.
  * @param {{ readonly status: number | null; readonly stderr: string; readonly stdout: string }} failure process failure details.
+ * @param {readonly string[]} metadata allowlisted non-content metadata.
  * @returns {string} bounded, non-content-bearing diagnostic summary.
  */
-export const summarizeProcessFailure = (label, failure) => {
+const createProcessFailureSummary = (label, failure, metadata) => {
   const output = `${failure.stdout}\n${failure.stderr}`;
   const outputDigest = createHash("sha256").update(output).digest("hex");
   const outputBytes = Buffer.byteLength(output, "utf8");
+  const details = [
+    `status ${String(failure.status)}`,
+    ...metadata,
+    `outputBytes ${String(outputBytes)}`,
+    `outputSha256 ${outputDigest}`,
+  ];
 
-  return `${label} failed (status ${String(failure.status)}, outputBytes ${String(outputBytes)}, outputSha256 ${outputDigest}).`;
+  return `${label} failed (${details.join(", ")}).`;
 };
+
+/**
+ * @param {string} label stable process label.
+ * @param {{ readonly status: number | null; readonly stderr: string; readonly stdout: string }} failure process failure details.
+ * @returns {string} bounded, non-content-bearing diagnostic summary.
+ */
+export const summarizeProcessFailure = (label, failure) =>
+  createProcessFailureSummary(label, failure, []);
 
 /**
  * @param {{ readonly status: number | null; readonly stderr: string; readonly stdout: string }} failure npm failure details.
  * @returns {string} bounded, non-content-bearing diagnostic summary.
  */
-export const summarizeNpmFailure = (failure) => summarizeProcessFailure("npm CLI", failure);
+export const summarizeNpmFailure = (failure) => {
+  const output = `${failure.stdout}\n${failure.stderr}`;
+  const npmCode = /^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/imu.exec(output)?.[1];
+  const syscall = /^npm (?:error|ERR!) syscall ([A-Za-z0-9_.-]{1,32})\s*$/imu.exec(output)?.[1];
+  const errno = /^npm (?:error|ERR!) errno (-?\d{1,12})\s*$/imu.exec(output)?.[1];
+  const metadata = [
+    npmCode === undefined ? undefined : `npmCode ${npmCode}`,
+    syscall === undefined ? undefined : `syscall ${syscall}`,
+    errno === undefined ? undefined : `errno ${errno}`,
+  ].filter((value) => value !== undefined);
+
+  return createProcessFailureSummary("npm CLI", failure, metadata);
+};
 
 /**
  * Runs the npm CLI that launched the current repository script.

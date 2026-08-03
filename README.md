@@ -4,7 +4,7 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 5 开发者预览已在本机完成自动化实现与单制品安装烟测；远端 Windows/Ubuntu CI、真实 Windows TUI 人工 smoke 和真实 Provider 登录/请求仍是 `PENDING` 或 `NOT_PROVEN`。**
+**Task 5 开发者预览已完成本机自动化、单制品安装烟测及精确合并提交的 Windows/Ubuntu CI，并已从干净 `main` 安装到当前 Windows 用户；真实 Windows TUI 人工 smoke 仍为 `PENDING`，真实 Provider 登录/请求仍为 `NOT_PROVEN`。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 5 的单个 npm tarball 内含 Hunter 产品壳、Core Extension 与所需原创运行时代码，并把 Pi 0.83.0 作为精确依赖安装；打包身份分别绑定 `hpi.js` 产品壳与 Core 的 SHA-256，启动前会拒绝不匹配的字节；隔离全局安装 smoke 证明现有 raw `pi` 命令未被改写。操作系统网络隔离、真实 Provider、第三方插件兼容、Managed Change 和生产发布仍未被证明。
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-This repository is in the Task 0 documentation-baseline phase. Product implementation has not started; the next executable task, Task 1, is blocked by the public-license decision below. Task 0 is complete only after its staged tree is committed, pushed to `origin/main`, and the local/remote commit identities match.
+Task 0 is complete: its documentation tree is committed on `origin/main` with matching local/remote identity. Task 1 engineering-skeleton work is active; no usable product exists yet.
 
-The first blocking owner decision after Task 0 is the public license. Task 1 executable code cannot begin until the selected `LICENSE` and NOTICE/provenance policy are committed.
+The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 
 The next implementation sequence is defined in:
 

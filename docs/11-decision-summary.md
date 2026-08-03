@@ -29,12 +29,12 @@ The following decisions form the initial owner-approved Hunter Pi baseline.
 23. The initial repository is `hunterzheng1/hunter-pi`; the archived Hunter Platform and active Hunter-Harness repositories remain unchanged.
 24. Run outcome and Archive status are separate. Any ready, failed, blocked, cancelled, or incomplete Run may be archived without rewriting its outcome.
 25. Local-first means local canonical state, not zero network egress. Model-provider data categories, destination, external retention limits, and Hunter-controlled telemetry/network settings are disclosed and acknowledged before first send.
+26. Hunter Pi original source and documentation use the MIT License. Third-party material retains its own terms and requires an immutable NOTICE/provenance record before incorporation or publication.
 
 ## Open owner decisions
 
 These choices are intentionally not frozen by this baseline:
 
-- public license for original Hunter Pi code;
 - final npm package and executable names after registry/name checks;
 - Windows installer technology and signing/publisher arrangement;
 - whether Stable 1.0 defaults to `Balanced` or another permission profile after usability/security evidence;
@@ -42,4 +42,4 @@ These choices are intentionally not frozen by this baseline:
 - whether a future interface blocker justifies a Pi patch or fork;
 - which OMP-inspired capabilities, if any, enter version one after the core vertical slice.
 
-The public-license decision blocks Task 1 executable code, any Pi/OMP/Hunter-Harness code port, and all artifact publication. The remaining open decisions do not block Tasks 1–4 unless a task explicitly names them as prerequisites.
+ADR-0006 resolves the public-license prerequisite for Task 1. External code still cannot be incorporated without its required NOTICE/provenance record, and artifact publication remains separately unauthorized. The remaining open decisions do not block Tasks 1–4 unless a task explicitly names them as prerequisites.

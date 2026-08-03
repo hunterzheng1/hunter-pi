@@ -15,6 +15,25 @@ Hunter Pi currently follows a documentation-first delivery plan. Read `AGENTS.md
 9. Commit one coherent outcome; open a PR; wait for actual Windows and Ubuntu results.
 10. After merge, verify no unique work remains before cleaning the worktree and branch.
 
+## Engineering commands
+
+Use the repository-pinned Node.js 24/npm 11 line and install only from the committed lockfile on CI or a clean checkout:
+
+```powershell
+npm ci
+npm run doctor
+npm run lint
+npm run typecheck
+npm test
+npm run strict:check
+npm run build
+npm run format:check
+npm run package-smoke
+npm run clean-install-smoke
+```
+
+The root configuration and scripts are authoritative for every workspace. Do not create a second package manager, TypeScript baseline, or task-specific CI skeleton. The Task 1 Doctor checks repository prerequisites only; provider and Pi qualification belong to later explicit tasks.
+
 ## Documentation rules
 
 - Distinguish `implemented`, `verified`, `planned`, `blocked`, and `not proven`.

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "files": [],
+  "references": [
+    { "path": "./packages/domain" },
+    { "path": "./packages/engine-contracts" },
+    { "path": "./packages/workflow-kernel" },
+    { "path": "./packages/testkit" },
+    { "path": "./tools" }
+  ]
+}

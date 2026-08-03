@@ -116,14 +116,13 @@ Configuration/docs-only changes use schema/link/static checks instead of manufac
 
 ## CI matrix
 
-Initial CI target:
+Task 1 starts with one `quality` matrix job on both required platforms. Later tasks add or split focused jobs only when their corresponding contracts are exercised:
 
 | Job | Platform | Required content |
 |---|---|---|
-| `core` | Ubuntu | lint, typecheck, domain/kernel/Fake/plugin fixture tests, build |
-| `windows` | Windows | same plus Git/process/path integration |
-| `package-smoke` | Windows and Ubuntu | pack/install external fixture, version and Safe Mode smoke |
-| `pi-contract` | Windows and Ubuntu | fixed free/provider-independent Pi surfaces; paid/login cases explicitly skipped and reported |
+| `quality` (Task 1) | Windows and Ubuntu | locked install, repository Doctor, lint, typecheck, unit tests, strict compiler fixture, build, format, external package import, and clean-install smoke |
+| `core` (Task 2+) | Windows and Ubuntu | domain/kernel/Fake/plugin fixture tests as those packages gain behavior |
+| `pi-contract` (Task 4+) | Windows and Ubuntu | fixed free/provider-independent Pi surfaces; paid/login cases explicitly skipped and reported |
 
 A configured but unrun job is `PENDING`. A skipped provider-dependent test is not a platform PASS for that capability.
 

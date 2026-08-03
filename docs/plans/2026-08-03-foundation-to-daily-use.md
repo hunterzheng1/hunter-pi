@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `DOCUMENTATION_BASELINE / NO_IMPLEMENTATION`
-- Next executable task: `TASK_1_BLOCKED_LICENSE_DECISION`
+- Current repository phase: `TASK_1_ENGINEERING_SKELETON / NO_USABLE_PRODUCT`
+- Active task: `TASK_1`
 - First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
@@ -46,13 +46,13 @@ Verification:
 
 Completion means documentation exists; it does not mean any product capability is implemented.
 
-Task 0 may push documentation without a code license; absent a `LICENSE` file, no permission to reuse the repository content is granted. Task 1 is blocked until the owner records a license decision and the repository adds the corresponding license and NOTICE/provenance rules.
+Task 0 was pushed before a code license was selected. The owner subsequently selected MIT in ADR-0006 and added the root `LICENSE`, `NOTICE.md`, and provenance rules before Task 1 executable code.
 
 ## Task 1 — Shared engineering skeleton and dual-platform gate
 
 **Goal:** establish one Node/TypeScript monorepo foundation for all later tasks.
 
-Prerequisite: the public-license decision is accepted and the exact `LICENSE` plus NOTICE/provenance policy are committed before executable code.
+Prerequisite: satisfied by ADR-0006 plus the committed root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy. Every later external code port still requires its own provenance record.
 
 Deliverables:
 

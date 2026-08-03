@@ -1,0 +1,22 @@
+{
+  "name": "@hunter-pi/workflow-kernel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hunter Pi workflow kernel",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@hunter-pi/domain": "0.0.0",
+    "@hunter-pi/engine-contracts": "0.0.0"
+  }
+}

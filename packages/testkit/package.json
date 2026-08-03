@@ -1,0 +1,23 @@
+{
+  "name": "@hunter-pi/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared Hunter Pi contract test support",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@hunter-pi/domain": "0.0.0",
+    "@hunter-pi/engine-contracts": "0.0.0",
+    "@hunter-pi/workflow-kernel": "0.0.0"
+  }
+}

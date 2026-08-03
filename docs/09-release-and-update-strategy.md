@@ -1,0 +1,143 @@
+# Release and update strategy
+
+## Release unit
+
+A Hunter Pi Distribution Release is one qualified, immutable set:
+
+- Hunter Pi CLI/Product Shell;
+- Workflow Kernel and schema versions;
+- Core Extension and bundled resources;
+- exact upstream Pi Engine Release;
+- direct dependency lock;
+- plugin Compatibility/Trust/Isolation policy and catalog snapshot;
+- migration logic;
+- installer/package artifacts;
+- compatibility and verification receipts;
+- rollback target.
+
+The user updates this unit, not raw Pi independently.
+
+## Versioning
+
+Hunter Pi uses semantic versions for its own public behavior. The Pi engine version remains separately visible:
+
+```json
+{
+  "hunterPi": "0.x.y",
+  "engine": {
+    "product": "pi",
+    "version": "0.83.0",
+    "qualification": "NOT_PROVEN"
+  }
+}
+```
+
+The example is not a shipped manifest. Pi `0.83.0` is the initial research candidate, not yet qualified.
+
+Schema versions evolve independently and declare readable/migratable ranges. A Hunter Pi patch release may include a new qualified Pi version only if compatibility and rollback gates pass and the user-visible risk is documented.
+
+## Channels
+
+### Development
+
+Local builds from source. No update, support, or compatibility promise.
+
+### Preview
+
+Signed or checksummed candidate artifacts for bounded real use. May include newly qualified Pi or plugin behavior; known risks and rollback are mandatory.
+
+### Stable
+
+Promoted only after preview Evidence satisfies release criteria. Stable prioritizes compatibility and recovery over immediate upstream features.
+
+Channel changes are explicit. Stable users do not silently receive preview artifacts.
+
+## Candidate pipeline
+
+1. Verify the owner-selected repository license, NOTICE/provenance policy, dependency licenses, and publication authority; then freeze source commit, lockfiles, version, Engine Release, and build environment.
+2. Run formatting/lint, strict typecheck, unit tests, contract suites, and production build locally.
+3. Build exact npm/portable/installer artifacts from the frozen checkout.
+4. Install each artifact into a clean external fixture; do not test through workspace links.
+5. Run Pi Extension, package, JSON/RPC, SDK/session, Fake Host, real-host, redaction, recovery, update, and rollback suites.
+6. Push the exact source commit.
+7. Wait for actual Windows and Ubuntu CI for that commit.
+8. Compare CI artifacts and release candidates by digest.
+9. Publish to Preview; run bounded daily-use acceptance.
+10. Promote the exact artifact to Stable or retain it as rejected history.
+
+No step may rewrite an earlier failure. Reruns are new attempts with new receipts.
+
+## Packaging progression
+
+### Stage A — source/developer
+
+Run from the monorepo with a committed lockfile. Used only to build contracts and spikes.
+
+### Stage B — npm preview
+
+Publish or pack an exact CLI artifact that depends on or bundles the qualified Pi engine without resolving ambient global Pi. Validate `npx` and global install from a clean directory.
+
+### Stage C — Windows daily-use preview
+
+Provide a Windows x64 installer or portable artifact. Installer technology remains an open decision until the CLI slice proves value. The artifact must:
+
+- expose `hpi` predictably;
+- preserve side-by-side raw Pi/OMP installs;
+- identify publisher/signing status honestly;
+- verify integrity before update;
+- uninstall without deleting projects or user-selected archives;
+- support rollback.
+
+Windows ARM64, macOS, and Linux installers remain unclaimed until separately validated.
+
+## Update behavior
+
+Hunter Pi disables or bypasses the bundled engine's independent self-update path for managed installations. Update checks may be asynchronous and privacy-configurable.
+
+Before apply, the user sees:
+
+- current and target Distribution Releases;
+- current and target Engine Releases;
+- migrations and irreversible changes;
+- plugin Compatibility, Trust, or Isolation changes;
+- expected restart and disk use;
+- rollback availability.
+
+Apply uses staged files and atomic activation. A failed health check reactivates the prior release.
+
+## State migration
+
+- Migrations operate on a backup or journaled copy.
+- Old events remain readable or have a deterministic migration Receipt.
+- Preview may introduce a migration only with rollback or explicit one-way warning.
+- Stable cannot ship a one-way migration until export/recovery is proven.
+- A Distribution Release never edits project Git content merely because the executable updated.
+
+## Rollback
+
+Rollback restores the previous executable, engine, Core Extension, and compatible schema reader. It does not claim that sessions created by a newer incompatible engine can resume.
+
+Rollback success requires:
+
+- exact target artifact integrity;
+- executable health check;
+- project configuration readability;
+- explicit disposition for newer sessions/plugins/state;
+- a rollback Receipt.
+
+## Release evidence
+
+Each release publishes or retains:
+
+- source commit and tree identity;
+- repository license, NOTICE/provenance manifest, and dependency/license inventory;
+- engine source/version/integrity;
+- build provenance and artifact digests;
+- Windows/Ubuntu CI links and results;
+- local external-install smoke results;
+- real-host qualification summary;
+- redaction/privacy result;
+- known incompatibilities;
+- rollback target and test result.
+
+Missing or pending remote results remain visible. A release note is not a verification receipt.

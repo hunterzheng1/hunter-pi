@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+.cache/
+.temp/
+.tmp/
+
+# Local Hunter Pi state and credentials must never be committed.
+.hunter-pi/runtime/
+.hunter-pi/sessions/
+.hunter-pi/credentials/
+
+.env
+.env.*
+!.env.example
+*.log
+
+# Editor and operating-system noise.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

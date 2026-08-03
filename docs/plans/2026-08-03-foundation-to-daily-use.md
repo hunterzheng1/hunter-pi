@@ -1,0 +1,354 @@
+# Foundation to daily-use execution plan
+
+- Created: 2026-08-03
+- Product baseline: `docs/11-decision-summary.md`
+- Current repository phase: `DOCUMENTATION_BASELINE / NO_IMPLEMENTATION`
+- Next executable task: `TASK_1_BLOCKED_LICENSE_DECISION`
+- First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
+- Delivery style: one task, one focused branch/PR, explicit local and remote results
+
+## Outcome
+
+Deliver a Windows-first Hunter Pi daily-use preview that installs as one product, launches a qualified Pi interaction, supports Quick Session and one complete Managed Change with failure/recovery/independent verification, loads standard Pi packages with honest Compatibility/Trust/Isolation results, and updates/rolls back without losing state.
+
+## Global constraints
+
+- Do not modify or reactivate archived Hunter Platform.
+- Do not add a Hunter-Harness runtime dependency.
+- Do not Fork Pi or OMP without a new accepted ADR and reproduced public-interface blocker.
+- Do not implement desktop/mobile/team/cloud products in this plan.
+- Do not store or print credentials, full environment dumps, private prompts, or absolute user paths in Evidence.
+- Do not use real repositories for mutating probes.
+- Do not commit executable product code, port external code, or publish artifacts until the owner selects a repository license and NOTICE/provenance policy.
+- Do not call Fake proof, upstream documentation, installation, login, process exit, or pending CI a product PASS.
+- Do not publish npm/installer artifacts until the owning task explicitly authorizes it.
+
+## Task 0 — Documentation and repository baseline
+
+**Goal:** create the independent repository and freeze product, architecture, domain language, upstream facts, stories, risks, decisions, testing, and this plan.
+
+Deliverables:
+
+- root contributor/product documents;
+- product/architecture/workflow/security/release documents;
+- Hunter-Harness mechanism disposition;
+- dated Pi/OMP primary-source research;
+- accepted initial ADRs;
+- clean initial commit pushed to `main`.
+
+Verification:
+
+- Markdown links and relative paths resolve;
+- no credential/private path content;
+- after staging the intended initial tree, `git diff --cached --check` (plain `git diff --check` does not inspect untracked files);
+- only intended documentation/repository metadata;
+- remote branch points to exact local commit.
+
+Completion means documentation exists; it does not mean any product capability is implemented.
+
+Task 0 may push documentation without a code license; absent a `LICENSE` file, no permission to reuse the repository content is granted. Task 1 is blocked until the owner records a license decision and the repository adds the corresponding license and NOTICE/provenance rules.
+
+## Task 1 — Shared engineering skeleton and dual-platform gate
+
+**Goal:** establish one Node/TypeScript monorepo foundation for all later tasks.
+
+Prerequisite: the public-license decision is accepted and the exact `LICENSE` plus NOTICE/provenance policy are committed before executable code.
+
+Deliverables:
+
+- Node 24 and npm workspace policy;
+- strict ESM TypeScript with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, and isolated modules;
+- lint, typecheck, unit test, build, format/check, and package-smoke scripts;
+- lockfile and dependency policy;
+- Windows and Ubuntu GitHub Actions;
+- initial packages only for `domain`, `engine-contracts`, `workflow-kernel`, and `testkit` when exercised;
+- repository Doctor that reports local prerequisites without probing providers yet.
+
+RED/GREEN:
+
+- RED: workspace/package smoke and strict compiler fixtures fail before configuration;
+- GREEN: clean install and minimal package import pass locally;
+- REFACTOR: remove duplicate configs and make root scripts authoritative.
+
+Gates:
+
+- clean external `npm ci`;
+- lint/typecheck/test/build/package smoke locally;
+- actual Windows/Ubuntu CI for exact commit;
+- no global Pi/Harness dependency.
+
+Stop if Node/npm/Pi runtime requirements cannot coexist without a bounded packaging strategy.
+
+## Task 2 — Domain, Workflow Kernel contracts, and deterministic Fake Host
+
+**Goal:** prove core semantics without Pi.
+
+Deliverables:
+
+- branded IDs and strict schemas for Managed Change, Plan Revision, Run, Attempt, Step, Observation, Verification, Evidence, Checkpoint, Plugin Compatibility, Plugin Trust, Plugin Isolation, the combined Plugin Assurance Receipt, separate Compatibility Receipts, and Operation Receipts;
+- command/event-driven Workflow Kernel Interface and deterministic in-memory implementation;
+- provider-neutral Engine Host Interface;
+- Fake Host and shared contract suite;
+- state-transition and status projection tests;
+- idempotent external-operation receipts.
+
+Required RED cases:
+
+- Agent return cannot make a Change ready;
+- same operation ID/different payload is rejected;
+- retry cannot overwrite failed Attempt;
+- missing Verification cannot become PASS;
+- unbounded loop schema is rejected;
+- Pi/OMP/private provider fields are rejected from public schemas.
+
+Gates: focused suites, full local gate, dual-platform CI.
+
+## Task 3 — Durable events, Evidence, redaction, and replay
+
+**Goal:** make workflow truth crash-safe and privacy-safe before real Agent execution.
+
+Deliverables:
+
+- append-only versioned event store with atomic writes;
+- rebuildable projections;
+- Evidence envelopes, content digests, bounded logs/cursors, and redaction metadata;
+- HP-NFR-PERF-03 stream/Run/cache limits, retention projections, emergency reserve, and disk-full fault fixtures;
+- Checkpoint schema and replay;
+- adversarial secret/path/private-prompt corpus;
+- fault injection around every durable write boundary;
+- minimal human-readable Run summary.
+
+Stop if partial state can be accepted as a valid terminal result or forbidden corpus values reach portable Evidence.
+
+## Task 4 — Fixed-version Pi public-interface spike
+
+**Goal:** determine whether official Pi interfaces can support the required Engine Host contract before building product UX.
+
+Frozen candidate begins at Pi `0.83.0`; Task start rechecks current upstream and intentionally keeps or revises the candidate.
+
+Deliverables:
+
+- isolated `PI_CODING_AGENT_DIR` fixture;
+- minimal Core Extension probe;
+- Extension lifecycle/tool inventory receipt;
+- JSON and RPC framing/cancel probes;
+- SDK session/event/persistence/resume probes;
+- exact capability receipts mapped from behavior, not product name;
+- Windows and Ubuntu fixed-artifact evidence;
+- documented interface gaps and recommendation: continue, change approach, or propose fork ADR.
+
+All mutating probes use temporary Git fixtures. Provider login or paid model calls require explicit owner action and are not prerequisites for provider-independent contracts.
+
+Hard Stop:
+
+- required start/observe/interrupt/checkpoint/close semantics cannot be expressed through public surfaces;
+- Core Extension cannot prove its active identity/effective tool graph;
+- exact child/workspace cleanup cannot be reconciled.
+
+Tasks 5+ do not start after a Stop without an owner decision.
+
+## Task 5 — `hpi` Product Shell and first-run Doctor
+
+**Goal:** create the first usable interactive developer preview around the qualified Pi candidate.
+
+Deliverables:
+
+- `hpi`, `version`, `doctor`, configuration, and Safe Mode commands;
+- first-run wizard and isolated configuration root;
+- Pi TUI launch through the Pi Host;
+- provider data-egress disclosure and versioned acknowledgement before first send;
+- documented provider login launch, cancellation, retry, and readiness status without credential extraction;
+- visible mode/model/permission and plugin Compatibility/Trust/Isolation header;
+- raw Pi coexistence test;
+- Quick Session start/resume/exit smoke.
+
+Gates include a clean external package install, fake-endpoint disclosure/cancel/privacy tests, and real interactive Windows smoke. Any real login or paid call requires explicit owner action and is reported separately. This task does not claim Managed Change.
+
+## Task 6 — Managed Change vertical slice
+
+**Goal:** run one small representative change in an automatically created disposable Git fixture through Define → Plan → Execute → Verify → Review → Ready, before real-repository safety is claimed.
+
+Deliverables:
+
+- Managed Change commands and projections;
+- immutable Plan Revision;
+- Quick Session promotion with captured Git/dirty-state identity and explicit inclusion/exclusion of existing fixture changes;
+- focused project-check configuration;
+- one Agent Step through real Pi;
+- independent command verifier;
+- deliberate failing Attempt and bounded fixback Attempt;
+- review findings and final summary;
+- no commit/push automation required.
+
+Acceptance:
+
+- failure history remains visible;
+- Pi return does not complete the Change;
+- exact source/config/check identities bind Verification;
+- the fixture and all mutation targets are disposable and independently validated;
+- total workflow meets the preregistered value scorecard below.
+
+Preregistered Task 6 scorecard:
+
+- zero false `READY`, source loss, secret leak, or overwritten failed Attempt;
+- the deliberate failed Attempt remains visible and a new fixback Attempt passes every invalidated required check;
+- no more than two unplanned user interventions after Plan approval;
+- Hunter workflow overhead, excluding Agent and declared-check runtime, is at most ten minutes;
+- the final summary identifies every required check, Attempt, blocking finding, and unresolved risk.
+
+Outcome is deterministic: **GO** only if every item passes; **REVISE** if all zero-tolerance and correctness conditions pass but the intervention or overhead target misses; **STOP** on any zero-tolerance failure or a required public-interface blocker. Real user repositories remain prohibited until Task 7 passes its containment gates.
+
+## Task 7 — Git worktree, leases, and managed process host
+
+**Goal:** make Managed Change safe for normal repositories and long commands.
+
+Deliverables:
+
+- isolated worktree create/validate/preserve/cleanup;
+- writer and resource leases;
+- managed process sessions, heartbeats, incremental logs, timeout, cancel, and terminal finality;
+- Windows process-tree isolation and Unicode/space path fixtures;
+- symlink/junction and unique-work adversarial cleanup tests;
+- branch-hygiene receipts.
+
+Stop on any reproducible source-loss, escaped process tree, or ambiguous cleanup result.
+
+## Task 8 — Verification adequacy and review/fixback
+
+**Goal:** prevent partial test execution or review text from becoming a false completion claim.
+
+Deliverables:
+
+- verification DAG and resource locks;
+- selected/collected/executed/passed/skipped accounting;
+- reuse invalidation by source/config/environment identity;
+- structured P0–P3 findings;
+- RED/GREEN fixback batches;
+- exact Human Receipt;
+- adequacy validator gating `READY`.
+
+Gates include missing, duplicate, filtered, skipped, timeout, truncated, and stale-reuse negative fixtures.
+
+## Task 9 — Checkpoint recovery and archive
+
+**Goal:** resume safely after terminal/process interruption and freeze every outcome.
+
+Deliverables:
+
+- periodic durable Checkpoints;
+- process/operation/workspace/session reconciliation;
+- new recovery Attempt semantics;
+- forced-kill matrix;
+- idempotent post-Run Archive finalizer, manifest/checksum/replay, and readable outcome summary;
+- successful, failed, blocked, cancelled, and incomplete archives.
+- a portable second-device fixture: clone versioned project policy into a clean device profile, import a redacted Archive, rerun Doctor/login readiness, reject device-local paths/leases/processes, and prove that a live Attempt is not falsely migrated.
+- explicit Archive/artifact export and exact-target deletion receipts; no automatic deletion of event facts, terminal receipts, Checkpoints, or Archive manifests.
+
+No knowledge auto-promotion yet. Stop if recovery requires manual state editing or rewrites incomplete history.
+
+## Task 10 — Standard Pi Package manager and compatibility/trust/isolation
+
+**Goal:** let users install Pi ecosystem packages without hiding compatibility and authority.
+
+Deliverables:
+
+- list/install/disable/remove/import-from-pi flows for exact local/npm/Git sources;
+- resource and effective tool/hook inventory;
+- separate Compatibility (`VERIFIED`/`UNVERIFIED`/`INCOMPATIBLE`), Trust (`BUNDLED`/`USER_APPROVED`/`QUARANTINED`), and Isolation (`CONTAINED`/`PROCESS_AUTHORITY`/`NOT_PROVEN`) receipts;
+- Safe Mode recovery;
+- compatibility fixtures and at least two representative external packages;
+- license/provenance inventory.
+
+Stop if user plugin code must execute before Safe Mode or provenance display, if critical Core Extension shadowing cannot be detected, or if Compatibility would have to be presented as a general safety/containment claim.
+
+## Task 11 — Qualified update, packaging, and rollback
+
+**Goal:** make Hunter Pi one maintainable install instead of two manually coordinated products.
+
+Deliverables:
+
+- compatibility manifest and candidate qualification runner;
+- stable/preview channels;
+- disabled/uncontrolled Pi self-update;
+- exact npm artifact and clean install smoke;
+- Windows x64 portable/installer decision and implementation;
+- atomic apply, health check, migration, failed-update recovery, and rollback;
+- artifact digests, dependency/license inventory, and release evidence template.
+
+Publishing requires explicit owner authorization after all candidate gates and actual remote CI pass. Unsigned artifacts are labeled accordingly.
+
+## Task 12 — Windows daily-use pilot
+
+**Goal:** determine whether Hunter Pi is genuinely ready for regular personal use.
+
+Before execution, freeze the acceptance machine profile: Windows build, CPU model/core count, RAM, storage type, terminal, Git, security-software state, power mode, network condition, Hunter Pi release, and Engine Release. Freeze the ten task definitions, raw-Pi comparator configuration, expected terminal oracle, and applicable workflow-fact checklist before observing results. Checklist score is `captured applicable facts / total applicable facts` with raw counts retained; a manual intervention is a user action needed only to maintain delivery bookkeeping, verification certainty, or recovery state rather than to clarify the task itself.
+
+Pilot:
+
+- fresh supported Windows installation;
+- ten real tasks across at least two repositories;
+- at least three paired tasks run once through configured raw Pi and once through Hunter Pi, with identical starting source and declared acceptance checks;
+- Quick and Managed modes;
+- deliberate failure/fixback;
+- forced interruption/recovery;
+- representative plugins;
+- qualified update and rollback;
+- privacy/hash/full gate;
+- actual Windows/Ubuntu CI for final commit.
+
+Collect setup time, startup/steering latency, verification time, resource peaks, interventions, false completion prevention, recovery success, plugin conflicts, and user friction.
+
+Required quantitative gates:
+
+- zero false `READY`, source loss, raw secret leakage, or unacknowledged provider send;
+- at least 9 of 10 tasks end in the correct actionable terminal outcome against the frozen oracle;
+- all three forced interruptions preserve history and source; at least two resume successfully, and any unsupported resume is accurately `BLOCKED` or `NOT_PROVEN` rather than guessed;
+- 20 measured warm starts meet HP-NFR-PERF-01 p95 ≤ 3 seconds after five discarded warm-ups;
+- 30 local cancellation/steering/status acknowledgements meet HP-NFR-PERF-02 p95 ≤ 250 ms with upstream wait excluded only when separately observed;
+- both of two qualified update-and-rollback cycles preserve state and restore a usable known-good version;
+- all five frozen broken/malicious plugin fixture sets (throwing initialization, reserved collision, built-in override, secret/path leakage, and oversized output) start in Safe Mode without evaluating user plugin code;
+- no recovery or rollback requires manual editing of Hunter state files;
+- no unresolved P0/P1 review finding remains;
+- Hunter-owned process memory meets HP-NFR-PERF-05;
+- HP-NFR-PERF-03 limits are observed during the pilot; soft/hard-limit and disk-pressure fixtures prove bounded output/cache, a usable 64 MiB critical reserve, replayable prior state, blocked unsafe new Runs, and no automatic critical-record deletion;
+- across the three paired comparator tasks, Hunter captures at least 95% of the preregistered applicable workflow-fact checklist and never scores below raw Pi; it also either reduces aggregate manual bookkeeping/recovery interventions by at least 30% or detects/contains at least one injected false-completion or recovery ambiguity left manual in raw Pi, while median additional Hunter-only overhead remains ≤ 10 minutes.
+
+Raw samples, task oracles, interventions, comparator differences, environment identity, and every failure remain in the Evidence set. Provider/model latency is reported separately from Hunter-owned latency; if it cannot be separated, the relevant performance claim is `NOT_PROVEN`.
+
+Terminal outcomes:
+
+- **GO** — every required gate passes; publish a daily-use preview only after the separately authorized publication gate and begin bounded backlog prioritization;
+- **REVISE** — every zero-tolerance gate passes, but one or more noncritical quantitative gates miss; preserve Evidence and execute only named fixes in at most two linked replacement pilot Runs, each bound to one new immutable Plan Revision;
+- **STOP** — any zero-tolerance or comparator-value gate fails, a core invariant remains blocked, or the same required noncritical gate still misses after two replacement pilot Runs.
+
+The terminal pilot decision is an aggregate projection over the original and replacement Run Archives. It lists every miss and predecessor/successor link; a later passing Run never erases an earlier pilot failure.
+
+## Task 13 — Stable 1.0 decision, not automatic work
+
+Task 13 is a decision checkpoint, not implied authorization. It evaluates support platforms, signing, default permissions, knowledge promotion, optional Harness protocol, additional OMP-inspired modules, and whether any Pi patch/fork is justified by accumulated evidence. The repository license is deliberately resolved before Task 1 and is not deferred to this checkpoint.
+
+## Milestones
+
+| Milestone | Tasks | User-visible claim |
+|---|---|---|
+| M0 Documentation | 0 | design exists; no product |
+| M1 Contract foundation | 1–3 | Hunter workflow contracts proven with Fake Host |
+| M2 Interactive developer preview | 4–5 | fixed Pi interaction works on tested fixtures |
+| M3 Managed delivery preview | 6–9 | one real verified/recoverable Change works |
+| M4 Extensible distributable preview | 10–11 | packages and qualified updates work on tested artifacts |
+| M5 Daily-use decision | 12 | bounded real-use Evidence supports GO/REVISE/STOP |
+
+## Per-task handoff report
+
+Every task reports:
+
+- branch, commit, PR, and exact source identity;
+- files and public contracts changed;
+- RED/GREEN/REFACTOR evidence by cluster;
+- local commands and actual results;
+- Windows/Ubuntu CI links and actual/pending state;
+- real vs Fake/provider-independent results;
+- credentials/privacy scan result;
+- known risks, skips, and NOT_PROVEN capabilities;
+- worktree/branch cleanup disposition;
+- next task recommendation or Stop condition.

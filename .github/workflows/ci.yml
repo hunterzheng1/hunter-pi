@@ -17,7 +17,9 @@ jobs:
   quality:
     name: ${{ matrix.os }} / Node 24
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows runs two isolated npm installation smokes; observed network variance
+    # can exceed 20 minutes even when every completed assertion passes.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

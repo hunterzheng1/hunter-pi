@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 
 const credentialEnvironmentKeys = new Set(["node_auth_token", "npm_auth_token", "npm_token"]);
+const isolatedTemporaryEnvironmentKeys = new Set(["temp", "tmp", "tmpdir"]);
 export const subprocessOutputLimitBytes = 1024 * 1024;
 
 /**
@@ -54,7 +55,11 @@ export const createIsolatedNpmEnvironment = (environment, isolationRoot) => {
 
   for (const [key, value] of Object.entries(environment)) {
     const normalizedKey = key.toLowerCase();
-    if (normalizedKey.startsWith("npm_config_") || credentialEnvironmentKeys.has(normalizedKey)) {
+    if (
+      normalizedKey.startsWith("npm_config_") ||
+      credentialEnvironmentKeys.has(normalizedKey) ||
+      isolatedTemporaryEnvironmentKeys.has(normalizedKey)
+    ) {
       continue;
     }
 
@@ -69,6 +74,9 @@ export const createIsolatedNpmEnvironment = (environment, isolationRoot) => {
     NPM_CONFIG_GLOBALCONFIG: join(isolationRoot, "global.npmrc"),
     NPM_CONFIG_UPDATE_NOTIFIER: "false",
     NPM_CONFIG_USERCONFIG: join(isolationRoot, "user.npmrc"),
+    TEMP: join(isolationRoot, "tmp"),
+    TMP: join(isolationRoot, "tmp"),
+    TMPDIR: join(isolationRoot, "tmp"),
   };
 };
 
@@ -183,6 +191,7 @@ export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
   };
 
   mkdirSync(join(isolationRoot, "cache"), { recursive: true });
+  mkdirSync(join(isolationRoot, "tmp"), { recursive: true });
   writeFileSync(join(isolationRoot, "global.npmrc"), "", "utf8");
   writeFileSync(join(isolationRoot, "user.npmrc"), "", "utf8");
 

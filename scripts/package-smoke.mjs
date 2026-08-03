@@ -1,12 +1,12 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { z } from "zod";
 
 import { runNpm, subprocessOutputLimitBytes, summarizeProcessFailure } from "./npm-process.mjs";
+import { createRelativeFileSpecifier } from "./package-specifier.mjs";
+import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const packageNames = [
@@ -34,7 +34,7 @@ const readArchiveFilename = (output) => {
   return record.filename;
 };
 
-const temporaryRoot = await mkdtemp(join(tmpdir(), "hunter-pi-package-smoke-"));
+const temporaryRoot = await createCanonicalTemporaryDirectory("hunter-pi-package-smoke-");
 const archiveDirectory = join(temporaryRoot, "archives");
 const consumerDirectory = join(temporaryRoot, "consumer");
 const npmIsolationRoot = join(temporaryRoot, "npm");
@@ -68,7 +68,7 @@ try {
       npmDiagnosticRoots,
     );
     const archivePath = join(archiveDirectory, readArchiveFilename(packOutput));
-    dependencies[packageName] = pathToFileURL(archivePath).href;
+    dependencies[packageName] = createRelativeFileSpecifier(consumerDirectory, archivePath);
   }
 
   await writeFile(

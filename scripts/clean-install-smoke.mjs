@@ -1,8 +1,8 @@
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { runNpm } from "./npm-process.mjs";
+import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const workspaceManifests = [
@@ -12,7 +12,7 @@ const workspaceManifests = [
   "packages/testkit/package.json",
 ];
 const rootFiles = [".npmrc", "package-lock.json", "package.json"];
-const temporaryRoot = await mkdtemp(join(tmpdir(), "hunter-pi-clean-install-"));
+const temporaryRoot = await createCanonicalTemporaryDirectory("hunter-pi-clean-install-");
 const npmIsolationRoot = join(temporaryRoot, ".npm-isolation");
 const npmDiagnosticRoots = { fixture: temporaryRoot };
 

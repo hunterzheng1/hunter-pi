@@ -40,6 +40,8 @@ describe("isolated npm process support", () => {
       npm_config_cache: "C:\\Users\\private-user\\npm-cache",
       NODE_AUTH_TOKEN: "do-not-inherit",
       NPM_TOKEN: "do-not-inherit-either",
+      TEMP: "C:\\Users\\PRIVATE~1\\Temp",
+      tmpdir: "C:\\Users\\private-user\\Temp",
     };
 
     const isolated = createIsolatedNpmEnvironment(sourceEnvironment, "isolated-npm-root");
@@ -50,11 +52,15 @@ describe("isolated npm process support", () => {
       NPM_CONFIG_CACHE: join("isolated-npm-root", "cache"),
       NPM_CONFIG_GLOBALCONFIG: join("isolated-npm-root", "global.npmrc"),
       NPM_CONFIG_USERCONFIG: join("isolated-npm-root", "user.npmrc"),
+      TEMP: join("isolated-npm-root", "tmp"),
+      TMP: join("isolated-npm-root", "tmp"),
+      TMPDIR: join("isolated-npm-root", "tmp"),
     });
     expect(isolated).not.toHaveProperty("NPM_CONFIG_REGISTRY");
     expect(isolated).not.toHaveProperty("npm_config_cache");
     expect(isolated).not.toHaveProperty("NODE_AUTH_TOKEN");
     expect(isolated).not.toHaveProperty("NPM_TOKEN");
+    expect(isolated).not.toHaveProperty("tmpdir");
     expect(sourceEnvironment).toHaveProperty("NODE_AUTH_TOKEN", "do-not-inherit");
   });
 

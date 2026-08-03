@@ -166,7 +166,7 @@ Deliverables:
 
 Gates include a clean external package install, fake-endpoint disclosure/cancel/privacy tests, and real interactive Windows smoke. Any real login or paid call requires explicit owner action and is reported separately. This task does not claim Managed Change.
 
-Automation snapshot: implementation `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` passed the PR Windows/Ubuntu and cross-platform Evidence gates, then merge `8573b1f62d154275bb81c3c07b432a3db40632bb` passed the same gates on `main`. A tarball built from that clean merge installed successfully for the current Windows user and reported the expected product, Engine, source, product-shell, and Core identities. Real interactive TUI rendering and any real Provider login/request remain separately `PENDING` or `NOT_PROVEN`.
+Automation snapshot: implementation `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` passed the PR Windows/Ubuntu and cross-platform Evidence gates, then merge `8573b1f62d154275bb81c3c07b432a3db40632bb` passed the same gates on `main`. A tarball built from that clean merge installed successfully for the current Windows user and reported the expected product, Engine, source, product-shell, and Core identities. After preserving a real 20-minute Windows job cancellation and raising the measured scheduling ceiling, current `main` `160080eddde80d98ada58c8c78f3ccbe6754cc1a` passed Windows, Ubuntu, and aggregate Evidence CI, and its exact clean artifact replaced the earlier local installation. Real interactive TUI rendering and any real Provider login/request remain separately `PENDING` or `NOT_PROVEN`.
 
 ## Task 6 — Managed Change vertical slice
 

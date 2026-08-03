@@ -2,7 +2,7 @@
 
 ## Status
 
-Tasks 0, 1, and 2 are complete. Task 3 durable events/Evidence/replay is implemented on its topic branch and passes local gates; exact remote Windows/Ubuntu CI remains `PENDING` until the commit actually runs. Task 4 is next only after Task 3 merges. No usable product exists yet, and Fake Host/storage fixtures are not real Pi verification.
+Tasks 0–3 are complete and merged. Task 3 exact implementation and merge commits passed local plus Windows/Ubuntu gates; its superseded first candidate retains an explicit Windows failure record. Task 4 fixed-version Pi public-interface spike is next. No usable product exists yet, and Fake Host/storage fixtures are not real Pi verification.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

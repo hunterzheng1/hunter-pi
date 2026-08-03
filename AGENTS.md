@@ -14,7 +14,7 @@ Before interpreting or changing the product, read:
 
 ## Current repository status
 
-- Tasks 0–2 are merged. Task 3 adds the local durable event/Evidence/replay implementation; its exact remote Windows/Ubuntu CI remains `PENDING` until this topic commit actually runs there.
+- Tasks 0–3 are merged. Task 3 implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` and merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed exact Windows/Ubuntu CI. Task 4 is the next bounded task; no real Pi or usable product has been proven yet.
 - Do not claim that `hpi`, a Windows installer, a Pi Host, plugin compatibility, or qualified updates exist until implementation and evidence are committed.
 - The current code proves provider-neutral Hunter Pi contracts with deterministic fixtures. It does not prove a real Pi interaction or a usable product.
 - Implementation proceeds task by task from the active plan; do not silently expand to a Pi or Oh My Pi fork.

@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已完成双平台契约基线，并在 Task 3 分支实现本地持久事件、脱敏 Evidence 与重放；真实 Pi 交互与产品入口仍未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已在 `main` 完成双平台契约基线，以及 Task 3 本地持久事件、脱敏 Evidence 与重放；真实 Pi 交互与产品入口仍未实现或验证。
 
 ## 当前状态
 
-**Task 3 durable events/Evidence/replay 已在本地实现，远端 CI PENDING / 尚无可日常使用产品。**
+**Task 3 durable events/Evidence/replay 已合并并通过精确双平台 CI；Task 4 Pi 公共接口 spike 尚未开始 / 尚无可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Task 3 进一步增加不可变哈希链事件段、语义重放、原子不可覆盖发布、可重建 projection、统一 Evidence 脱敏与 8 MiB 截断、包含非关键元数据的 Run 保留阈值、经实际分配与单链接校验的 64 MiB 紧急保留区、磁盘满/写入故障 fixture，以及不会把 Checkpoint 误报为成功的持久 Kernel；紧急保留区、最小写入余量或原子写入探针不可用时，新 mutating Run 会 fail-closed。Fake 与本地故障注入只证明 Hunter Pi 自有契约；`hpi` 命令、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 2 精确提交 `71542e91d5f92cb62cc6002cf64456fe3d7d8248` 及合并提交 `fb162bf2126b356750dd327cef7b8e2fb26cde09` 的 Windows/Ubuntu CI 均已实际通过；Task 3 的远端 CI 尚未运行，状态为 `PENDING`。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Task 3 进一步增加不可变哈希链事件段、语义重放、原子不可覆盖发布、可重建 projection、统一 Evidence 脱敏与 8 MiB 截断、包含非关键元数据的 Run 保留阈值、经实际分配与单链接校验的 64 MiB 紧急保留区、磁盘满/写入故障 fixture，以及不会把 Checkpoint 误报为成功的持久 Kernel；紧急保留区、最小写入余量或原子写入探针不可用时，新 mutating Run 会 fail-closed。Fake 与本地故障注入只证明 Hunter Pi 自有契约；`hpi` 命令、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 3 精确实现提交 `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` 通过 [Windows/Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818956056)，合并提交 `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` 通过 [Windows/Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30819181475)。被替代的首次候选 `e1b06c523084a34c8b32a852848c906fa9877236` 保留了 [Ubuntu PASS / Windows FAIL](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818314313) 历史；失败原因是 Windows canonical path 大小写误判，修复后没有改写旧结果。
 
 ## 开发基线
 

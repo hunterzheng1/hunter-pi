@@ -5,14 +5,15 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-03
-- Product status: **IMPLEMENTED / TASK_4_LOCAL_EVIDENCE / NO_USABLE_PRODUCT**
-- Current implementation: Tasks 1–3 are merged; Task 4 fixes Pi `0.83.0`, locally proves provider-independent Extension/JSON/RPC/SDK surfaces in an isolated temporary Git fixture, and passes the complete local repository gate
-- Next implementation: Task 4 exact Windows/Ubuntu remote CI is **PENDING**; Task 5 `hpi` product shell starts only after that gate passes
+- Product status: **IMPLEMENTED / TASK_4_COMPLETE / TASK_5_NOT_STARTED / NO_USABLE_PRODUCT**
+- Current implementation: Tasks 1–4 are merged; Task 4 fixes Pi `0.83.0`, proves bounded provider-independent Extension/JSON/RPC/SDK surfaces in isolated temporary Git fixtures on Windows and Ubuntu, and compares exact artifact/source/execution/Core identities
+- Next implementation: Task 5 `hpi` product shell, first-run Doctor, Safe Mode, and Quick Session
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
 - Task 3 remote CI: **PASS** — exact implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818956056), and merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30819181475). The superseded `e1b06c523084a34c8b32a852848c906fa9877236` run remains recorded as [Ubuntu PASS / Windows FAIL](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818314313).
-- Task 4 local Windows Evidence: **SUPPORTED within recorded bounds** — fixed Pi artifact Extension/JSON/RPC/SDK probe; remote Windows/Ubuntu CI **PENDING**
+- Task 4 remote CI: **PASS within recorded provider-independent bounds** — exact implementation `8efe194a1c5f6256e68f1e8c20d0e59848376f2b` passed [Windows, Ubuntu, and aggregate identity PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30831361499), and merge `00f0d0d7d702779706e2a5aefac3d67ed0a49699` passed the same [main CI gates](https://github.com/hunterzheng1/hunter-pi/actions/runs/30832264845)
+- Task 4 local Windows Evidence: **SUPPORTED within recorded bounds** — fixed Pi artifact Extension/JSON/RPC/SDK probe
 - Real Provider and interactive Pi TUI: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**

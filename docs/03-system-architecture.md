@@ -65,7 +65,7 @@ Owns branded identities, strict runtime schemas, state transitions, error taxono
 
 A deep module that accepts commands and facts, validates invariants, appends events, and returns deterministic next actions. Callers should not orchestrate workflow states themselves.
 
-Proposed minimal Interface:
+Task 2 minimal Interface:
 
 ```typescript
 interface WorkflowKernel {
@@ -75,7 +75,7 @@ interface WorkflowKernel {
 }
 ```
 
-The exact types are deferred to Task 2, but the small surface is intentional. A collection of `startPlan`, `markAgentDone`, `retryTest`, and provider-specific convenience methods would leak the state machine to callers and is rejected.
+Every public `WorkflowCommand`, `WorkflowDecision`, and `RecoveryDecision` is a strict, schema-versioned runtime envelope. Unknown fields are rejected at the Kernel boundary, including Provider-private session or UI state. The small surface is intentional: a collection of `startPlan`, `markAgentDone`, `retryTest`, and provider-specific convenience methods would leak the state machine to callers and is rejected.
 
 ### Engine Host Interface
 
@@ -100,6 +100,7 @@ Interface rules:
 - Every mutating operation has an operation ID and payload fingerprint.
 - Replaying the same ID and fingerprint returns the same Receipt.
 - Replaying the same ID with a different fingerprint is rejected.
+- Expected target validation compares the complete namespace/reference identity and expired operations fail closed.
 - Capability is calculated from probe receipts, never product names.
 - Process, terminal, model, and session facts are Observations.
 - Pi-private identifiers live only in adapter-owned external-reference payloads.

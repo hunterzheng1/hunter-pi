@@ -95,6 +95,8 @@ The product reports three independent dimensions:
 
 Popularity, upstream stars, successful installation, or another user's report cannot produce Compatibility `VERIFIED`. Compatibility `VERIFIED` cannot produce Trust or Isolation. A normal Pi extension executes in the Agent process and is reported as `PROCESS_AUTHORITY` unless a separately tested container or sandbox receipt proves `CONTAINED`.
 
+The combined Plugin Assurance Receipt embeds the exact immutable Compatibility Receipt instead of copying an independently mutable tuple. Its Compatibility value must equal that Receipt's outcome; Trust and Isolation remain separate assessments over the same exact plugin/release/platform/configuration identity.
+
 Managed Change policy evaluates all three dimensions. A critical `INCOMPATIBLE` or `QUARANTINED` plugin is blocked. A `PROCESS_AUTHORITY` or `NOT_PROVEN` plugin may be allowed only with an explicit downgrade; it cannot participate in a claim of verified containment.
 
 ## Compatibility suite

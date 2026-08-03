@@ -2,7 +2,7 @@
 
 ## Status
 
-Tasks 0 and 1 are complete. The Task 1 merge commit passed actual Windows and Ubuntu CI; Task 2 is next and remains `NOT_STARTED` in this status snapshot. No usable product exists yet.
+Tasks 0 and 1 are complete. Task 2 is implemented with local gates passing; its remote Windows/Ubuntu CI remains `PENDING` until the exact commit runs. Task 3 durable events/Evidence/replay is next and remains `NOT_STARTED`. No usable product exists yet, and Fake Host results are not real Pi verification.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

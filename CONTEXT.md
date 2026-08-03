@@ -129,5 +129,9 @@ An immutable result binding an Engine Release or Plugin version to the contract 
 _Avoid_: upstream claim, version-range guess
 
 **Operation Receipt**:
-An immutable record of an external operation's identity, canonical payload fingerprint, observed effects, and reconciled outcome.
-_Avoid_: Agent claim, assumed effect
+An immutable initial record of an external operation's identity, canonical payload fingerprint, observed effects, and outcome. An `UNKNOWN` Receipt remains unchanged.
+_Avoid_: Agent claim, assumed effect, rewritten outcome
+
+**Operation Reconciliation Receipt**:
+An immutable follow-up observation for an earlier `UNKNOWN` Operation Receipt. It may remain `UNKNOWN`; it never replaces or edits the original Receipt.
+_Avoid_: replay without reconciliation, mutated Operation Receipt

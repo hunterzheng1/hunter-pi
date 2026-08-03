@@ -8,7 +8,7 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Product status: **DESIGNED / TASK_1_IN_PROGRESS**
 - Active implementation: Task 1 engineering skeleton; no usable product yet
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
-- Remote CI: **NOT_CONFIGURED**
+- Remote CI: **PENDING** — Windows/Ubuntu workflow configured; no remote result is claimed until GitHub runs the exact commit
 - Real Pi integration: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**

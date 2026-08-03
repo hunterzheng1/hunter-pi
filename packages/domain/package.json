@@ -1,0 +1,21 @@
+{
+  "name": "@hunter-pi/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral Hunter Pi domain contracts",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@hunter-pi/engine-contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral Hunter Pi engine host contracts",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@hunter-pi/domain": "0.0.0"
+  }
+}

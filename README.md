@@ -4,9 +4,21 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Documentation baseline / 尚无可运行产品。**
+**Task 1 engineering skeleton / 尚无可日常使用产品。**
 
-本仓库目前只冻结产品定义、架构、领域语言、用户故事、风险和执行计划。`hpi` 命令、安装包、真实 Pi 集成、插件兼容和自动更新均尚未实现或验证。
+本仓库已开始建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线。当前四个 workspace 只是后续契约的空入口；`hpi` 命令、安装包、真实 Pi 集成、插件兼容和自动更新仍未实现或验证。
+
+## 开发基线
+
+需要 Node.js 24、npm 11 和 Git。克隆仓库后运行：
+
+```powershell
+npm ci
+npm run doctor
+npm run verify
+```
+
+`doctor` 在 Task 1 只检查操作系统、Node.js、npm、Git 和仓库根标记，不探测 Pi、模型 Provider、登录或凭据。`verify` 会执行 lint、typecheck、unit test、严格编译器 fixture、build、格式检查、外部打包导入与全新锁定安装烟测。
 
 ## 产品形态
 
@@ -81,3 +93,4 @@ Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖�
 - Pi 上游升级可以无条件自动应用；
 - Windows 安装包、签名、自动更新或生产发布已经完成；
 - Hunter-Harness 的全部机制已经迁移。
+- Task 1 的空 package 入口代表领域、Workflow Kernel 或真实 Engine Host 已经实现。

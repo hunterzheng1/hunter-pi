@@ -8,6 +8,7 @@
     "noEmit": true,
     "paths": {
       "@hunter-pi/domain": ["./packages/domain/src/index.ts"],
+      "@hunter-pi/evidence": ["./packages/evidence/src/index.ts"],
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
       "@hunter-pi/testkit": ["./packages/testkit/src/index.ts"],
       "@hunter-pi/workflow-kernel": ["./packages/workflow-kernel/src/index.ts"]

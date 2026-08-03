@@ -7,6 +7,7 @@ import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const workspaceManifests = [
   "packages/domain/package.json",
+  "packages/evidence/package.json",
   "packages/engine-contracts/package.json",
   "packages/workflow-kernel/package.json",
   "packages/testkit/package.json",

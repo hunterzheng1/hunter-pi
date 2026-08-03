@@ -328,11 +328,566 @@ function lifecycleFor(state: ProjectionState): ChangeLifecycle {
   return "VERIFYING";
 }
 
-function applyEvents(events: readonly WorkflowEvent[]): RunProjection {
+export function assertRunProjectionIntegrity(input: RunProjection): void {
+  const projection = runProjectionSchema.parse(input);
+  if (
+    projection.change.changeId !== projection.planRevision.changeId ||
+    projection.change.changeId !== projection.run.changeId ||
+    projection.planRevision.planRevisionId !== projection.run.planRevisionId ||
+    projection.planRevision.workspaceId !== projection.run.workspaceId ||
+    projection.planRevision.workspaceFingerprint !== projection.run.workspaceFingerprint ||
+    projection.planRevision.sourceFingerprint !== projection.run.sourceFingerprint
+  ) {
+    throw new WorkflowTransitionError("Run projection identities do not match");
+  }
+  if (projection.attempts.length > projection.planRevision.loopPolicy.maxIterations) {
+    throw new WorkflowTransitionError("Run projection exceeds its Attempt iteration budget");
+  }
+
+  const attemptIds = new Set<string>();
+  for (const [index, attempt] of projection.attempts.entries()) {
+    const previous = projection.attempts[index - 1];
+    if (
+      attemptIds.has(attempt.attemptId) ||
+      attempt.runId !== projection.run.runId ||
+      attempt.planRevisionId !== projection.planRevision.planRevisionId ||
+      attempt.sequence !== index + 1 ||
+      (index === 0 && attempt.previousAttemptId !== undefined) ||
+      (index > 0 && attempt.previousAttemptId !== previous?.attemptId)
+    ) {
+      throw new WorkflowTransitionError("Run projection contains an invalid Attempt identity");
+    }
+    attemptIds.add(attempt.attemptId);
+  }
+
+  const observationIds = new Set<string>();
+  const expectedExecution = new Map<string, Attempt["executionStatus"]>(
+    projection.attempts.map((attempt) => [attempt.attemptId, "RUNNING"]),
+  );
+  for (const observation of projection.observations) {
+    if (
+      observationIds.has(observation.observationId) ||
+      observation.runId !== projection.run.runId ||
+      !attemptIds.has(observation.attemptId) ||
+      (observation.stepId !== undefined &&
+        !projection.planRevision.steps.some((step) => step.stepId === observation.stepId))
+    ) {
+      throw new WorkflowTransitionError("Run projection contains an invalid Observation");
+    }
+    observationIds.add(observation.observationId);
+    if (observation.kind === "AGENT_RETURNED") {
+      expectedExecution.set(observation.attemptId, "RETURNED");
+    } else if (observation.kind === "PROCESS_EXITED") {
+      expectedExecution.set(observation.attemptId, "INCOMPLETE");
+    }
+  }
+  for (const [index, attempt] of projection.attempts.entries()) {
+    const previous = projection.attempts[index - 1];
+    if (previous === undefined) {
+      continue;
+    }
+    if (
+      projection.planRevision.loopPolicy.stopOnUserInput &&
+      (attempt.retryStopConditions?.userInputRequired === true ||
+        projection.observations.some(
+          (observation) =>
+            observation.attemptId === previous.attemptId && observation.kind === "INPUT_REQUESTED",
+        ))
+    ) {
+      throw new WorkflowTransitionError("Run projection retry crossed required user input");
+    }
+    if (
+      projection.planRevision.loopPolicy.stopOnWorkspaceDrift &&
+      attempt.retryStopConditions?.workspaceDriftDetected === true
+    ) {
+      throw new WorkflowTransitionError("Run projection retry crossed workspace drift");
+    }
+  }
+
+  const verificationIds = new Set<string>();
+  const verificationPairs = new Set<string>();
+  for (const receipt of projection.verificationReceipts) {
+    const check = projection.planRevision.checks.find(
+      (candidate) => candidate.checkId === receipt.checkId,
+    );
+    const pair = `${receipt.attemptId}\0${receipt.checkId}`;
+    if (
+      verificationIds.has(receipt.verificationReceiptId) ||
+      verificationPairs.has(pair) ||
+      receipt.runId !== projection.run.runId ||
+      !attemptIds.has(receipt.attemptId) ||
+      receipt.checkVersion !== check?.version ||
+      receipt.checkDefinitionFingerprint !== check.definitionFingerprint ||
+      receipt.configFingerprint !== check.configurationFingerprint ||
+      receipt.workspaceFingerprint !== projection.planRevision.workspaceFingerprint ||
+      receipt.sourceFingerprint !== projection.planRevision.sourceFingerprint
+    ) {
+      throw new WorkflowTransitionError(
+        "Run projection contains a duplicate or unbound Verification Receipt",
+      );
+    }
+    verificationIds.add(receipt.verificationReceiptId);
+    verificationPairs.add(pair);
+  }
+
+  const humanIds = new Set<string>();
+  const humanPairs = new Set<string>();
+  for (const receipt of projection.humanReceipts) {
+    const step = projection.planRevision.steps.find(
+      (candidate) => candidate.stepId === receipt.stepId,
+    );
+    const pair = `${receipt.attemptId}\0${receipt.stepId}`;
+    if (
+      humanIds.has(receipt.humanReceiptId) ||
+      humanPairs.has(pair) ||
+      receipt.runId !== projection.run.runId ||
+      !attemptIds.has(receipt.attemptId) ||
+      step?.kind !== "human_gate" ||
+      receipt.contentHash !== step.expectedContentHash ||
+      !step.allowedDecisions.includes(receipt.decision)
+    ) {
+      throw new WorkflowTransitionError(
+        "Run projection contains a duplicate or unbound Human Receipt",
+      );
+    }
+    humanIds.add(receipt.humanReceiptId);
+    humanPairs.add(pair);
+  }
+
+  const reviewIds = new Set<string>();
+  const reviewPairs = new Set<string>();
+  for (const receipt of projection.reviewReceipts) {
+    const step = projection.planRevision.steps.find(
+      (candidate) => candidate.stepId === receipt.stepId,
+    );
+    const pair = `${receipt.attemptId}\0${receipt.stepId}`;
+    if (
+      reviewIds.has(receipt.reviewReceiptId) ||
+      reviewPairs.has(pair) ||
+      receipt.runId !== projection.run.runId ||
+      !attemptIds.has(receipt.attemptId) ||
+      step?.kind !== "review" ||
+      receipt.inputFingerprint !== step.inputFingerprint ||
+      receipt.reviewDefinitionFingerprint !== step.reviewDefinitionFingerprint ||
+      receipt.configurationFingerprint !== step.configurationFingerprint ||
+      receipt.workspaceFingerprint !== projection.planRevision.workspaceFingerprint ||
+      receipt.sourceFingerprint !== projection.planRevision.sourceFingerprint
+    ) {
+      throw new WorkflowTransitionError(
+        "Run projection contains a duplicate or unbound Review Receipt",
+      );
+    }
+    reviewIds.add(receipt.reviewReceiptId);
+    reviewPairs.add(pair);
+  }
+
+  const checkpointIds = new Set<string>();
+  for (const checkpoint of projection.checkpoints) {
+    if (
+      checkpointIds.has(checkpoint.checkpointId) ||
+      checkpoint.runId !== projection.run.runId ||
+      checkpoint.planRevisionId !== projection.planRevision.planRevisionId ||
+      checkpoint.workspaceId !== projection.planRevision.workspaceId ||
+      checkpoint.workspaceFingerprint !== projection.planRevision.workspaceFingerprint ||
+      checkpoint.sourceFingerprint !== projection.planRevision.sourceFingerprint ||
+      checkpoint.eventCursor >= projection.eventCursor ||
+      (checkpoint.attemptId !== undefined && !attemptIds.has(checkpoint.attemptId))
+    ) {
+      throw new WorkflowTransitionError("Run projection contains an invalid Checkpoint");
+    }
+    checkpointIds.add(checkpoint.checkpointId);
+  }
+
+  const projectedAttempts = projection.attempts.map((attempt) => {
+    const executionStatus = expectedExecution.get(attempt.attemptId);
+    if (executionStatus === undefined) {
+      throw new WorkflowTransitionError("Run projection lost an Attempt execution status");
+    }
+    const withExecution = attemptSchema.parse({ ...attempt, executionStatus });
+    const verificationStatus = verificationStatusFor(
+      projection.planRevision,
+      withExecution,
+      projection.verificationReceipts,
+    );
+    if (
+      attempt.executionStatus !== executionStatus ||
+      attempt.verificationStatus !== verificationStatus
+    ) {
+      throw new WorkflowTransitionError(
+        "Run projection Attempt status is not derived from its exact facts",
+      );
+    }
+    return attemptSchema.parse({ ...withExecution, verificationStatus });
+  });
+  const expectedChecks = checkProjectionsFor(
+    projection.planRevision,
+    projectedAttempts.at(-1),
+    projection.verificationReceipts,
+  );
+  if (JSON.stringify(projection.checks) !== JSON.stringify(expectedChecks)) {
+    throw new WorkflowTransitionError(
+      "Run projection check statuses are not derived from Receipts",
+    );
+  }
+  const expectedEventCursor =
+    1 +
+    projection.attempts.length +
+    projection.observations.length +
+    projection.verificationReceipts.length +
+    projection.humanReceipts.length +
+    projection.reviewReceipts.length +
+    projection.checkpoints.length;
+  if (projection.eventCursor !== expectedEventCursor) {
+    throw new WorkflowTransitionError("Run projection event cursor does not match its facts");
+  }
+  const state: ProjectionState = {
+    change: projection.change,
+    planRevision: projection.planRevision,
+    run: projection.run,
+    attempts: projectedAttempts,
+    observations: projection.observations,
+    verificationReceipts: projection.verificationReceipts,
+    humanReceipts: projection.humanReceipts,
+    reviewReceipts: projection.reviewReceipts,
+    checkpoints: projection.checkpoints,
+  };
+  const expectedLifecycle = lifecycleFor(state);
+  if (
+    projection.run.lifecycle !== expectedLifecycle ||
+    projection.change.lifecycle !== expectedLifecycle
+  ) {
+    throw new WorkflowTransitionError("Run projection lifecycle is not derived from its facts");
+  }
+}
+
+function sameResourceBudgets(left: ResourceBudgets, right: ResourceBudgets): boolean {
+  return budgetUsagePairs.every(([budgetKey]) => left[budgetKey] === right[budgetKey]);
+}
+
+function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
   const created = events[0];
   if (created?.type !== "RUN_CREATED") {
     throw new WorkflowTransitionError("a Run must begin with RUN_CREATED");
   }
+  if (
+    created.change.changeId !== created.planRevision.changeId ||
+    created.change.changeId !== created.run.changeId ||
+    created.planRevision.planRevisionId !== created.run.planRevisionId ||
+    created.planRevision.workspaceId !== created.run.workspaceId ||
+    created.planRevision.workspaceFingerprint !== created.run.workspaceFingerprint ||
+    created.planRevision.sourceFingerprint !== created.run.sourceFingerprint ||
+    created.run.lifecycle !== "PLANNED"
+  ) {
+    throw new WorkflowTransitionError(
+      "replayed Change, Plan Revision, and Run identities do not match",
+    );
+  }
+
+  const attempts: Attempt[] = [];
+  const observations: Observation[] = [];
+  const verificationReceipts: VerificationReceipt[] = [];
+  const humanReceipts: HumanReceipt[] = [];
+  const reviewReceipts: ReviewReceipt[] = [];
+  const checkpointIds = new Set<string>();
+  const requireAttempt = (attemptId: string): Attempt => {
+    const attempt = attempts.find((candidate) => candidate.attemptId === attemptId);
+    if (attempt === undefined) {
+      throw new WorkflowTransitionError(`replayed fact uses unknown Attempt ${attemptId}`);
+    }
+    return attempt;
+  };
+
+  for (const event of events.slice(1)) {
+    switch (event.type) {
+      case "RUN_CREATED":
+        throw new WorkflowTransitionError("a Run cannot be created twice");
+      case "ATTEMPT_STARTED": {
+        const attempt = event.attempt;
+        const previous = attempts.at(-1);
+        if (
+          attempt.runId !== created.run.runId ||
+          attempt.planRevisionId !== created.planRevision.planRevisionId ||
+          attempt.sequence !== attempts.length + 1 ||
+          attempts.some((candidate) => candidate.attemptId === attempt.attemptId) ||
+          attempt.executionStatus !== "RUNNING" ||
+          attempt.verificationStatus !== "NOT_READY"
+        ) {
+          throw new WorkflowTransitionError("replayed Attempt does not bind the active Run");
+        }
+        if (previous === undefined) {
+          if (
+            attempt.elapsedMsAtStart !== 0 ||
+            !sameResourceBudgets(
+              attempt.remainingResourceBudgets,
+              created.planRevision.loopPolicy.resourceBudgets,
+            )
+          ) {
+            throw new WorkflowTransitionError("replayed first Attempt has invalid budgets");
+          }
+        } else {
+          const previousExecutionStatus = observations
+            .filter((observation) => observation.attemptId === previous.attemptId)
+            .reduce<Attempt["executionStatus"]>(
+              (status, observation) =>
+                observation.kind === "AGENT_RETURNED"
+                  ? "RETURNED"
+                  : observation.kind === "PROCESS_EXITED"
+                    ? "INCOMPLETE"
+                    : status,
+              previous.executionStatus,
+            );
+          const projectedPrevious = attemptSchema.parse({
+            ...previous,
+            executionStatus: previousExecutionStatus,
+          });
+          const previousVerificationStatus = verificationStatusFor(
+            created.planRevision,
+            projectedPrevious,
+            verificationReceipts,
+          );
+          const hasGateFailure =
+            humanReceipts.some(
+              (receipt) =>
+                receipt.attemptId === previous.attemptId &&
+                receipt.decision !== "APPROVED" &&
+                created.planRevision.steps.some(
+                  (step) =>
+                    step.kind === "human_gate" && step.required && step.stepId === receipt.stepId,
+                ),
+            ) ||
+            reviewReceipts.some(
+              (receipt) =>
+                receipt.attemptId === previous.attemptId &&
+                created.planRevision.steps.some(
+                  (step) =>
+                    step.kind === "review" && step.required && step.stepId === receipt.stepId,
+                ) &&
+                (receipt.outcome !== "PASS" ||
+                  receipt.findings.some(
+                    (finding) => finding.severity === "P0" || finding.severity === "P1",
+                  )),
+            );
+          if (
+            created.planRevision.loopPolicy.stopOnUserInput &&
+            (attempt.retryStopConditions?.userInputRequired === true ||
+              observations.some(
+                (observation) =>
+                  observation.attemptId === previous.attemptId &&
+                  observation.kind === "INPUT_REQUESTED",
+              ))
+          ) {
+            throw new WorkflowTransitionError("replayed retry crossed required user input");
+          }
+          if (
+            created.planRevision.loopPolicy.stopOnWorkspaceDrift &&
+            attempt.retryStopConditions?.workspaceDriftDetected === true
+          ) {
+            throw new WorkflowTransitionError("replayed retry crossed workspace drift");
+          }
+          if (
+            attempt.previousAttemptId !== previous.attemptId ||
+            !["RETURNED", "INTERRUPTED", "INCOMPLETE"].includes(previousExecutionStatus) ||
+            (!["FAILED", "BLOCKED", "NOT_PROVEN"].includes(previousVerificationStatus) &&
+              !hasGateFailure) ||
+            attempts.length >= created.planRevision.loopPolicy.maxIterations ||
+            attempt.elapsedMsAtStart >= created.planRevision.loopPolicy.maxElapsedMs ||
+            attempts.filter(
+              (candidate) =>
+                candidate.precedingFailureFingerprint === attempt.precedingFailureFingerprint,
+            ).length +
+              1 >=
+              created.planRevision.loopPolicy.repeatedFailureLimit ||
+            attempt.elapsedMsAtStart < previous.elapsedMsAtStart ||
+            Date.parse(attempt.startedAt) < Date.parse(previous.startedAt) ||
+            !budgetUsagePairs.every(([budgetKey]) => {
+              const declared = created.planRevision.loopPolicy.resourceBudgets[budgetKey];
+              const next = attempt.remainingResourceBudgets[budgetKey];
+              const prior = previous.remainingResourceBudgets[budgetKey];
+              return declared === undefined
+                ? next === undefined && prior === undefined
+                : next !== undefined && prior !== undefined && next <= prior;
+            })
+          ) {
+            throw new WorkflowTransitionError("replayed retry Attempt is not monotonic");
+          }
+          const failureEvidence = new Set([
+            ...verificationReceipts
+              .filter(
+                (receipt) =>
+                  receipt.attemptId === previous.attemptId &&
+                  receipt.outcome !== "PASS" &&
+                  receipt.resultFingerprint === attempt.precedingFailureFingerprint,
+              )
+              .flatMap((receipt) => receipt.evidenceIds),
+            ...humanReceipts
+              .filter(
+                (receipt) =>
+                  receipt.attemptId === previous.attemptId &&
+                  receipt.decision !== "APPROVED" &&
+                  receipt.resultFingerprint === attempt.precedingFailureFingerprint &&
+                  created.planRevision.steps.some(
+                    (step) =>
+                      step.kind === "human_gate" && step.required && step.stepId === receipt.stepId,
+                  ),
+              )
+              .flatMap((receipt) => receipt.evidenceIds),
+            ...reviewReceipts
+              .filter(
+                (receipt) =>
+                  receipt.attemptId === previous.attemptId &&
+                  receipt.resultFingerprint === attempt.precedingFailureFingerprint &&
+                  created.planRevision.steps.some(
+                    (step) =>
+                      step.kind === "review" && step.required && step.stepId === receipt.stepId,
+                  ) &&
+                  (receipt.outcome !== "PASS" ||
+                    receipt.findings.some(
+                      (finding) => finding.severity === "P0" || finding.severity === "P1",
+                    )),
+              )
+              .flatMap((receipt) => [
+                ...receipt.evidenceIds,
+                ...receipt.findings.flatMap((finding) => finding.evidenceIds),
+              ]),
+          ]);
+          if (
+            failureEvidence.size === 0 ||
+            attempt.failureEvidenceIds?.some((evidenceId) => !failureEvidence.has(evidenceId))
+          ) {
+            throw new WorkflowTransitionError(
+              "replayed retry Evidence is not bound to the preceding failure",
+            );
+          }
+        }
+        attempts.push(attempt);
+        break;
+      }
+      case "OBSERVATION_RECORDED":
+        requireAttempt(event.observation.attemptId);
+        if (
+          event.observation.runId !== created.run.runId ||
+          observations.some(
+            (observation) => observation.observationId === event.observation.observationId,
+          ) ||
+          (event.observation.stepId !== undefined &&
+            !created.planRevision.steps.some((step) => step.stepId === event.observation.stepId))
+        ) {
+          throw new WorkflowTransitionError("replayed Observation is not predeclared or unique");
+        }
+        observations.push(event.observation);
+        break;
+      case "VERIFICATION_RECORDED": {
+        const receipt = event.receipt;
+        requireAttempt(receipt.attemptId);
+        const check = created.planRevision.checks.find(
+          (candidate) => candidate.checkId === receipt.checkId,
+        );
+        if (
+          receipt.runId !== created.run.runId ||
+          verificationReceipts.some(
+            (candidate) =>
+              candidate.verificationReceiptId === receipt.verificationReceiptId ||
+              (candidate.attemptId === receipt.attemptId && candidate.checkId === receipt.checkId),
+          ) ||
+          receipt.checkVersion !== check?.version ||
+          receipt.checkDefinitionFingerprint !== check.definitionFingerprint ||
+          receipt.configFingerprint !== check.configurationFingerprint ||
+          receipt.workspaceFingerprint !== created.planRevision.workspaceFingerprint ||
+          receipt.sourceFingerprint !== created.planRevision.sourceFingerprint
+        ) {
+          throw new WorkflowTransitionError(
+            "replayed Verification Receipt does not bind the active check and source identity",
+          );
+        }
+        verificationReceipts.push(receipt);
+        break;
+      }
+      case "HUMAN_RECEIPT_RECORDED": {
+        const receipt = event.receipt;
+        requireAttempt(receipt.attemptId);
+        const step = created.planRevision.steps.find(
+          (candidate) => candidate.stepId === receipt.stepId,
+        );
+        if (
+          receipt.runId !== created.run.runId ||
+          humanReceipts.some(
+            (candidate) =>
+              candidate.humanReceiptId === receipt.humanReceiptId ||
+              (candidate.attemptId === receipt.attemptId && candidate.stepId === receipt.stepId),
+          ) ||
+          step?.kind !== "human_gate" ||
+          receipt.contentHash !== step.expectedContentHash ||
+          !step.allowedDecisions.includes(receipt.decision)
+        ) {
+          throw new WorkflowTransitionError(
+            "replayed Human Receipt does not bind the predeclared gate",
+          );
+        }
+        humanReceipts.push(receipt);
+        break;
+      }
+      case "REVIEW_RECEIPT_RECORDED": {
+        const receipt = event.receipt;
+        requireAttempt(receipt.attemptId);
+        const step = created.planRevision.steps.find(
+          (candidate) => candidate.stepId === receipt.stepId,
+        );
+        if (
+          receipt.runId !== created.run.runId ||
+          reviewReceipts.some(
+            (candidate) =>
+              candidate.reviewReceiptId === receipt.reviewReceiptId ||
+              (candidate.attemptId === receipt.attemptId && candidate.stepId === receipt.stepId),
+          ) ||
+          step?.kind !== "review" ||
+          receipt.inputFingerprint !== step.inputFingerprint ||
+          receipt.reviewDefinitionFingerprint !== step.reviewDefinitionFingerprint ||
+          receipt.configurationFingerprint !== step.configurationFingerprint ||
+          receipt.workspaceFingerprint !== created.planRevision.workspaceFingerprint ||
+          receipt.sourceFingerprint !== created.planRevision.sourceFingerprint
+        ) {
+          throw new WorkflowTransitionError(
+            "replayed Review Receipt does not bind the predeclared review",
+          );
+        }
+        reviewReceipts.push(receipt);
+        break;
+      }
+      case "CHECKPOINT_RECORDED": {
+        const checkpoint = event.checkpoint;
+        if (checkpoint.attemptId !== undefined) {
+          requireAttempt(checkpoint.attemptId);
+        }
+        if (
+          checkpointIds.has(checkpoint.checkpointId) ||
+          checkpoint.runId !== created.run.runId ||
+          checkpoint.planRevisionId !== created.planRevision.planRevisionId ||
+          checkpoint.workspaceId !== created.planRevision.workspaceId ||
+          checkpoint.workspaceFingerprint !== created.planRevision.workspaceFingerprint ||
+          checkpoint.sourceFingerprint !== created.planRevision.sourceFingerprint ||
+          checkpoint.eventCursor !== event.cursor - 1
+        ) {
+          throw new WorkflowTransitionError("replayed Checkpoint does not bind the durable Run");
+        }
+        checkpointIds.add(checkpoint.checkpointId);
+        break;
+      }
+    }
+  }
+}
+
+export function replayWorkflowEvents(events: readonly WorkflowEvent[]): RunProjection {
+  const parsedEvents = events.map((event) => workflowEventSchema.parse(event));
+  if (parsedEvents.some((event, index) => event.cursor !== index + 1)) {
+    throw new WorkflowTransitionError(
+      "workflow event cursors must begin at 1 and remain contiguous",
+    );
+  }
+  const created = parsedEvents[0];
+  if (created?.type !== "RUN_CREATED") {
+    throw new WorkflowTransitionError("a Run must begin with RUN_CREATED");
+  }
+  validateReplaySemantics(parsedEvents);
   const state: ProjectionState = {
     change: created.change,
     planRevision: created.planRevision,
@@ -345,7 +900,7 @@ function applyEvents(events: readonly WorkflowEvent[]): RunProjection {
     checkpoints: [],
   };
 
-  for (const event of events.slice(1)) {
+  for (const event of parsedEvents.slice(1)) {
     switch (event.type) {
       case "ATTEMPT_STARTED":
         state.attempts.push(event.attempt);
@@ -403,7 +958,7 @@ function applyEvents(events: readonly WorkflowEvent[]): RunProjection {
     schemaVersion: "1.0.0",
     ...state,
     checks: checkProjectionsFor(state.planRevision, currentAttempt, state.verificationReceipts),
-    eventCursor: events.at(-1)?.cursor,
+    eventCursor: parsedEvents.at(-1)?.cursor,
   });
 }
 
@@ -416,6 +971,17 @@ function managedChangeWithLifecycle(
 
 export class InMemoryWorkflowKernel implements WorkflowKernel {
   readonly #eventsByRun = new Map<RunId, WorkflowEvent[]>();
+
+  public constructor(initialEventStreams: readonly (readonly WorkflowEvent[])[] = []) {
+    for (const stream of initialEventStreams) {
+      const events = stream.map((event) => workflowEventSchema.parse(event));
+      const projection = replayWorkflowEvents(events);
+      if (this.#eventsByRun.has(projection.run.runId)) {
+        throw new WorkflowTransitionError(`Run ${projection.run.runId} was seeded more than once`);
+      }
+      this.#eventsByRun.set(projection.run.runId, events);
+    }
+  }
 
   public async dispatch(command: WorkflowCommand): Promise<WorkflowDecision> {
     const parsed = workflowCommandSchema.parse(command);
@@ -446,28 +1012,41 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
   }
 
   public project(runId: RunId): Promise<RunProjection> {
-    return Promise.resolve(applyEvents(this.#eventsFor(runId)));
+    return Promise.resolve(replayWorkflowEvents(this.#eventsFor(runId)));
   }
 
   public async recover(checkpointId: CheckpointId): Promise<RecoveryDecision> {
+    const matches: { projection: RunProjection; checkpoint: Checkpoint }[] = [];
     for (const [runId] of this.#eventsByRun) {
       const projection = await this.project(runId);
       const checkpoint = projection.checkpoints.find(
         (candidate) => candidate.checkpointId === checkpointId,
       );
       if (checkpoint !== undefined) {
-        return recoveryDecisionSchema.parse({
-          schemaVersion: "1.0.0",
-          status: "NOT_PROVEN",
-          checkpoint,
-          projection,
-          reasons: [
-            "IN_MEMORY_STATE_NOT_DURABLE",
-            "WORKSPACE_NOT_REVALIDATED",
-            "ENGINE_STATE_NOT_RECONCILED",
-          ],
-        });
+        matches.push({ projection, checkpoint });
       }
+    }
+    if (matches.length > 1) {
+      return recoveryDecisionSchema.parse({
+        schemaVersion: "1.0.0",
+        status: "BLOCKED",
+        checkpointId,
+        reasons: ["CHECKPOINT_ID_AMBIGUOUS"],
+      });
+    }
+    const match = matches[0];
+    if (match !== undefined) {
+      return recoveryDecisionSchema.parse({
+        schemaVersion: "1.0.0",
+        status: "NOT_PROVEN",
+        checkpoint: match.checkpoint,
+        projection: match.projection,
+        reasons: [
+          "IN_MEMORY_STATE_NOT_DURABLE",
+          "WORKSPACE_NOT_REVALIDATED",
+          "ENGINE_STATE_NOT_RECONCILED",
+        ],
+      });
     }
     return recoveryDecisionSchema.parse({ schemaVersion: "1.0.0", status: "NOT_FOUND" });
   }
@@ -709,7 +1288,15 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
         if (Date.parse(command.startedAt) < Date.parse(previous.startedAt)) {
           throw new WorkflowTransitionError("Attempt start time cannot move backwards");
         }
-        if (current.planRevision.loopPolicy.stopOnUserInput && command.userInputRequired) {
+        if (
+          current.planRevision.loopPolicy.stopOnUserInput &&
+          (command.userInputRequired ||
+            current.observations.some(
+              (observation) =>
+                observation.attemptId === previous.attemptId &&
+                observation.kind === "INPUT_REQUESTED",
+            ))
+        ) {
           throw new WorkflowTransitionError("retry stopped for required user input");
         }
         if (
@@ -794,6 +1381,10 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
             failureEvidenceIds: command.failureEvidenceIds,
             retryReason: command.reason,
             precedingFailureFingerprint: command.failureFingerprint,
+            retryStopConditions: {
+              userInputRequired: command.userInputRequired,
+              workspaceDriftDetected: command.workspaceDriftDetected,
+            },
             elapsedMsAtStart: command.elapsedMs,
             remainingResourceBudgets,
             executionStatus: "RUNNING",
@@ -803,6 +1394,15 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
         });
       }
       case "RECORD_CHECKPOINT":
+        if (
+          current.checkpoints.some(
+            (checkpoint) => checkpoint.checkpointId === command.checkpoint.checkpointId,
+          )
+        ) {
+          throw new WorkflowTransitionError(
+            `Checkpoint ${command.checkpoint.checkpointId} already exists`,
+          );
+        }
         if (command.checkpoint.planRevisionId !== current.planRevision.planRevisionId) {
           throw new WorkflowTransitionError("Checkpoint uses a different Plan Revision");
         }

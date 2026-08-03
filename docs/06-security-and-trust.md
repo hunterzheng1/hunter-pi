@@ -133,11 +133,13 @@ Forbidden portable content includes:
 - complete environment dumps;
 - provider credential files;
 - complete private prompts or transcripts unless the user explicitly exports them outside normal Evidence;
-- absolute home or temporary paths;
+- device-local absolute paths, including home, temporary, project, and tool paths;
 - raw file content unrelated to a declared artifact;
 - remote URLs containing credentials or private query parameters.
 
-Receipts include redaction version, truncation flags, and content digests so missing content is not mistaken for complete logs.
+Task 3 uses strict content classes. `PRIVATE_PROMPT`, `ENVIRONMENT_DUMP`, and `CREDENTIAL_MATERIAL` are always digest-only placeholders in normal portable Evidence. `LOG` and `SUMMARY` pass through `hunter-redaction/1`, which removes configured sensitive values and encoded variants plus credential headers, Cookies, credential URLs/query fields, Prompt fields, and device-local absolute paths. Capture is limited to a valid UTF-8 prefix of at most 8 MiB; the digest binds the complete redacted stream, while byte counts, cursor, retention status, and truncation flags make omitted content explicit.
+
+New local Evidence is accepted through `FileEvidenceStore.capture`, so persistence invokes that policy rather than accepting a caller-authored envelope. Capacity pressure converts noncritical retained content to explicit `DIGEST_ONLY` metadata while preserving its redacted-stream digest. Noncritical digest metadata still counts toward the Run stop and never consumes the emergency reserve; only critical Receipt/checkpoint/summary metadata may use that reserve. The reserve is filled with fresh random bytes and accepted only when its regular-file identity, single link, exact size, and allocated filesystem blocks all match; a sparse, linked, symlinked, or undersized file is not reclaimable capacity. A committed critical write that cannot restore the reserve is reported as `RESERVE_REQUIRED`. A new mutating Run also requires minimum capacity headroom and a successful atomic no-replace write probe, and remains blocked until all three admission conditions hold. These controls are deterministic local proof, not a claim that every future Provider or Plugin output is already covered.
 
 ## Update security
 

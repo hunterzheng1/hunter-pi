@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   attemptIdSchema,
   attemptSchema,
+  checkpointIdSchema,
   checkpointSchema,
   checkIdSchema,
   evidenceIdSchema,
@@ -145,6 +146,26 @@ export const workflowEventSchema = z.discriminatedUnion("type", [
 ]);
 export type WorkflowEvent = z.infer<typeof workflowEventSchema>;
 
+export const workflowEventAppendRequestSchema = z.strictObject({
+  schemaVersion: schemaVersionSchema,
+  runId: runIdSchema,
+  expectedCursor: z.number().int().nonnegative(),
+  events: z.array(workflowEventSchema).min(1),
+});
+export type WorkflowEventAppendRequest = z.input<typeof workflowEventAppendRequestSchema>;
+
+export const workflowEventAppendReceiptSchema = z.strictObject({
+  schemaVersion: schemaVersionSchema,
+  runId: runIdSchema,
+  startCursor: z.number().int().positive(),
+  endCursor: z.number().int().positive(),
+  segmentHash: fingerprintSchema,
+  eventCount: z.number().int().positive(),
+  outcome: z.enum(["APPLIED", "NOOP"]),
+  observedAt: timestampSchema,
+});
+export type WorkflowEventAppendReceipt = z.infer<typeof workflowEventAppendReceiptSchema>;
+
 export const checkProjectionSchema = z.strictObject({
   schemaVersion: schemaVersionSchema,
   checkId: checkIdSchema,
@@ -177,21 +198,38 @@ export const workflowDecisionSchema = z.strictObject({
 });
 export type WorkflowDecision = z.infer<typeof workflowDecisionSchema>;
 
+export const recoveryReasonSchema = z.enum([
+  "IN_MEMORY_STATE_NOT_DURABLE",
+  "DISTRIBUTION_RELEASE_NOT_REVALIDATED",
+  "WORKSPACE_NOT_REVALIDATED",
+  "ENGINE_STATE_NOT_RECONCILED",
+  "CHECKPOINT_ID_AMBIGUOUS",
+]);
+export type RecoveryReason = z.infer<typeof recoveryReasonSchema>;
+
 export const recoveryDecisionSchema = z.discriminatedUnion("status", [
   z.strictObject({
     schemaVersion: schemaVersionSchema,
     status: z.literal("NOT_PROVEN"),
     checkpoint: checkpointSchema,
     projection: runProjectionSchema,
-    reasons: z.tuple([
-      z.literal("IN_MEMORY_STATE_NOT_DURABLE"),
-      z.literal("WORKSPACE_NOT_REVALIDATED"),
-      z.literal("ENGINE_STATE_NOT_RECONCILED"),
-    ]),
+    reasons: z
+      .array(recoveryReasonSchema)
+      .min(1)
+      .refine(
+        (reasons) => new Set(reasons).size === reasons.length,
+        "recovery reasons must be unique",
+      ),
   }),
   z.strictObject({
     schemaVersion: schemaVersionSchema,
     status: z.literal("NOT_FOUND"),
+  }),
+  z.strictObject({
+    schemaVersion: schemaVersionSchema,
+    status: z.literal("BLOCKED"),
+    checkpointId: checkpointIdSchema,
+    reasons: z.tuple([z.literal("CHECKPOINT_ID_AMBIGUOUS")]),
   }),
 ]);
 export type RecoveryDecision = z.infer<typeof recoveryDecisionSchema>;
@@ -200,4 +238,11 @@ export interface WorkflowKernel {
   dispatch(command: WorkflowCommand): Promise<WorkflowDecision>;
   project(runId: z.infer<typeof runIdSchema>): Promise<RunProjection>;
   recover(checkpointId: CheckpointId): Promise<RecoveryDecision>;
+}
+
+export interface WorkflowEventStore {
+  assertMutatingRunAllowed(): Promise<void>;
+  append(request: WorkflowEventAppendRequest): Promise<WorkflowEventAppendReceipt>;
+  read(runId: z.infer<typeof runIdSchema>): Promise<readonly WorkflowEvent[]>;
+  listRunIds(): Promise<readonly z.infer<typeof runIdSchema>[]>;
 }

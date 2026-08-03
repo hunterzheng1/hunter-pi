@@ -5,12 +5,13 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-03
-- Product status: **DESIGNED / TASK_2_COMPLETE**
-- Current implementation: strict domain schemas, command/event in-memory Kernel, provider-neutral Engine Host contracts, deterministic Fake Host, and shared contract suite; local and dual-platform gates **PASS**
-- Next implementation: Task 3 durable events, Evidence, and replay; **NOT_STARTED** in this status snapshot
+- Product status: **IMPLEMENTED / TASK_3_LOCAL_COMPLETE / NO_USABLE_PRODUCT**
+- Current implementation: Task 2 strict domain/kernel/Fake contracts plus Task 3 immutable atomic event segments, replayable projections, portable redacted Evidence, storage limits/reserve, durable Kernel, and Run summary; local gates **PASS**
+- Next implementation: Task 4 fixed-version Pi public-interface spike, only after Task 3 merge; **NOT_STARTED** in this status snapshot
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
+- Task 3 remote CI: **PENDING** — the exact topic commit has not run on GitHub Actions yet
 - Real Pi integration: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**

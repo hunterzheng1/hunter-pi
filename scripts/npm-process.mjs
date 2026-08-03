@@ -8,6 +8,43 @@ export const subprocessOutputLimitBytes = 1024 * 1024;
 
 /**
  * @param {NodeJS.ProcessEnv} environment inherited process environment.
+ * @param {string} npmEntryPoint npm CLI module path.
+ * @param {string} nodeExecutable Node.js executable path.
+ * @returns {Record<string, string>} stable labels for process-owned roots.
+ */
+export const createNpmDiagnosticRoots = (environment, npmEntryPoint, nodeExecutable) => {
+  const pathApi = win32.isAbsolute(npmEntryPoint) ? win32 : posix;
+  /** @type {Record<string, string>} */
+  const roots = {
+    "node-runtime": pathApi.dirname(nodeExecutable),
+    "npm-runtime": pathApi.dirname(pathApi.dirname(npmEntryPoint)),
+  };
+  const environmentLabels = {
+    APPDATA: "appdata",
+    LOCALAPPDATA: "localappdata",
+    PROGRAMDATA: "programdata",
+    PROGRAMFILES: "programfiles",
+    SYSTEMROOT: "systemroot",
+    TEMP: "temp",
+    USERPROFILE: "userprofile",
+  };
+
+  for (const [environmentKey, label] of Object.entries(environmentLabels)) {
+    const entry = Object.entries(environment).find(
+      ([key, value]) =>
+        key.toUpperCase() === environmentKey && value !== undefined && value.length > 0,
+    );
+    const value = entry?.[1];
+    if (value !== undefined) {
+      roots[label] = value;
+    }
+  }
+
+  return roots;
+};
+
+/**
+ * @param {NodeJS.ProcessEnv} environment inherited process environment.
  * @param {string} isolationRoot npm-only configuration and cache root.
  * @returns {NodeJS.ProcessEnv} a copy with user npm state and credentials removed.
  */
@@ -140,6 +177,10 @@ export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
   if (npmEntryPoint === undefined || npmEntryPoint.length === 0) {
     throw new Error("npm_execpath is required to run this repository smoke test.");
   }
+  const diagnosticRoots = {
+    ...knownRoots,
+    ...createNpmDiagnosticRoots(process.env, npmEntryPoint, process.execPath),
+  };
 
   mkdirSync(join(isolationRoot, "cache"), { recursive: true });
   writeFileSync(join(isolationRoot, "global.npmrc"), "", "utf8");
@@ -166,7 +207,7 @@ export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
           stderr: result.stderr,
           stdout: result.stdout,
         },
-        { cwd, isolationRoot, knownRoots },
+        { cwd, isolationRoot, knownRoots: diagnosticRoots },
       ),
     );
   }

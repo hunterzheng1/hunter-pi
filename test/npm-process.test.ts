@@ -3,12 +3,35 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  createNpmDiagnosticRoots,
   createIsolatedNpmEnvironment,
   summarizeNpmFailure,
   summarizeProcessFailure,
 } from "../scripts/npm-process.mjs";
 
 describe("isolated npm process support", () => {
+  it("maps process-owned paths to stable diagnostic labels", () => {
+    const roots = createNpmDiagnosticRoots(
+      {
+        APPDATA: "C:\\Users\\fixture\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local",
+        TEMP: "C:\\Users\\fixture\\Temp",
+        USERPROFILE: "C:\\Users\\fixture",
+      },
+      "C:\\runtime\\node_modules\\npm\\bin\\npm-cli.js",
+      "C:\\runtime\\node.exe",
+    );
+
+    expect(roots).toEqual({
+      appdata: "C:\\Users\\fixture\\AppData\\Roaming",
+      localappdata: "C:\\Users\\fixture\\AppData\\Local",
+      "node-runtime": "C:\\runtime",
+      "npm-runtime": "C:\\runtime\\node_modules\\npm",
+      temp: "C:\\Users\\fixture\\Temp",
+      userprofile: "C:\\Users\\fixture",
+    });
+  });
+
   it("removes inherited npm configuration and credential variables", () => {
     const sourceEnvironment: NodeJS.ProcessEnv = {
       PATH: "safe-path",

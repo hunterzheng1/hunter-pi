@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@hunter-pi/cli": fileURLToPath(new URL("./apps/cli/src/index.ts", import.meta.url)),
       "@hunter-pi/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),

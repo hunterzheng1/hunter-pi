@@ -7,6 +7,7 @@
     "checkJs": true,
     "noEmit": true,
     "paths": {
+      "@hunter-pi/cli": ["./apps/cli/src/index.ts"],
       "@hunter-pi/domain": ["./packages/domain/src/index.ts"],
       "@hunter-pi/evidence": ["./packages/evidence/src/index.ts"],
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
@@ -17,6 +18,7 @@
     "types": ["node", "vitest/globals"]
   },
   "include": [
+    "apps/*/src/**/*.ts",
     "packages/*/src/**/*.ts",
     "scripts/**/*.mjs",
     "test/**/*.ts",

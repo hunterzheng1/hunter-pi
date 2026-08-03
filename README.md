@@ -1,12 +1,42 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已在 `main` 完成双平台契约基线、Task 3 持久事件/脱敏 Evidence/重放，以及 Task 4 固定 Pi 公共接口验证；产品入口、交互 TUI 与真实 Provider 仍未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 5 已实现首个 `hpi` npm 开发者预览、隔离配置、诚实 Doctor、Provider 披露、Safe Mode 和 Quick Session 启动边界；真实终端和真实 Provider 仍需分别验证。
 
 ## 当前状态
 
-**Task 4 固定版本 Pi 公共接口 spike 已在 Windows/Ubuntu 完成 provider-independent Evidence 与跨平台身份对账；`hpi` 尚未实现，因此还不是可日常使用产品。**
+**Task 5 开发者预览已在本机完成自动化实现与单制品安装烟测；远端 Windows/Ubuntu CI、真实 Windows TUI 人工 smoke 和真实 Provider 登录/请求仍是 `PENDING` 或 `NOT_PROVEN`。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 4 在自动创建的临时 Git fixture 中，以隔离配置、Pi offline 启动/package 模式和确定性 faux provider 实测 Extension 身份/有效工具图、JSON、RPC 取消和 SDK 新进程 Session 恢复；操作系统网络隔离、Hunter canonical Checkpoint、unknown-outcome reconciliation、完整后代进程树清理、真实 Provider 和交互 TUI 均未被该证据证明。`hpi` 命令、插件兼容、安装包和自动更新仍未实现或验证。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 5 的单个 npm tarball 内含 Hunter 产品壳、Core Extension 与所需原创运行时代码，并把 Pi 0.83.0 作为精确依赖安装；打包身份分别绑定 `hpi.js` 产品壳与 Core 的 SHA-256，启动前会拒绝不匹配的字节；隔离全局安装 smoke 证明现有 raw `pi` 命令未被改写。操作系统网络隔离、真实 Provider、第三方插件兼容、Managed Change 和生产发布仍未被证明。
+
+## 安装开发者预览
+
+当前不发布到 npm，也没有 Windows 安装器。可从干净仓库构建一个精确 tarball：
+
+```powershell
+npm ci
+npm run pack:preview
+npm install --global ".\.artifacts\hpi-developer-preview\hunter-pi-cli-0.1.0-dev.0.tgz"
+hpi version --json
+```
+
+空配置首次使用可直接运行受限向导：
+
+```powershell
+cd D:\Projects\your-git-repository
+hpi
+hpi smoke tui
+hpi
+```
+
+向导先检查 Node、固定 Pi Engine、临时 Git fixture 与 Core，再显示默认 Provider/模型/权限、离线解析的真实 origin、可能外发的数据类别，以及诚实的 `ExternalRetention=NOT_PROVEN`、`TrainingUse=NOT_PROVEN`、`AccountControls=PROVIDER_OWNED`。只有你分别确认披露和登录步骤后才打开 Provider-owned 登录 TUI；它不会自动认证或发送模型请求。要选择其他目标，可先显式运行 `hpi setup ...`，再运行 `hpi login`、`hpi doctor --json` 和 `hpi smoke tui`。
+
+- `hpi setup` 显示 Provider、endpoint 类别、离线解析的精确 origin、可能外发的数据类别、外部政策引用、未知的 retention/training 事实及 Hunter 可控的 telemetry/startup-network 设置；版本化 acknowledgement 会绑定这些值。拒绝确认会得到 `BLOCKED`，不会启动请求。
+- `hpi smoke tui` 只接受带精确产品壳与 Core SHA-256 的打包制品，并以 Safe Mode 打开 Pi。该模式阻断普通 prompt 输入，但 Pi 的部分内建斜杠命令先于 Extension hook 执行，因此所有 Provider 请求仍标记为 `NOT_PROVEN`。不要发送模型请求或运行其他内建命令；只运行 `/hunter-status`、检查 Hunter 头部后退出。退出码本身不算成功，随后明确确认只记录绑定 product/Engine/source/platform/configuration/`hpi.js` SHA/Core SHA 的本机可变人工 smoke acknowledgement，不是正式 Human Receipt；换产品壳或换 Core 后自动失效。
+- `hpi login` 打开 Pi 管理的登录界面；在 Pi 内运行 `/login`。Pi Engine 自主管理 credential storage；Hunter host 只接收并持久化 `configured/source` 元数据，不提取、复制或输出 token。真实登录或可能收费的请求需要用户自行决定。
+- 普通 `hpi` 在当前 Git 仓库启动 Quick Session。开发者预览会拒绝任何已启用用户插件；先运行 `hpi plugin doctor` 和 `hpi plugin disable <id>`。`hpi --safe-mode` 不加载用户插件、skills、prompt templates、themes 或 context files，只显式加载 Core，并拦截 Agent 工具写入与 `!` 直接 shell；它不是操作系统沙箱。Core 会对 `.envrc`、`secrets.json`、`token.json`、`service-account.json` 等明确的 credential-like 路径要求确认（Safe Mode 阻断），即使选择 Full Access 也不会预批准；但它不能仅凭路径识别任意文件内容，因此界面明确显示 `CredentialGuard=NAMED_PATHS_ONLY / ContentDetection=NOT_PROVEN`。每次 Quick、login、smoke 启动都会先检查隔离 Session 树；但 Pi 的 `/share`、`/import`、`/export`、`/compact`、`/trust`、设置及其他内建命令属于用户直接操作，不受全局 Hunter tool policy 保证，开发者预览中应避免使用这些命令。特别是 `/share` 可通过 GitHub CLI 上传完整会话 HTML，且 Task 5 无法在公开 Extension hook 中插入 Hunter 确认或 Receipt，因此显示为 `ShareCommand=NOT_MEDIATED / RemoteWriteGuarantee=NOT_PROVEN`。
+- Quick Session 退出只记录 `PROCESS_EXIT` 和 `VerifiedChange=NOT_CLAIMED`，不会伪装成已验证交付。
+
+其他 Provider 可在 setup 时显式指定，例如 `hpi setup --provider <id> --model <exact-model-id> --policy-reference <https-url> --endpoint-category PROVIDER_MANAGED --permission balanced`。LOCAL endpoint 还必须给出精确 loopback origin，例如 `--endpoint-category LOCAL --destination-origin http://127.0.0.1:11434`；CUSTOM 只接受 HTTPS origin。启动前会解析真实 origin；Provider-managed 配置必须与固定 Pi 原始目录一致，Core 还会固定 Provider/model/origin 并在漂移时终止。切换 Provider、模型、endpoint、目的地或披露政策会在需要时要求重新确认。
 
 ## 开发基线
 
@@ -19,11 +49,11 @@ npm run probe:pi
 npm run verify
 ```
 
-`doctor` 在当前阶段只检查操作系统、Node.js、npm、Git 和仓库根标记，不探测模型 Provider、登录或凭据。`probe:pi` 构建后在临时 Git fixture 中运行固定 Pi 的离线公共接口探针，默认只把脱敏 JSON 写入 `.artifacts/pi-probe/`；它不会证明真实 Provider 或 TUI。`verify` 会执行全部本地门禁并包含该探针。
+根 `npm run doctor` 检查工程仓库前置条件；安装后的 `hpi doctor` 另行检查 Node 24、临时 Git fixture、实际 Pi Engine Release、隔离配置、当前离线解析的 Provider origin、披露、Provider 登录元数据、产品壳/Core 完整性和同时绑定两者 SHA 的 TUI receipt。任何缺项均为 `BLOCKED`、`NOT_PROVEN` 或 `INCOMPATIBLE` 并返回非零。`probe:pi` 仍只证明固定 Pi 的 provider-independent 公共接口，不证明真实 Provider。
 
 ## 产品形态
 
-Hunter Pi 最终提供一个独立入口：
+Hunter Pi 当前开发者预览已经提供独立入口：
 
 ```powershell
 hpi
@@ -64,7 +94,7 @@ Hunter Pi (`hpi`)
 - 重试产生新 Attempt；失败历史不可改写成成功。
 - 自动循环必须受次数、时间、预算和确定性停止条件约束。
 - 上游 Pi 版本固定并经过兼容验证后才进入 Hunter Pi 稳定版。
-- 标准 Pi 插件可按策略安装，但插件代码可能拥有当前进程权限；产品必须分别显示兼容性、信任来源和实际隔离状态。
+- 标准 Pi 插件未来可按策略安装，但插件代码可能拥有当前进程权限；Task 5 只提供元数据 doctor/disable，并拒绝实际激活。后续插件管理必须先显示精确来源、版本/ref、scope、兼容性、信任来源和实际隔离状态。
 - “本地优先”指规范状态留在本机，并不表示模型请求不联网；首次发送前必须披露可能发给 Provider 的数据类别、目标与外部保留限制。
 - 凭据与完整环境内容不得写入 Evidence、日志或仓库。
 
@@ -91,10 +121,11 @@ Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖�
 
 本仓库当前没有证明：
 
-- `hpi` 产品入口、真实模型 Provider 或交互 TUI 已可使用；
+- 真实模型 Provider 已登录、产生过成功响应或适合付费日常使用；
+- 交互 TUI 已在当前用户的真实 Windows 终端通过人工 smoke；在运行并确认 `hpi smoke tui` 前保持 `NOT_PROVEN`，确认结果也不构成正式 Human Receipt；
 - Pi Session 可以替代 Hunter durable Checkpoint，或 Pi 退出已经清理完整后代进程树；
 - 任一第三方 Pi 插件与 Hunter Pi 兼容；
 - Pi 上游升级可以无条件自动应用；
-- Windows 安装包、签名、自动更新或生产发布已经完成；
+- Windows 安装包、签名、自动更新、npm 发布或生产发布已经完成；
 - Hunter-Harness 的全部机制已经迁移。
 - Fake Host 通过共享 contract suite 代表真实 Pi Host、Provider 或日常使用产品已经通过。

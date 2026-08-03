@@ -14,9 +14,9 @@ Before interpreting or changing the product, read:
 
 ## Current repository status
 
-- Tasks 0–4 are merged. Task 4 implementation `8efe194a1c5f6256e68f1e8c20d0e59848376f2b` and merge `00f0d0d7d702779706e2a5aefac3d67ed0a49699` passed exact Windows/Ubuntu CI plus cross-platform Evidence identity comparison. Task 5 is the next bounded task; no real Provider, interactive TUI, or usable product has been proven yet.
-- Do not claim that `hpi`, a Windows installer, a Pi Host, plugin compatibility, or qualified updates exist until implementation and evidence are committed.
-- The current code proves provider-neutral Hunter Pi contracts and bounded public Pi Extension/JSON/RPC/SDK behavior with deterministic fixtures. It does not prove a real Provider interaction, interactive TUI, or usable product.
+- Tasks 0–4 are merged. Task 4 implementation `8efe194a1c5f6256e68f1e8c20d0e59848376f2b` and merge `00f0d0d7d702779706e2a5aefac3d67ed0a49699` passed exact Windows/Ubuntu CI plus cross-platform Evidence identity comparison. Task 5 has implemented the local automated `hpi` developer-preview boundary; remote Windows/Ubuntu CI and the real Windows TUI smoke are still `PENDING`, and real Provider use remains `NOT_PROVEN`.
+- The Task 5 `hpi` product shell, Pi Host, bounded Core Extension, and single-artifact package smoke exist. Do not claim a Windows installer, general plugin compatibility, qualified updates, production readiness, or daily-use acceptance until their later tasks and Evidence are complete.
+- The current code proves provider-neutral Hunter Pi contracts, bounded public Pi Extension/JSON/RPC/SDK behavior, and the Task 5 automated product-shell boundary with deterministic fixtures. It does not prove a real Provider interaction or real interactive TUI usability.
 - Implementation proceeds task by task from the active plan; do not silently expand to a Pi or Oh My Pi fork.
 
 ## Product invariants

@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_5_PRODUCT_SHELL / NO_USABLE_PRODUCT`
-- Active task: `TASK_5` (`NOT_STARTED`; Task 4 exact local, PR, merge, Windows/Ubuntu, and aggregate identity gates passed)
+- Current repository phase: `TASK_5_PRODUCT_SHELL / LOCAL_AUTOMATION_COMPLETE / USABLE_STATUS_PENDING_REMOTE_AND_REAL_TUI`
+- Active task: `TASK_5` (`IN_PROGRESS`; local automated product-shell gates implemented, remote Windows/Ubuntu CI and real Windows TUI smoke pending; real Provider remains `NOT_PROVEN`)
 - First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; REAL_PROVIDER_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 

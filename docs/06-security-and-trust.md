@@ -53,14 +53,14 @@ Local-first describes ownership of canonical workflow state; it does not mean mo
 
 Before the first model request, Hunter Pi must:
 
-- identify the selected provider and resolved endpoint category without exposing credentials;
+- identify the selected provider, endpoint category, and exact offline-resolved origin without exposing credentials;
 - enumerate the data categories that may be sent and whether complete files can enter context;
-- reference the provider/account retention and training controls while stating that Hunter Pi cannot enforce an external provider's policy;
+- reference the provider/account retention and training controls while stating that Hunter Pi cannot enforce an external provider's policy; show retention/training as `NOT_PROVEN` and account controls as `PROVIDER_OWNED` unless exact account-bound proof exists;
 - show Hunter-controlled network and telemetry settings, including any update, crash-report, or usage-analytics endpoints;
 - obtain an explicit, versioned acknowledgement and allow cancellation as `BLOCKED`;
 - keep credentials, complete private prompts, and raw transmitted content out of normal Evidence.
 
-Changing provider, endpoint category, or material disclosure version requires acknowledgement again. Network integration tests use a recording fake endpoint and prove destination allowlisting, cancellation before send, payload-category accounting, and zero credential leakage. Any real provider test is separately authorized and records metadata only.
+Changing provider, endpoint category, exact resolved origin, retention/training status, or material disclosure version requires acknowledgement again. Doctor and every launch freshly resolve the current Provider destination offline; drift blocks disclosure readiness instead of relying only on stored configuration. Network integration tests use a recording fake endpoint and prove destination allowlisting, cancellation before send, payload-category accounting, and zero credential leakage. Any real provider test is separately authorized and records metadata only.
 
 ## Permission profiles
 
@@ -84,6 +84,10 @@ Permission decisions apply to Hunter-owned tools and Pi tool calls that the Core
 - each remote write, publication, deployment, paid operation, credential access, privilege escalation, and destructive broad filesystem action still requires a separate explicit workflow decision and Receipt; selecting the profile cannot pre-authorize them;
 - active status is continuously visible and included in Attempt identity.
 
+These three profiles apply only to Hunter-mediated operations. Task 5 marks the corresponding guarantee for fixed-Pi built-in slash commands `NOT_PROVEN`; it does not relabel those paths as compliant.
+
+Task 5 also implements only a named-path guard for observable file-tool calls. Paths such as `.env*`, `.envrc`, credential/secret/token/service-account files, common cloud/SSH/package-manager stores, private-key formats, and linked escapes ask in Balanced and Full Access and block in Safe Mode. Arbitrary file content is not inspected before access, so the product visibly reports `CredentialGuard=NAMED_PATHS_ONLY` and `ContentDetection=NOT_PROVEN`; the complete credential-access guarantee remains a later owned-interaction/Managed Change gate.
+
 No profile allows silent secret recording or evidence falsification.
 
 Activating an ordinary Pi extension grants it the Agent process's filesystem, process, network, and credential-access authority. A permission prompt can govern a registered tool call but cannot prove that the extension did not perform the same effect directly. A Managed Change requiring verified containment therefore runs Core-only or with plugins whose independent Isolation result is `CONTAINED`; otherwise the UI records `PROCESS_AUTHORITY` or `NOT_PROVEN` and blocks or downgrades the applicable safety claim.
@@ -102,6 +106,8 @@ Pi package installation is code installation. Before activation Hunter Pi record
 - configuration scope: user or project.
 
 Managed Change may block an unverified, untrusted, uncontained, or critical-hook plugin even if Quick Session allows it. Safe Mode must work without evaluating user plugin code.
+
+Task 5's Core Extension is not a complete command dispatcher. It can mediate Pi tool calls, the public `user_bash` hook, ordinary prompt input, and model-selection events. Some fixed-Pi built-ins execute before Extension input hooks, so `/share`, `/import`, `/export`, `/compact`, `/trust`, settings, and similar direct user commands are outside the global mediation claim. `/share` specifically invokes GitHub CLI to upload complete session HTML without a Hunter confirmation or Receipt. The preview labels this `PiBuiltins=USER_DIRECTED`, `ShareCommand=NOT_MEDIATED`, and `RemoteWriteGuarantee=NOT_PROVEN`; it never claims all Provider requests are blocked and reserves a complete command/request boundary for a later owned interaction layer or a proven upstream interface.
 
 Future sandboxing is an adapter choice and must not be overstated. Until an isolation implementation is verified, plugins are reported as having the user's process authority.
 

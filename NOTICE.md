@@ -14,11 +14,20 @@ The initial documentation baseline studies these projects without incorporating 
 
 | Project | Frozen reference | License observed at that reference | Current use |
 |---|---|---|---|
-| Pi | [`v0.83.0`](https://github.com/earendil-works/pi/tree/v0.83.0), npm integrity frozen in `package-lock.json` | [MIT](https://github.com/earendil-works/pi/blob/v0.83.0/LICENSE) | exact external dependency used by the isolated Task 4 public-interface spike; real Provider/product qualification remains `NOT_PROVEN` |
+| Pi | [`v0.83.0`](https://github.com/earendil-works/pi/tree/v0.83.0), npm integrity frozen in `package-lock.json` | [MIT](https://github.com/earendil-works/pi/blob/v0.83.0/LICENSE) | exact Engine dependency used by the Task 4 probe and Task 5 developer-preview product; real Provider remains `NOT_PROVEN` |
 | Oh My Pi | [`v17.2.4`](https://github.com/can1357/oh-my-pi/tree/v17.2.4) | [MIT](https://github.com/can1357/oh-my-pi/blob/v17.2.4/LICENSE) | research/implementation reference only |
 | Hunter-Harness | [`b73db2a`](https://github.com/hunterzheng1/Hunter-Harness/commit/b73db2a23d0ed671c228640a37386b5c0dbef1e7) | no license conclusion recorded here | mechanism and engineering reference only; no runtime or copied-code dependency |
 
 This table records provenance, not compatibility, security, or production verification.
+
+## Task 5 build and shipped dependencies
+
+| Package | Exact version/integrity | License | Distribution role |
+|---|---|---|---|
+| Zod | `4.4.3`, `sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==` | MIT, Copyright (c) 2025 Colin McDonnell | bundled into `dist/hpi.js`; the exact license is shipped at `apps/cli/third-party/zod-LICENSE` |
+| esbuild | `0.28.1`, `sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==` | MIT, Copyright (c) 2020 Evan Wallace | build-time bundler only; not shipped as executable product code |
+
+The generated developer-preview tarball includes the Hunter Pi `LICENSE` and `THIRD_PARTY_NOTICES.md`; installed Pi and its transitive dependencies retain their own npm package licenses and notices.
 
 ## Required provenance record
 

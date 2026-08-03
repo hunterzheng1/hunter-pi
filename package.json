@@ -11,10 +11,11 @@
   },
   "packageManager": "npm@11.9.0",
   "workspaces": [
+    "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b tsconfig.build.json --clean && tsc -b tsconfig.build.json --pretty false",
+    "build": "tsc -b tsconfig.build.json --clean && tsc -b tsconfig.build.json --pretty false && node scripts/bundle-cli.mjs",
     "clean-install-smoke": "node scripts/clean-install-smoke.mjs",
     "compare:pi-evidence": "npm run build && node dist/tools/compare-pi-probe-evidence.js",
     "doctor": "node tools/doctor.ts --json",
@@ -22,6 +23,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
     "package-smoke": "npm run build && node scripts/package-smoke.mjs",
+    "pack:preview": "npm run build && node scripts/pack-developer-preview.mjs",
     "probe:pi": "npm run build && node dist/tools/pi-public-interface-probe.js",
     "strict:check": "node scripts/strict-compiler-smoke.mjs",
     "test": "vitest run",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.13.3",
+    "esbuild": "0.28.1",
     "eslint": "10.8.0",
     "globals": "17.9.0",
     "prettier": "3.9.6",

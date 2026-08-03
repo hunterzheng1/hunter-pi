@@ -4,6 +4,8 @@ These requirements are target acceptance contracts. Thresholds may be revised on
 
 Task 3 implements provider-neutral local fixtures for append-only structural/semantic event replay, checksum/cursor validation, the HP-NFR-PERF-03 constants and retention projection, a physical emergency-reserve file, simulated disk-full behavior, noncritical metadata accounting, mutating-Run admission, and the adversarial Evidence corpus. Exact implementation and merge commits passed Windows/Ubuntu CI. This remains partial contract evidence only: real power loss, production filesystem behavior, cache pruning, real Pi/Plugin output, and daily-use thresholds remain `NOT_PROVEN`.
 
+Task 5 locally implements a single developer-preview artifact with an exact Pi 0.83.0 dependency, source identity, bundled-Core SHA-256 verification, clean install smoke, and tamper rejection. Remote Windows/Ubuntu CI, a real Windows TUI, real Provider use, stable promotion, signing, and updater behavior remain `PENDING`, `NOT_PROVEN`, or not implemented as stated in its validation record.
+
 ## Reliability
 
 ### HP-NFR-REL-01 — Append-only history
@@ -91,7 +93,7 @@ Permission profiles cannot be presented as an OS sandbox. Plugin activation expl
 
 ### HP-NFR-SEC-04 — Supply-chain identity
 
-Every released CLI/installer, bundled Engine Release, Core Extension, and direct dependency lock has an integrity identity traceable to the qualified source commit. Stable promotion requires artifact-to-candidate comparison.
+Every released CLI/installer, bundled Engine Release, Core Extension, and direct dependency lock has an integrity identity traceable to the qualified source commit. Readiness receipts that depend on executable product-shell/Core behavior bind both exact integrities and invalidate after either drifts. Stable promotion requires artifact-to-candidate comparison.
 
 ### HP-NFR-SEC-05 — Provider data-egress consent
 

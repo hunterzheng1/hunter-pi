@@ -1,6 +1,6 @@
 # User experience
 
-All commands and screens in this document are target designs. They do not exist yet.
+Task 5 implements the bounded developer-preview subset: `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, and plugin doctor/disable. Managed Change, full plugin management, installer/update UI, and other commands remain target designs unless a dated validation record says otherwise.
 
 ## Installation experience
 
@@ -27,7 +27,9 @@ Hunter Pi — First Run
 7. Verification     Confirm a temporary Git fixture can be created and cleaned
 ```
 
-Before any model request, the wizard requires an explicit acknowledgement that selected prompts, repository content, tool results, and conversation context may be transmitted to the configured provider. It shows the resolved provider/endpoint category, configured telemetry/network controls, and links or references to the provider's retention policy without claiming to enforce that external policy.
+Task 5 uses the qualified default Provider/model and `Balanced` permission when `hpi` starts from an empty profile; an alternative target is selected first with explicit `hpi setup` flags. Steps 1 and 7 execute the product Doctor, including an automatically created temporary Git fixture and a fresh offline resolution of the current Provider destination. Step 4 asks before opening the Provider-owned Pi login TUI. Cancellation leaves setup recoverable and returns `BLOCKED`; the wizard never logs in or sends a model request automatically. A configured result still reports interactive TUI readiness `NOT_PROVEN` until the separate `hpi smoke tui` acknowledgement succeeds from an exact packaged artifact. That acknowledgement binds both `hpi.js` and Core SHA-256 values and becomes `NOT_PROVEN` after either executable surface drifts.
+
+Before any model request, the wizard requires an explicit acknowledgement that selected prompts, repository content, tool results, and conversation context may be transmitted to the configured provider. It resolves the exact origin offline from the fixed Pi catalog/configuration, shows the endpoint category and configured telemetry/network controls, and links or references the provider policy without claiming it matches the user's account. Unless separately proven, it displays `ExternalRetention=NOT_PROVEN`, `TrainingUse=NOT_PROVEN`, and `AccountControls=PROVIDER_OWNED` instead of guessing account facts. The acknowledgement binds the exact resolved origin and these statuses; launch recomputes the origin and requires acknowledgement again after drift.
 
 The wizard records capability, disclosure, consent, and configuration receipts, never tokens, cookies, complete environment variables, or private prompt content. A missing or cancelled provider login is `BLOCKED`, not a failed product installation.
 
@@ -172,21 +174,27 @@ The runtime header shows three independent dimensions:
 
 `VERIFIED` means only that the exact compatibility suite passed. It is never displayed as proof that executable plugin code is safe.
 
-A Safe Mode starts only the Core Extension:
+A Safe Mode disables user extensions, skills, prompt templates, themes, and context files, then explicitly loads only the Core Extension:
 
 ```powershell
 hpi --safe-mode
 ```
 
+Task 5 Safe Mode mediates observable Agent tool calls, blocks direct `!` shell execution, and pins the acknowledged Provider/model/origin. It is not a globally read-only Pi or an operating-system sandbox. Fixed Pi dispatches some built-in slash commands (including share/import/export/compact/trust/settings flows) before Extension input hooks. Typing one is an explicit user-directed operation outside the Task 5 Hunter tool-policy claim; smoke sessions must not use them, and all-provider-request blocking remains `NOT_PROVEN`. Every Hunter-launched Pi TUI inspects the isolated Session tree before start, but an interactive `/import` source is not Hunter-qualified in this preview.
+
 ## Permission profiles
 
 The proposed first-run default is `Balanced`:
 
-- `Safe` — read-only and low-risk commands by default; repository writes and external effects ask first.
-- `Balanced` — repository-local edits and declared verification commands are allowed; destructive filesystem, credential, remote-write, publish, deployment, and paid operations ask first.
-- `Full Access` — broad local development tools are allowed after explicit profile selection; each credential access, remote write, publish, deployment, paid operation, privilege escalation, or broad/irreversible filesystem action still requires its own explicit workflow decision and Receipt.
+- `Safe` — Hunter-mediated read-only and low-risk tools by default; mediated repository writes and external effects ask first. Direct Pi built-ins remain subject to the boundary above.
+- `Balanced` — Hunter-mediated repository-local edits and declared verification commands are allowed; mediated destructive filesystem, credential, remote-write, publish, deployment, and paid operations ask first.
+- `Full Access` — broad Hunter-mediated local development tools are allowed after explicit profile selection; each Hunter-managed credential access, remote write, publish, deployment, paid operation, privilege escalation, or broad/irreversible filesystem action still requires its own explicit workflow decision and Receipt.
 
 Permission profiles mediate Hunter-owned tools and Pi tool calls that the Core Extension can observe. They are not an operating-system sandbox. A Pi extension runs as executable code in the Agent process and may directly access files, processes, network, or credentials without using a mediated tool; activating one therefore grants at least the authority shown by its Isolation result.
+
+Task 5 implements only a conservative named-path credential guard at observable file-tool calls: recognized paths ask in Balanced and Full Access and block in Safe Mode. It cannot infer credential content in an arbitrary innocently named file, so the header and `/hunter-status` display `CredentialGuard=NAMED_PATHS_ONLY` and `ContentDetection=NOT_PROVEN`. Complete credential mediation remains a later owned-interaction/Managed Change requirement, not a Task 5 claim.
+
+Task 5 does not prove these profile guarantees for Pi built-in slash commands. In particular, fixed Pi `/share` can invoke GitHub CLI to upload complete session HTML before the Core input hook, without a Hunter confirmation or Receipt. The preview visibly reports `ShareCommand=NOT_MEDIATED` and `RemoteWriteGuarantee=NOT_PROVEN`; users must not use `/share` until an owned interaction layer or upstream public interception point closes that gap.
 
 A Managed Change that requires verified containment runs Core-only or with plugins whose Isolation is `CONTAINED`. If a `PROCESS_AUTHORITY` or `NOT_PROVEN` plugin is enabled, policy may block the Run or visibly downgrade its safety claim; passing project tests does not restore a containment claim.
 

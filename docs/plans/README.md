@@ -2,7 +2,7 @@
 
 ## Status
 
-Tasks 0–4 are complete and merged. Task 4 fixed-version Pi public-interface receipts passed exact Windows/Ubuntu CI and cross-platform identity comparison within their provider-independent bounds. Task 5 is next but has not started, no `hpi` product entry exists yet, and neither Fake Host nor the Task 4 faux provider proves a real Provider or daily-use product.
+Tasks 0–4 are complete and merged. Task 5 is implemented locally through its automated developer-preview boundary: `hpi`, isolated setup, honest Doctor, Provider disclosure/login handoff, Core-only Safe Mode resource planning, Quick Session, explicit manual TUI smoke acknowledgement state, and a clean single-tarball install all exist. Safe Mode does not imply global mediation of fixed-Pi built-in slash commands; that boundary is visible and `ProviderRequests` remains `NOT_PROVEN` in blocked-prompt smoke/login modes. Task 5 remote Windows/Ubuntu CI, exact bundled-Core Windows TUI execution, and a real Windows terminal smoke are still pending; real Provider login/request remains separately authorized and `NOT_PROVEN`. Task 6 must not start merely because a Pi process exits.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

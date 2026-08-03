@@ -37,12 +37,14 @@ Acceptance:
 
 - Doctor reports each capability as `DETECTED`, `BLOCKED`, `NOT_PROVEN`, or `INCOMPATIBLE`;
 - mutating probes run only in an automatically created temporary Git fixture;
+- Provider disclosure readiness is checked against the currently offline-resolved destination, not stored acknowledgement alone;
+- a local TUI smoke acknowledgement is `DETECTED` only for the same exact product-shell SHA-256, Core SHA-256, and packaged product identity;
 - output contains no credential values, complete environment dump, private prompt, or absolute home/temp path;
 - a failed check returns a non-zero exit and a smallest-next-action message.
 
 ### HP-US-003 — Provider login (`P0`)
 
-As a user, I want to use Pi-supported provider login without Hunter Pi reading my token so that authentication remains with the engine/provider.
+As a user, I want to use Pi-supported provider login while the Hunter host receives only readiness metadata so that credential parsing and storage remain with the Pi Engine/provider boundary.
 
 Acceptance:
 
@@ -68,8 +70,8 @@ As a user, I want to know what leaves my computer before a model request so that
 
 Acceptance:
 
-- first run identifies the provider/endpoint category and the prompt, repository-context, tool-result, and metadata categories that may be sent;
-- provider retention/training controls and Hunter-controlled telemetry/network settings are visible without claiming Hunter can enforce external policy;
+- first run identifies the provider/endpoint category, exact offline-resolved origin, and the prompt, repository-context, tool-result, and metadata categories that may be sent;
+- provider retention/training controls and Hunter-controlled telemetry/network settings are visible without claiming Hunter can enforce external policy; unknown account facts are explicitly `NOT_PROVEN` rather than inferred from a policy URL;
 - an explicit versioned acknowledgement is required before the first send and again after a material provider/endpoint/disclosure change;
 - cancellation prevents the request and records `BLOCKED` without storing the prompt or credential in Evidence.
 
@@ -83,6 +85,7 @@ Acceptance:
 
 - `hpi` opens the qualified Pi interaction in the current repository;
 - the header shows repository state, model, permission profile, and each plugin's Compatibility, Trust, and Isolation;
+- the Task 5 header says credential guarding is named-path-only and content detection is `NOT_PROVEN`; recognized credential-like paths cannot be pre-authorized by Full Access;
 - standard steering, cancellation, tool output, and session resume work for the qualified engine;
 - ending the session does not claim a verified Change.
 
@@ -276,7 +279,8 @@ As a developer with a broken plugin, I want Hunter Pi to start without evaluatin
 
 Acceptance:
 
-- Safe Mode loads only bundled, qualified resources;
+- Safe Mode loads no user plugins, skills, prompt templates, themes, or context files and explicitly loads only the bundled Core Extension;
+- Safe Mode blocks observable Agent writes and direct `!` shell execution, while visibly declaring that Pi built-in slash commands are user-directed and not globally mediated in Task 5;
 - it works when user plugin code throws during normal startup;
 - it exposes plugin disable/doctor commands;
 - it does not silently delete plugin files or settings.

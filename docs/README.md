@@ -5,14 +5,15 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-03
-- Product status: **IMPLEMENTED / TASK_3_COMPLETE / NO_USABLE_PRODUCT**
-- Current implementation: Task 2 strict domain/kernel/Fake contracts plus Task 3 immutable atomic event segments, replayable projections, portable redacted Evidence, storage limits/reserve, durable Kernel, and Run summary; local and exact remote gates **PASS**
-- Next implementation: Task 4 fixed-version Pi public-interface spike; **NOT_STARTED** in this status snapshot
+- Product status: **IMPLEMENTED / TASK_4_LOCAL_EVIDENCE / NO_USABLE_PRODUCT**
+- Current implementation: Tasks 1–3 are merged; Task 4 fixes Pi `0.83.0`, locally proves provider-independent Extension/JSON/RPC/SDK surfaces in an isolated temporary Git fixture, and passes the complete local repository gate
+- Next implementation: Task 4 exact Windows/Ubuntu remote CI is **PENDING**; Task 5 `hpi` product shell starts only after that gate passes
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
 - Task 3 remote CI: **PASS** — exact implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818956056), and merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30819181475). The superseded `e1b06c523084a34c8b32a852848c906fa9877236` run remains recorded as [Ubuntu PASS / Windows FAIL](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818314313).
-- Real Pi integration: **NOT_PROVEN**
+- Task 4 local Windows Evidence: **SUPPORTED within recorded bounds** — fixed Pi artifact Extension/JSON/RPC/SDK probe; remote Windows/Ubuntu CI **PENDING**
+- Real Provider and interactive Pi TUI: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**
 
@@ -37,6 +38,8 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 
 - [Hunter-Harness mechanism disposition](migration/2026-08-03-hunter-harness-mechanism-disposition.md)
 - [Pi and Oh My Pi upstream baseline](research/2026-08-03-pi-and-omp-upstream-baseline.md)
+- [Pi public-interface recheck](research/2026-08-03-pi-public-interface-recheck.md)
+- [Task 4 Pi public-interface validation](validation/2026-08-03-task4-pi-public-interface.md)
 - [Testing strategy](testing-strategy.md)
 - [Plan index](plans/README.md)
 - [Foundation-to-daily-use execution plan](plans/2026-08-03-foundation-to-daily-use.md)

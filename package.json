@@ -16,15 +16,17 @@
   "scripts": {
     "build": "tsc -b tsconfig.build.json --clean && tsc -b tsconfig.build.json --pretty false",
     "clean-install-smoke": "node scripts/clean-install-smoke.mjs",
+    "compare:pi-evidence": "npm run build && node dist/tools/compare-pi-probe-evidence.js",
     "doctor": "node tools/doctor.ts --json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
     "package-smoke": "npm run build && node scripts/package-smoke.mjs",
+    "probe:pi": "npm run build && node dist/tools/pi-public-interface-probe.js",
     "strict:check": "node scripts/strict-compiler-smoke.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run strict:check && npm run build && npm run format:check && npm run package-smoke && npm run clean-install-smoke"
+    "verify": "npm run lint && npm run typecheck && npm test && npm run strict:check && npm run build && npm run format:check && npm run package-smoke && npm run clean-install-smoke && npm run probe:pi"
   },
   "dependencies": {
     "zod": "4.4.3"

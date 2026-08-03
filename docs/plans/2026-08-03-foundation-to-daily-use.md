@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_1_ENGINEERING_SKELETON / NO_USABLE_PRODUCT`
-- Active task: `TASK_1`
+- Current repository phase: `TASK_3_DURABLE_EVIDENCE / NO_USABLE_PRODUCT`
+- Active task: `TASK_3` (local implementation complete; remote CI `PENDING`)
 - First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
@@ -106,6 +106,8 @@ Gates: focused suites, full local gate, dual-platform CI.
 ## Task 3 — Durable events, Evidence, redaction, and replay
 
 **Goal:** make workflow truth crash-safe and privacy-safe before real Agent execution.
+
+Implementation snapshot: the topic branch implements the provider-neutral local scope below and passes its local fault/redaction/replay suites. GitHub Actions for the exact commit remains `PENDING`; real power-loss behavior, real Pi, and a product entry point remain `NOT_PROVEN`.
 
 Deliverables:
 

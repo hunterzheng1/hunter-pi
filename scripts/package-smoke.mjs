@@ -11,11 +11,12 @@ import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const packageNames = [
   "@hunter-pi/domain",
+  "@hunter-pi/evidence",
   "@hunter-pi/engine-contracts",
   "@hunter-pi/workflow-kernel",
   "@hunter-pi/testkit",
 ];
-const packageDirectories = ["domain", "engine-contracts", "workflow-kernel", "testkit"];
+const packageDirectories = ["domain", "evidence", "engine-contracts", "workflow-kernel", "testkit"];
 
 /** @type {(text: string) => unknown} */
 const parseJson = JSON.parse;

@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已完成双平台契约基线；真实 Pi 交互、持久恢复与产品入口仍未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已完成双平台契约基线，并在 Task 3 分支实现本地持久事件、脱敏 Evidence 与重放；真实 Pi 交互与产品入口仍未实现或验证。
 
 ## 当前状态
 
-**Task 2 domain/kernel/Fake 已完成双平台验证 / 尚无可日常使用产品。**
+**Task 3 durable events/Evidence/replay 已在本地实现，远端 CI PENDING / 尚无可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Fake 只证明 Hunter Pi 自有契约；`hpi` 命令、持久事件库、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 2 精确提交 `71542e91d5f92cb62cc6002cf64456fe3d7d8248` 及合并提交 `fb162bf2126b356750dd327cef7b8e2fb26cde09` 的 Windows/Ubuntu CI 均已实际通过。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Task 3 进一步增加不可变哈希链事件段、语义重放、原子不可覆盖发布、可重建 projection、统一 Evidence 脱敏与 8 MiB 截断、包含非关键元数据的 Run 保留阈值、经实际分配与单链接校验的 64 MiB 紧急保留区、磁盘满/写入故障 fixture，以及不会把 Checkpoint 误报为成功的持久 Kernel；紧急保留区、最小写入余量或原子写入探针不可用时，新 mutating Run 会 fail-closed。Fake 与本地故障注入只证明 Hunter Pi 自有契约；`hpi` 命令、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 2 精确提交 `71542e91d5f92cb62cc6002cf64456fe3d7d8248` 及合并提交 `fb162bf2126b356750dd327cef7b8e2fb26cde09` 的 Windows/Ubuntu CI 均已实际通过；Task 3 的远端 CI 尚未运行，状态为 `PENDING`。
 
 ## 开发基线
 
@@ -67,7 +67,7 @@ Hunter Pi (`hpi`)
 - “本地优先”指规范状态留在本机，并不表示模型请求不联网；首次发送前必须披露可能发给 Provider 的数据类别、目标与外部保留限制。
 - 凭据与完整环境内容不得写入 Evidence、日志或仓库。
 
-Task 2 的 Fake contract suite 已在本地证明 operation replay 决定性、冲突 payload 拒绝、完整 target identity/过期 deadline fail-closed、由 harness 安排的 completion-like Observation 不等于成功、严格公开响应 schema、游标续读，以及 UNKNOWN outcome 通过独立 reconciliation receipt 处理。它不代表真实 Pi、Provider 或最终产品已经验证。
+Task 2 的 Fake contract suite 已在本地证明 operation replay 决定性、冲突 payload 拒绝、完整 target identity/过期 deadline fail-closed、由 harness 安排的 completion-like Observation 不等于成功、严格公开响应 schema、游标续读，以及 UNKNOWN outcome 通过独立 reconciliation receipt 处理。Task 3 的本地 fixture 证明原子写入故障后只能读到此前或新的完整事件流、损坏数据 fail-closed、便携 Evidence 不保留已覆盖的凭据/私有 Prompt/设备绝对路径，以及恢复决策对未重新验证的外部事实保持 `NOT_PROVEN`。这些结果不代表真实 Pi、Provider、真实断电或最终产品已经验证。
 
 ## 许可状态
 

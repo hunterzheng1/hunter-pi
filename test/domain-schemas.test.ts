@@ -347,11 +347,31 @@ describe("strict domain schemas", () => {
         schemaVersion: "1.0.0",
         evidenceId: "evidence_verify",
         kind: "verification",
+        scope: {
+          runId: "run_example",
+          attemptId: "att_example",
+          verificationReceiptId: "verify_example",
+        },
         createdAt: timestamp,
         sourceFingerprint: fingerprint,
+        contentClass: "SUMMARY",
         contentHash: fingerprint,
         summary: "The declared unit-test command passed.",
-        redaction: { applied: true, fieldsRemoved: 1 },
+        capture: {
+          mediaType: "text/plain; charset=utf-8",
+          retentionStatus: "RETAINED",
+          capturedText: "passed",
+          capturedBytes: 6,
+          totalBytes: 6,
+          truncated: false,
+          cursor: { startByte: 0, endByte: 6 },
+        },
+        redaction: {
+          version: "hunter-redaction/1",
+          applied: true,
+          fieldsRemoved: 1,
+          categories: ["PRIVATE_PATH"],
+        },
       }).evidenceId,
     ).toBe("evidence_verify");
 

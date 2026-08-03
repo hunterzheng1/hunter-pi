@@ -1,0 +1,23 @@
+{
+  "name": "@hunter-pi/evidence",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hunter Pi durable event and portable Evidence infrastructure",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@hunter-pi/domain": "0.0.0",
+    "@hunter-pi/workflow-kernel": "0.0.0",
+    "zod": "4.4.3"
+  }
+}

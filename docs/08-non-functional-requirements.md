@@ -2,6 +2,8 @@
 
 These requirements are target acceptance contracts. Thresholds may be revised only with an explicit reason and evidence; until tested they are `NOT_PROVEN`.
 
+Task 3 implements provider-neutral local fixtures for append-only structural/semantic event replay, checksum/cursor validation, the HP-NFR-PERF-03 constants and retention projection, a physical emergency-reserve file, simulated disk-full behavior, noncritical metadata accounting, mutating-Run admission, and the adversarial Evidence corpus. This is partial implementation evidence only: exact remote CI is `PENDING`, and real power loss, production filesystem behavior, cache pruning, real Pi/Plugin output, and daily-use thresholds remain `NOT_PROVEN`.
+
 ## Reliability
 
 ### HP-NFR-REL-01 — Append-only history
@@ -10,7 +12,7 @@ Run, Attempt, Verification, decision, and failure facts are append-only. Crash a
 
 ### HP-NFR-REL-02 — Atomic durable writes
 
-Workflow events, Checkpoints, configuration changes, plugin manifests, and update state use atomic replace/append patterns with checksum validation. Fault injection at every durable write boundary must yield either the prior valid state or the new valid state, never an accepted partial state.
+Immutable workflow events and Checkpoints use atomic no-replace publication with checksum validation; mutable configuration, manifest, and update-state formats must define an explicit atomic replacement protocol before implementation. Fault injection at every durable write boundary must yield either the prior valid state or the new valid state, never an accepted partial state or a replaced immutable identity.
 
 ### HP-NFR-REL-03 — Managed process finality
 
@@ -45,9 +47,9 @@ Logs, events, sessions, package caches, and archives expose size/retention statu
 - each stdout or stderr stream retains at most 8 MiB of content plus full-stream digest, byte count, and truncation metadata;
 - noncritical logs are warned at 100 MiB and stopped at 250 MiB per Run;
 - disposable package/build cache is pruned at 2 GiB and refuses growth at 5 GiB per user profile;
-- the state root maintains a 64 MiB emergency reserve that noncritical output/cache cannot consume, so terminal/checkpoint receipts can be attempted under disk pressure;
+- the state root maintains a physically allocated, single-link 64 MiB emergency reserve that noncritical output/cache cannot consume, so terminal/checkpoint receipts can be attempted under disk pressure;
 - event facts, terminal receipts, Checkpoints, and Archive manifests are never automatically deleted; referenced large artifacts may be omitted only with digest and explicit retention status;
-- a new mutating Run is `BLOCKED` when the reserve or an atomic durable write cannot be guaranteed.
+- a new mutating Run is `BLOCKED` when the reserve, minimum capacity headroom, or an atomic no-replace write probe cannot be guaranteed.
 
 Disk-full injection must leave the prior state replayable. Explicit export/delete operations identify exact targets, preserve manifests and failure history, and never describe a pruned or truncated artifact as complete.
 

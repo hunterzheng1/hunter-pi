@@ -8,6 +8,9 @@ export default defineConfig({
       "@hunter-pi/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/evidence": fileURLToPath(
+        new URL("./packages/evidence/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/engine-contracts": fileURLToPath(
         new URL("./packages/engine-contracts/src/index.ts", import.meta.url),
       ),

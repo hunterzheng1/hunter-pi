@@ -147,6 +147,8 @@ The first verifier implementations are local process checks plus exact Human Rec
 
 Stores an append-only event stream as the fact source and rebuildable projections for user views. Evidence is versioned, redacted, content-addressed, and scoped to a Run/Attempt/Verification.
 
+Task 3 implements this behind two small local Interfaces: a `WorkflowEventStore` appends immutable, checksum-bound event segments, while `FileEvidenceStore.capture` accepts raw allowlisted capture requests and always applies the versioned portable-redaction policy before persistence. Callers do not construct mutable event heads or bypass Evidence capture with arbitrary envelopes.
+
 Knowledge promotion is separate from archival: every outcome may be archived, but only selected, source-bound conclusions become reusable guidance.
 
 ### Git and workspace
@@ -186,7 +188,9 @@ The logical model is fixed before the physical store:
 - live sessions, locks, and credentials remain local and gitignored;
 - migrations are explicit, resumable, and preserve old facts.
 
-Task 2 begins with local files and atomic writes. SQLite is considered only after measured concurrency or query needs justify it; it is not a version-one prerequisite.
+Task 3 uses local immutable files: each workflow append is one contiguous hash-chained segment written through temp-file creation, file sync, and an atomic no-replace publish; each Evidence record is identity-bound and content-addressed. Pending temp files are ignored, while an unexpected committed file, cursor fork/gap, identity mismatch, checksum mismatch, malformed schema, or Receipt that no longer binds the frozen Plan fails closed. If a fault is reported after publication, the store rereads and accepts only the exact immutable identity; an ENOSPC retry restores the emergency reserve even when no-replace publication reports that the exact target already exists. A fresh Kernel instance rebuilds its projection solely from structurally and semantically validated events. Atomic writer filenames are one contained path segment and cannot escape their declared directory. SQLite is considered only after measured concurrency or query needs justify it; it is not a version-one prerequisite.
+
+The local store assumes the version-one single-writer rule. Its injected process/crash boundaries prove a prior or new complete file state, not physical power-loss durability on every filesystem; directory-sync and real power-loss behavior remain `NOT_PROVEN`.
 
 ## Proposed repository layout
 

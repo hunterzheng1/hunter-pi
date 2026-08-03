@@ -31,6 +31,7 @@ export const timestampSchema = z.iso.datetime({ offset: true });
 export const fingerprintSchema = z
   .string()
   .regex(/^sha256:[a-f0-9]{64}$/u, "expected a sha256 fingerprint");
+export type Fingerprint = z.infer<typeof fingerprintSchema>;
 
 const nonEmptyTextSchema = z.string().trim().min(1).max(4_096);
 const positiveFiniteIntegerSchema = z.number().int().positive();
@@ -325,6 +326,12 @@ export const attemptSchema = z
     failureEvidenceIds: z.array(evidenceIdSchema).min(1).optional(),
     retryReason: nonEmptyTextSchema.optional(),
     precedingFailureFingerprint: fingerprintSchema.optional(),
+    retryStopConditions: z
+      .strictObject({
+        userInputRequired: z.boolean(),
+        workspaceDriftDetected: z.boolean(),
+      })
+      .optional(),
     elapsedMsAtStart: z.number().int().nonnegative(),
     remainingResourceBudgets: resourceBudgetsSchema,
     executionStatus: executionStatusSchema,
@@ -338,6 +345,7 @@ export const attemptSchema = z
       attempt.failureEvidenceIds,
       attempt.retryReason,
       attempt.precedingFailureFingerprint,
+      attempt.retryStopConditions,
     ];
     const presentCount = retryFields.filter((value) => value !== undefined).length;
     const hasRetryFields = presentCount > 0;
@@ -349,7 +357,7 @@ export const attemptSchema = z
       context.addIssue({
         code: "custom",
         message:
-          "retry Attempts require previousAttemptId, failureEvidenceIds, retryReason, and precedingFailureFingerprint",
+          "retry Attempts require previousAttemptId, failureEvidenceIds, retryReason, precedingFailureFingerprint, and retryStopConditions",
       });
     }
   });
@@ -492,26 +500,187 @@ export const reviewReceiptSchema = z
   );
 export type ReviewReceipt = z.infer<typeof reviewReceiptSchema>;
 
-export const evidenceEnvelopeSchema = z.strictObject({
-  schemaVersion: schemaVersionSchema,
-  evidenceId: evidenceIdSchema,
-  kind: z.enum([
-    "observation",
-    "verification",
-    "review",
-    "human_receipt",
-    "operation",
-    "checkpoint",
-  ]),
-  createdAt: timestampSchema,
-  sourceFingerprint: fingerprintSchema,
-  contentHash: fingerprintSchema,
-  summary: nonEmptyTextSchema,
-  redaction: z.strictObject({
+export const evidenceKindSchema = z.enum([
+  "observation",
+  "verification",
+  "review",
+  "human_receipt",
+  "operation",
+  "checkpoint",
+  "run_summary",
+]);
+export type EvidenceKind = z.infer<typeof evidenceKindSchema>;
+
+export const evidenceContentClassSchema = z.enum([
+  "LOG",
+  "SUMMARY",
+  "PRIVATE_PROMPT",
+  "ENVIRONMENT_DUMP",
+  "CREDENTIAL_MATERIAL",
+]);
+export type EvidenceContentClass = z.infer<typeof evidenceContentClassSchema>;
+
+export const evidenceRetentionStatusSchema = z.enum([
+  "RETAINED",
+  "TRUNCATED",
+  "DIGEST_ONLY",
+  "PRUNED",
+]);
+export type EvidenceRetentionStatus = z.infer<typeof evidenceRetentionStatusSchema>;
+
+export const redactionCategorySchema = z.enum([
+  "CREDENTIAL",
+  "ENVIRONMENT_DUMP",
+  "PRIVATE_PATH",
+  "PRIVATE_PROMPT",
+  "SENSITIVE_QUERY",
+]);
+export type RedactionCategory = z.infer<typeof redactionCategorySchema>;
+
+export const redactionMetadataSchema = z
+  .strictObject({
+    version: z.literal("hunter-redaction/1"),
     applied: z.boolean(),
     fieldsRemoved: z.number().int().nonnegative(),
-  }),
+    categories: z.array(redactionCategorySchema),
+  })
+  .superRefine((metadata, context) => {
+    if (new Set(metadata.categories).size !== metadata.categories.length) {
+      context.addIssue({ code: "custom", message: "redaction categories must be unique" });
+    }
+    const validAppliedState = metadata.applied
+      ? metadata.fieldsRemoved > 0 && metadata.categories.length > 0
+      : metadata.fieldsRemoved === 0 && metadata.categories.length === 0;
+    if (!validAppliedState) {
+      context.addIssue({
+        code: "custom",
+        message: "redaction applied must match removed fields and categories",
+      });
+    }
+  });
+export type RedactionMetadata = z.infer<typeof redactionMetadataSchema>;
+
+export const maxEvidenceCaptureBytes = 8 * 1_024 * 1_024;
+
+function utf8ByteLength(value: string): number {
+  let length = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) {
+      continue;
+    }
+    length += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return length;
+}
+
+export const evidenceCaptureSchema = z
+  .strictObject({
+    mediaType: z.literal("text/plain; charset=utf-8"),
+    retentionStatus: evidenceRetentionStatusSchema,
+    capturedText: z.string().optional(),
+    capturedBytes: z.number().int().nonnegative().max(maxEvidenceCaptureBytes),
+    totalBytes: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    cursor: z.strictObject({
+      startByte: z.literal(0),
+      endByte: z.number().int().nonnegative(),
+      nextByte: z.number().int().positive().optional(),
+    }),
+  })
+  .superRefine((capture, context) => {
+    const capturedTextBytes =
+      capture.capturedText === undefined ? 0 : utf8ByteLength(capture.capturedText);
+    if (
+      capture.capturedBytes !== capturedTextBytes ||
+      capture.cursor.endByte !== capture.capturedBytes ||
+      capture.capturedBytes > capture.totalBytes
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "capture byte counts and cursor must match retained UTF-8 content",
+      });
+    }
+    if (
+      capture.retentionStatus === "RETAINED" &&
+      (capture.capturedText === undefined ||
+        capture.capturedBytes !== capture.totalBytes ||
+        capture.truncated ||
+        capture.cursor.nextByte !== undefined)
+    ) {
+      context.addIssue({ code: "custom", message: "retained capture metadata is inconsistent" });
+    }
+    if (
+      capture.retentionStatus === "TRUNCATED" &&
+      (capture.capturedText === undefined ||
+        capture.capturedBytes >= capture.totalBytes ||
+        !capture.truncated ||
+        capture.cursor.nextByte !== capture.capturedBytes)
+    ) {
+      context.addIssue({ code: "custom", message: "truncated capture metadata is inconsistent" });
+    }
+    if (
+      (capture.retentionStatus === "DIGEST_ONLY" || capture.retentionStatus === "PRUNED") &&
+      (capture.capturedText !== undefined ||
+        capture.capturedBytes !== 0 ||
+        capture.truncated ||
+        capture.cursor.endByte !== 0 ||
+        capture.cursor.nextByte !== undefined)
+    ) {
+      context.addIssue({ code: "custom", message: "unretained capture cannot claim content" });
+    }
+  });
+export type EvidenceCapture = z.infer<typeof evidenceCaptureSchema>;
+
+export const evidenceScopeSchema = z.strictObject({
+  runId: runIdSchema,
+  attemptId: attemptIdSchema.optional(),
+  verificationReceiptId: verificationReceiptIdSchema.optional(),
 });
+export type EvidenceScope = z.infer<typeof evidenceScopeSchema>;
+
+export const evidenceEnvelopeSchema = z
+  .strictObject({
+    schemaVersion: schemaVersionSchema,
+    evidenceId: evidenceIdSchema,
+    kind: evidenceKindSchema,
+    scope: evidenceScopeSchema,
+    createdAt: timestampSchema,
+    sourceFingerprint: fingerprintSchema,
+    contentClass: evidenceContentClassSchema,
+    contentHash: fingerprintSchema,
+    summary: nonEmptyTextSchema,
+    capture: evidenceCaptureSchema,
+    redaction: redactionMetadataSchema,
+  })
+  .superRefine((envelope, context) => {
+    if (
+      ["observation", "verification", "review", "human_receipt"].includes(envelope.kind) &&
+      envelope.scope.attemptId === undefined
+    ) {
+      context.addIssue({ code: "custom", message: "Attempt-scoped Evidence requires attemptId" });
+    }
+    if (
+      (envelope.kind === "verification") !==
+      (envelope.scope.verificationReceiptId !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "verification Evidence requires only its exact Verification Receipt identity",
+      });
+    }
+    if (
+      ["PRIVATE_PROMPT", "ENVIRONMENT_DUMP", "CREDENTIAL_MATERIAL"].includes(
+        envelope.contentClass,
+      ) &&
+      envelope.capture.retentionStatus !== "DIGEST_ONLY"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "forbidden portable content classes must remain digest-only",
+      });
+    }
+  });
 export type EvidenceEnvelope = z.infer<typeof evidenceEnvelopeSchema>;
 
 export const externalReferenceSchema = z.strictObject({

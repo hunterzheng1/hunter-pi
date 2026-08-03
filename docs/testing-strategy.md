@@ -14,6 +14,10 @@ Pure tests for branded identities, strict schemas, transition invariants, budget
 
 Command/event scenario tests drive the same Interface used by the CLI. Required cases include invalid transitions, one fixed Plan Revision per Run, plan supersession creating a new Run, append-only Attempts, separate outcome/archive status, verification gating, finite loop/resource budgets, repeated-failure stop, Checkpoint recovery, and predeclared human receipts that cannot replace automated checks.
 
+Task 3 runs the same Kernel commands over an immutable local event-store port. The focused suite covers exact append replay, conflicting cursor/payload rejection, checksum and hash-chain corruption, Receipt-to-Plan semantic tampering, execution/verification/lifecycle projection integrity, duplicate Receipt rejection, durable retry stop determinations, fresh-process projection rebuild, ambiguous Checkpoint identities, Checkpoint recovery that preserves `NOT_PROVEN`, simulated disk-full, post-publication exact-commit reconciliation, root/target path corruption, reserve-restoration failure, and every temp-write/sync/no-replace-publish fault boundary. Each injected fault must expose either the prior complete stream or the newly committed complete stream.
+
+Portable Evidence tests cover strict envelopes, exact Receipt/Attempt/source binding in Run summaries, full-redacted-stream digests, valid UTF-8 truncation/cursors, digest-only forbidden classes, arbitrary device-local absolute paths, configured secret/path/Prompt values and their encoded variants, retention fallback, Run limits, and the physical emergency reserve. They do not claim real power-loss or Provider-output coverage.
+
 ### 3. Engine Host contract suite
 
 A shared suite runs first against a deterministic Fake Host, then the Pi Host:

@@ -78,6 +78,18 @@ _Avoid_: generic approval, replacement for an automated check
 A redacted, hash-bound fact supporting an execution or Verification conclusion.
 _Avoid_: raw transcript dump, unsupported claim
 
+**Event Segment**:
+An immutable, contiguous, checksum-bound group of workflow events linked to the preceding segment and used to rebuild a Run projection.
+_Avoid_: mutable event head, cached success snapshot
+
+**Evidence Retention Status**:
+The explicit `RETAINED`, `TRUNCATED`, `DIGEST_ONLY`, or `PRUNED` statement describing how much portable Evidence content remains; it never changes the supported conclusion.
+_Avoid_: complete-log flag, implicit omission
+
+**Emergency Reserve**:
+State-root capacity reserved for critical workflow facts and terminal/checkpoint records when noncritical content growth is stopped.
+_Avoid_: general cache quota, proof that a failed write succeeded
+
 **Checkpoint**:
 An immutable recovery reference that identifies restorable workflow and engine state without declaring the Run successful.
 _Avoid_: success snapshot, mutable current state

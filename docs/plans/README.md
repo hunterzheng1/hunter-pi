@@ -2,7 +2,7 @@
 
 ## Status
 
-Task 0 is complete: its documentation tree is committed on `origin/main` with matching local/remote identity. Task 1 engineering-skeleton work is active; no usable product exists yet.
+Tasks 0 and 1 are complete. The Task 1 merge commit passed actual Windows and Ubuntu CI; Task 2 is next and remains `NOT_STARTED` in this status snapshot. No usable product exists yet.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

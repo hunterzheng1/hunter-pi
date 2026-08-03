@@ -2,7 +2,7 @@
 
 These requirements are target acceptance contracts. Thresholds may be revised only with an explicit reason and evidence; until tested they are `NOT_PROVEN`.
 
-Task 3 implements provider-neutral local fixtures for append-only structural/semantic event replay, checksum/cursor validation, the HP-NFR-PERF-03 constants and retention projection, a physical emergency-reserve file, simulated disk-full behavior, noncritical metadata accounting, mutating-Run admission, and the adversarial Evidence corpus. This is partial implementation evidence only: exact remote CI is `PENDING`, and real power loss, production filesystem behavior, cache pruning, real Pi/Plugin output, and daily-use thresholds remain `NOT_PROVEN`.
+Task 3 implements provider-neutral local fixtures for append-only structural/semantic event replay, checksum/cursor validation, the HP-NFR-PERF-03 constants and retention projection, a physical emergency-reserve file, simulated disk-full behavior, noncritical metadata accounting, mutating-Run admission, and the adversarial Evidence corpus. Exact implementation and merge commits passed Windows/Ubuntu CI. This remains partial contract evidence only: real power loss, production filesystem behavior, cache pruning, real Pi/Plugin output, and daily-use thresholds remain `NOT_PROVEN`.
 
 ## Reliability
 

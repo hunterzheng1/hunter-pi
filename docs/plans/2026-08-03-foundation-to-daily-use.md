@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_3_DURABLE_EVIDENCE / NO_USABLE_PRODUCT`
-- Active task: `TASK_3` (local implementation complete; remote CI `PENDING`)
+- Current repository phase: `TASK_4_PI_INTERFACE_SPIKE / NO_USABLE_PRODUCT`
+- Active task: `TASK_4` (`NOT_STARTED`; Task 3 exact local, PR, and main gates passed)
 - First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
@@ -107,7 +107,7 @@ Gates: focused suites, full local gate, dual-platform CI.
 
 **Goal:** make workflow truth crash-safe and privacy-safe before real Agent execution.
 
-Implementation snapshot: the topic branch implements the provider-neutral local scope below and passes its local fault/redaction/replay suites. GitHub Actions for the exact commit remains `PENDING`; real power-loss behavior, real Pi, and a product entry point remain `NOT_PROVEN`.
+Completion snapshot: implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` passed local and Windows/Ubuntu PR gates, then merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed Windows/Ubuntu main gates. The superseded `e1b06c523084a34c8b32a852848c906fa9877236` candidate retains its Ubuntu PASS / Windows FAIL history. Real power-loss behavior, real Pi, and a product entry point remain `NOT_PROVEN`.
 
 Deliverables:
 

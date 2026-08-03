@@ -21,11 +21,12 @@ A shared suite runs first against a deterministic Fake Host, then the Pi Host:
 - capability receipts derive support from probes;
 - same operation ID/fingerprint is idempotent;
 - same ID/different fingerprint is rejected;
+- every operation Receipt and reconciliation Receipt binds the exact request operation ID and fingerprint;
 - event cursor resumes without duplication/loss;
 - interruption and unknown outcomes reconcile;
-- Agent return/process exit/idle do not mean Step success;
+- the harness explicitly arranges at least one Agent-return/process-exit/idle/window observation, and none can mean Step success;
 - checkpoint/close report only proven effects;
-- private engine fields do not leak into domain events.
+- every Host response passes the strict public runtime schema, so additional private engine fields cannot leak into domain events or receipts.
 
 Fake passing proves the Hunter Interface, not real Pi.
 

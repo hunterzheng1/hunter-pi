@@ -41,7 +41,7 @@ Meanings:
 | `CANCELLED` | A user or policy intentionally stopped the Change |
 | `INCOMPLETE` | Execution ended without enough reconciled evidence for another terminal outcome |
 
-`READY`, `BLOCKED`, `FAILED`, `CANCELLED`, and `INCOMPLETE` are Run outcomes. `ArchiveStatus` is a separate dimension: any ended Run moves from `UNARCHIVED` to `ARCHIVED` after its immutable manifest is written. Archiving preserves an outcome; it never changes that outcome into success.
+`READY`, `BLOCKED`, `FAILED`, `CANCELLED`, and `INCOMPLETE` are terminal Run outcomes. The Kernel never reopens one by appending another Attempt or late Receipt; renewed work requires a linked replacement Run. `ArchiveStatus` is a separate dimension: any ended Run moves from `UNARCHIVED` to `ARCHIVED` after its immutable manifest is written. Archiving preserves an outcome; it never changes that outcome into success.
 
 `READY` does not mean committed, pushed, merged, published, released, or deployed. Those are separate operations with separate receipts.
 
@@ -106,7 +106,7 @@ Version one uses a small workflow vocabulary rather than arbitrary BPMN:
 | `human_gate` | Record an exact user decision or required input |
 | `review` | Produce structured findings and recommended fixback |
 
-Each Step declares input and output contracts. The Kernel routes from validated outputs and policies, not free-form model claims.
+Each Step declares input and output contracts. Step and check identities are unique, dependencies must reference the same Plan Revision and form a DAG. A `human_gate` freezes the expected content hash and allowed decisions; a `review` freezes its input, definition, and configuration fingerprints. The Kernel routes from validated outputs and policies, not free-form model claims.
 
 ## Verification
 
@@ -123,11 +123,13 @@ A Verification Receipt binds:
 
 Required checks that were not attempted remain `NOT_RUN` in projections. `NOT_RUN` is not automatically converted to `BLOCKED` or `NOT_PROVEN` because each status answers a different question.
 
-Human confirmation is valid only for a predeclared `human_gate` and only when it binds the exact Attempt, content hash, decision, actor reference, and time. A generic “looks good” chat message is not a Human Receipt. A Human Receipt cannot waive, replace, or relabel a required automated Verification. Changing the required check set creates a new Plan Revision and therefore a new Run.
+Human confirmation is valid only for a predeclared `human_gate` and only when it binds the exact Attempt, frozen content hash, allowed decision, actor reference, result fingerprint, and time. A Review Receipt likewise binds the predeclared review input/definition/configuration and active workspace/source identity. Rejected/blocked Human Receipts and failed/blocked/not-proven Reviews must carry failure Evidence so a required gate can enter an evidence-bound fixback Attempt; optional gates never authorize retry or block `READY`. A generic “looks good” chat message is not a Human Receipt. A Human Receipt cannot waive, replace, or relabel a required automated Verification. Changing the required check or gate definition creates a new Plan Revision and therefore a new Run.
+
+When the final permitted Attempt has passing automated Verification but an exact required gate Receipt records failure, the Kernel must end the Run instead of leaving an impossible retry in `REVIEWING`: a blocked gate becomes `BLOCKED`, a rejected Human Receipt or failed/blocking Review finding becomes `FAILED`, and a not-proven Review becomes `INCOMPLETE`. A gate that has not yet produced a Receipt remains `REVIEWING` because the declared decision or review can still arrive.
 
 ## Retry, fixback, and loops
 
-Retry never mutates an Attempt. It creates a new Attempt with links to:
+Retry never mutates an Attempt and cannot begin while the preceding Attempt execution is still active. It creates a new Attempt with links to:
 
 - the preceding Attempt;
 - the failure Evidence;
@@ -140,7 +142,7 @@ A fixback loop follows:
 
 ```text
 Verification or Review finding
-  → freeze structured finding and RED evidence
+  → freeze structured finding or rejected gate and RED evidence
   → create a new Attempt
   → perform bounded fix
   → run focused GREEN check
@@ -156,7 +158,7 @@ Every loop declares:
 - stop-on-user-input conditions;
 - stop-on-workspace-drift conditions.
 
-Iteration and elapsed limits are always finite. When a provider cannot expose reliable token or cost accounting, the Run uses locally measurable resource budgets such as `maxAgentTurns`, `maxExternalOperations`, or `maxOutputBytes` and records token/cost metering as `NOT_PROVEN`; unavailable metering never makes a loop unbounded.
+Iteration and elapsed limits are always finite. Elapsed time and resource usage are cumulative and monotonic across Attempts; a caller cannot restore budget by reporting a smaller value on retry. When a provider cannot expose reliable token or cost accounting, the Run uses locally measurable resource budgets such as `maxAgentTurns`, `maxExternalOperations`, or `maxOutputBytes` and records token/cost metering as `NOT_PROVEN`; unavailable metering never makes a loop unbounded.
 
 Repeating the same failed operation without new evidence does not consume infinite retries; it triggers deterministic stop or human input.
 
@@ -166,15 +168,15 @@ Every operation capable of changing files, processes, sessions, plugins, or upda
 
 - `operationId`;
 - canonical payload fingerprint;
-- expected target identity;
+- expected target identity, including both namespace and reference;
 - deadline and cancellation policy.
 
 Rules:
 
 1. Same operation ID and fingerprint returns the existing Receipt.
 2. Same operation ID with a different fingerprint is rejected.
-3. An unknown result after interruption is reconciled before re-execution.
-4. A Receipt reports observed effects; it never invents success for effects it cannot prove.
+3. An unknown result after interruption is reconciled before re-execution; reconciliation appends a separate Receipt and never rewrites the original `UNKNOWN` Receipt.
+4. A Receipt reports observed effects; `UNKNOWN` cannot carry claimed effects and never invents success for effects it cannot prove.
 
 ## Workspace and writer rules
 

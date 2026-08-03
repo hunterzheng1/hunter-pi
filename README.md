@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态；这些能力目前均尚未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前只完成本地契约基线；真实 Pi 交互、持久恢复与产品入口仍未实现或验证。
 
 ## 当前状态
 
-**Task 1 engineering skeleton 已完成 / 尚无可日常使用产品。**
+**Task 2 domain/kernel/Fake 已在本地实现 / 尚无可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线。当前四个 workspace 只是后续契约的空入口；`hpi` 命令、安装包、真实 Pi 集成、插件兼容和自动更新仍未实现或验证。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Fake 只证明 Hunter Pi 自有契约；`hpi` 命令、持久事件库、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。本 Task 2 提交的远端 Windows/Ubuntu CI 尚未运行，状态为 `PENDING`。
 
 ## 开发基线
 
@@ -67,6 +67,8 @@ Hunter Pi (`hpi`)
 - “本地优先”指规范状态留在本机，并不表示模型请求不联网；首次发送前必须披露可能发给 Provider 的数据类别、目标与外部保留限制。
 - 凭据与完整环境内容不得写入 Evidence、日志或仓库。
 
+Task 2 的 Fake contract suite 已在本地证明 operation replay 决定性、冲突 payload 拒绝、完整 target identity/过期 deadline fail-closed、由 harness 安排的 completion-like Observation 不等于成功、严格公开响应 schema、游标续读，以及 UNKNOWN outcome 通过独立 reconciliation receipt 处理。它不代表真实 Pi、Provider 或最终产品已经验证。
+
 ## 许可状态
 
 Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖、上游制品及任何复制或改写的外部内容保留各自条款，并必须遵守 [NOTICE 与来源登记规则](NOTICE.md)。许可证选择解除 Task 1 的代码阻断，但不代表已授权发布 npm 包或安装器。
@@ -93,4 +95,4 @@ Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖�
 - Pi 上游升级可以无条件自动应用；
 - Windows 安装包、签名、自动更新或生产发布已经完成；
 - Hunter-Harness 的全部机制已经迁移。
-- Task 1 的空 package 入口代表领域、Workflow Kernel 或真实 Engine Host 已经实现。
+- Fake Host 通过共享 contract suite 代表真实 Pi Host、Provider 或日常使用产品已经通过。

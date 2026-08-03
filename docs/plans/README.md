@@ -2,7 +2,7 @@
 
 ## Status
 
-Tasks 0–3 are complete and merged. Task 3 exact implementation and merge commits passed local plus Windows/Ubuntu gates; its superseded first candidate retains an explicit Windows failure record. Task 4 fixed-version Pi public-interface spike is next. No usable product exists yet, and Fake Host/storage fixtures are not real Pi verification.
+Tasks 0–3 are complete and merged. Task 4 fixed-version Pi public-interface spike is active: the local Windows provider-independent receipt exists, while exact remote Windows/Ubuntu CI remains `PENDING`. Task 5 has not started, no `hpi` product entry exists yet, and neither Fake Host nor the Task 4 faux provider proves a real Provider or daily-use product.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

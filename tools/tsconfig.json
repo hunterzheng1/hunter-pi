@@ -7,5 +7,6 @@
     "tsBuildInfoFile": "../dist/tools/.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "references": [{ "path": "../packages/pi-host" }]
 }

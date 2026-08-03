@@ -14,6 +14,9 @@ export default defineConfig({
       "@hunter-pi/engine-contracts": fileURLToPath(
         new URL("./packages/engine-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/pi-host": fileURLToPath(
+        new URL("./packages/pi-host/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/testkit": fileURLToPath(
         new URL("./packages/testkit/src/index.ts", import.meta.url),
       ),

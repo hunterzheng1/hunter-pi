@@ -1,0 +1,182 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "hunter-pi/pi-public-interface-probe",
+  "observedAt": "2026-08-03T16:11:09.335Z",
+  "candidate": {
+    "packageName": "@earendil-works/pi-coding-agent",
+    "version": "0.83.0",
+    "registryGitHead": "845d6ff1f6643aba440341cce877ce1c43ebbc39",
+    "integrity": "sha512-uYhF+FsZxogoSX/AxBcUdiY+ZklubwaXyAoEGA2eQwsHcyEAhUYIKh/WLXe/a8+k8eTCmxb+ZN2Zo9mzQtzbWw==",
+    "cliFingerprint": "sha256:af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca",
+    "installedPackageFingerprint": "sha256:42b89fef9bf22021cb3d2ec4d187ad3a6a9444b90d8191e749b63cd5ea2cabdd",
+    "installedFileCount": 884,
+    "installedBytes": 13104822
+  },
+  "implementation": {
+    "sourceDigest": "sha256:529919240bf67dee8ac4335ac31cd642afbd4612f6118c65a13b1dae08607ecd",
+    "sourceFiles": [
+      ".github/workflows/ci.yml",
+      "package.json",
+      "package-lock.json",
+      "packages/pi-host/package.json",
+      "packages/pi-host/tsconfig.json",
+      "packages/pi-host/src/index.ts",
+      "packages/pi-host/src/fixture.ts",
+      "packages/pi-host/src/ndjson.ts",
+      "packages/pi-host/src/probe.ts",
+      "packages/pi-host/src/schemas.ts",
+      "packages/pi-host/src/sdk-probe-child.ts",
+      "tsconfig.base.json",
+      "tsconfig.build.json",
+      "test/fixtures/pi/core-extension-probe.ts",
+      "test/pi-fixture-and-output-safety.test.ts",
+      "test/pi-ndjson.test.ts",
+      "test/pi-probe-cli.test.ts",
+      "test/pi-public-interface-probe.test.ts",
+      "tools/compare-pi-probe-evidence.ts",
+      "tools/pi-public-interface-probe.ts",
+      "tools/tsconfig.json"
+    ],
+    "execution": {
+      "mode": "BUILT_JAVASCRIPT",
+      "digest": "sha256:c3c0284294dc1d7944961bfc5587972ea423c46e545069d4b24efede16a7c892",
+      "files": [
+        "packages/pi-host/dist/fixture.js",
+        "packages/pi-host/dist/index.js",
+        "packages/pi-host/dist/ndjson.js",
+        "packages/pi-host/dist/probe.js",
+        "packages/pi-host/dist/schemas.js",
+        "packages/pi-host/dist/sdk-probe-child.js",
+        "test/fixtures/pi/core-extension-probe.ts",
+        "dist/tools/pi-public-interface-probe.js"
+      ]
+    }
+  },
+  "environment": {
+    "platform": "win32",
+    "nodeVersion": "v24.14.0",
+    "configurationIsolation": "ISOLATED",
+    "sessionIsolation": "ISOLATED",
+    "providerMode": "DETERMINISTIC_FAUX",
+    "piNetworkMode": "OFFLINE",
+    "networkIsolation": "NOT_PROVEN",
+    "fixtureKind": "TEMPORARY_GIT"
+  },
+  "surfaces": {
+    "extension": {
+      "status": "SUPPORTED",
+      "coreExtensionId": "hunter-pi/core-probe",
+      "coreExtensionVersion": "1.0.0",
+      "sourceFingerprint": "sha256:399913cec0b18f80894fc4f7e258257233638faa2ce892ae58ddc3420960648f",
+      "lifecycleEvents": [
+        "factory_loaded",
+        "session_start",
+        "agent_start",
+        "tool_call",
+        "probe_tool_execute",
+        "tool_result",
+        "agent_end",
+        "agent_settled",
+        "session_shutdown"
+      ],
+      "activeTools": ["hunter_pi_probe_tool"],
+      "effectiveToolGraph": [
+        {
+          "name": "hunter_pi_probe_tool",
+          "source": "cli",
+          "scope": "temporary",
+          "origin": "top-level"
+        }
+      ],
+      "interceptedToolCall": true,
+      "interceptedToolResult": true
+    },
+    "json": {
+      "status": "SUPPORTED",
+      "framing": "NDJSON",
+      "eventTypes": [
+        "session",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "message_update",
+        "tool_execution_start",
+        "tool_execution_end",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "parsedLineCount": 25
+    },
+    "rpc": {
+      "status": "SUPPORTED",
+      "framing": "NDJSON",
+      "cancellationScope": "SINGLE_IN_FLIGHT_AGENT_OPERATION",
+      "correlationById": true,
+      "concurrentRequestIds": ["state-before-a", "state-before-b"],
+      "requestScopedCancellation": false,
+      "correlatedResponseIds": [
+        "state-before-a",
+        "state-before-b",
+        "prompt-cancel",
+        "abort-active",
+        "state-after"
+      ],
+      "promptAccepted": true,
+      "abortAccepted": true,
+      "streamStoppedAfterAbort": true,
+      "childExited": true,
+      "exitCode": 0,
+      "cleanupScope": "ROOT_PROCESS_WITHOUT_TOOL_CHILDREN",
+      "descendantProcessCleanup": "NOT_PROVEN"
+    },
+    "sdk": {
+      "status": "SUPPORTED",
+      "coreExtensionReloaded": true,
+      "sessionCreated": true,
+      "eventTypes": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "tool_execution_end",
+        "tool_execution_start",
+        "turn_end",
+        "turn_start"
+      ],
+      "sessionContained": true,
+      "sessionPersisted": true,
+      "freshProcessResume": true,
+      "sameSessionIdOnResume": true,
+      "customEntryRecovered": true,
+      "workspaceCwdBound": true,
+      "persistenceRole": "ENGINE_EXTERNAL_REFERENCE",
+      "canonicalCheckpoint": "NOT_PROVEN_BY_PI"
+    },
+    "tui": {
+      "status": "NOT_PROVEN",
+      "reason": "Interactive TUI usability requires the Task 5 Windows acceptance smoke."
+    },
+    "realProvider": {
+      "status": "NOT_PROVEN",
+      "reason": "No login, credential access, network Provider call, or paid request ran in Task 4."
+    }
+  },
+  "capabilities": {
+    "schemaVersion": "1.0.0",
+    "observedAt": "2026-08-03T16:11:09.335Z",
+    "results": [
+      { "capability": "START_ATTEMPT", "status": "SUPPORTED" },
+      { "capability": "SEND_INPUT", "status": "SUPPORTED" },
+      { "capability": "OBSERVE", "status": "SUPPORTED" },
+      { "capability": "INTERRUPT", "status": "SUPPORTED" },
+      { "capability": "CHECKPOINT", "status": "NOT_PROVEN" },
+      { "capability": "RECONCILE", "status": "NOT_PROVEN" },
+      { "capability": "RESUME", "status": "SUPPORTED" },
+      { "capability": "CLOSE", "status": "NOT_PROVEN" }
+    ]
+  }
+}

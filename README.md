@@ -4,9 +4,9 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 3 durable events/Evidence/replay 已合并并通过精确双平台 CI；Task 4 Pi 公共接口 spike 尚未开始 / 尚无可日常使用产品。**
+**Task 4 固定版本 Pi 公共接口 spike 已在本机 Windows 完成 provider-independent 实现与 Evidence；远端 Windows/Ubuntu CI 仍为 `PENDING`，`hpi` 尚未实现，因此还不是可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host 与共享 contract suite。Task 3 进一步增加不可变哈希链事件段、语义重放、原子不可覆盖发布、可重建 projection、统一 Evidence 脱敏与 8 MiB 截断、包含非关键元数据的 Run 保留阈值、经实际分配与单链接校验的 64 MiB 紧急保留区、磁盘满/写入故障 fixture，以及不会把 Checkpoint 误报为成功的持久 Kernel；紧急保留区、最小写入余量或原子写入探针不可用时，新 mutating Run 会 fail-closed。Fake 与本地故障注入只证明 Hunter Pi 自有契约；`hpi` 命令、真实 Pi 集成、插件兼容、安装包和自动更新仍未实现或验证。Task 3 精确实现提交 `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` 通过 [Windows/Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818956056)，合并提交 `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` 通过 [Windows/Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30819181475)。被替代的首次候选 `e1b06c523084a34c8b32a852848c906fa9877236` 保留了 [Ubuntu PASS / Windows FAIL](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818314313) 历史；失败原因是 Windows canonical path 大小写误判，修复后没有改写旧结果。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 4 在自动创建的临时 Git fixture 中，以隔离配置和无网络 faux provider 实测 Extension 身份/有效工具图、JSON、RPC 取消和 SDK 新进程 Session 恢复；Pi Session 仍只作为外部引用，Hunter canonical Checkpoint、unknown-outcome reconciliation、完整后代进程树清理、真实 Provider 和交互 TUI 均未被该证据证明。`hpi` 命令、插件兼容、安装包和自动更新仍未实现或验证。
 
 ## 开发基线
 
@@ -15,10 +15,11 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 ```powershell
 npm ci
 npm run doctor
+npm run probe:pi
 npm run verify
 ```
 
-`doctor` 在 Task 1 只检查操作系统、Node.js、npm、Git 和仓库根标记，不探测 Pi、模型 Provider、登录或凭据。`verify` 会执行 lint、typecheck、unit test、严格编译器 fixture、build、格式检查、外部打包导入与全新锁定安装烟测。
+`doctor` 在当前阶段只检查操作系统、Node.js、npm、Git 和仓库根标记，不探测模型 Provider、登录或凭据。`probe:pi` 构建后在临时 Git fixture 中运行固定 Pi 的离线公共接口探针，默认只把脱敏 JSON 写入 `.artifacts/pi-probe/`；它不会证明真实 Provider 或 TUI。`verify` 会执行全部本地门禁并包含该探针。
 
 ## 产品形态
 
@@ -90,7 +91,8 @@ Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖�
 
 本仓库当前没有证明：
 
-- Hunter Pi 已能启动或控制真实 Pi；
+- `hpi` 产品入口、真实模型 Provider 或交互 TUI 已可使用；
+- Pi Session 可以替代 Hunter durable Checkpoint，或 Pi 退出已经清理完整后代进程树；
 - 任一第三方 Pi 插件与 Hunter Pi 兼容；
 - Pi 上游升级可以无条件自动应用；
 - Windows 安装包、签名、自动更新或生产发布已经完成；

@@ -5,6 +5,7 @@
     { "path": "./packages/domain" },
     { "path": "./packages/evidence" },
     { "path": "./packages/engine-contracts" },
+    { "path": "./packages/pi-host" },
     { "path": "./packages/workflow-kernel" },
     { "path": "./packages/testkit" },
     { "path": "./tools" }

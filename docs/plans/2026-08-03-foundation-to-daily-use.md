@@ -3,7 +3,7 @@
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
 - Current repository phase: `TASK_4_PI_INTERFACE_SPIKE / NO_USABLE_PRODUCT`
-- Active task: `TASK_4` (`NOT_STARTED`; Task 3 exact local, PR, and main gates passed)
+- Active task: `TASK_4` (`LOCAL_EVIDENCE`; exact remote Windows/Ubuntu and cross-platform identity gates remain `PENDING`)
 - First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 

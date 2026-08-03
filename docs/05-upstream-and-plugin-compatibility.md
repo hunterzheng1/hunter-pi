@@ -40,6 +40,18 @@ Qualification states:
 | `INCOMPATIBLE` | a required contract reproduced a mismatch |
 | `RETIRED` | no longer offered for new installations; retained for rollback/history |
 
+### Task 4 candidate result
+
+The dated [public-interface recheck](research/2026-08-03-pi-public-interface-recheck.md) intentionally retains `@earendil-works/pi-coding-agent@0.83.0`, registry `gitHead` `845d6ff1f6643aba440341cce877ce1c43ebbc39`, and the exact npm integrity recorded in the lockfile. The local Windows [Task 4 validation](validation/2026-08-03-task4-pi-public-interface.md) exercises only public package exports and CLI modes in an automatically created temporary Git fixture with isolated configuration, isolated Sessions, Pi's documented offline startup/package mode, and a deterministic faux provider. Operating-system network isolation was not established and remains `NOT_PROVEN`.
+
+That receipt supports continuing without a Pi fork, but it is deliberately narrower than a `QUALIFIED` production Engine Release:
+
+- RPC abort is accepted only under one in-flight mutating Agent operation; it is not request-scoped cancellation.
+- Pi Session persistence and fresh-process reopen are engine external-reference inputs, not Hunter's canonical durable Checkpoint.
+- root Pi RPC exit after stdin EOF is observed only in a fixture with no tool descendants; complete descendant process-tree cleanup remains `NOT_PROVEN` and belongs to the later process-host acceptance task.
+- `agent_end`, `session_shutdown`, SDK completion, and process exit remain Observations, never Hunter Step success.
+- real Provider login/calls, interactive TUI usability, third-party packages, operating-system network isolation, and remote Windows/Ubuntu results are not inferred from the provider-independent receipt.
+
 ## Upstream update pipeline
 
 ```text

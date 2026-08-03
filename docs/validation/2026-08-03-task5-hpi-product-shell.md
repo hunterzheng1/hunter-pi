@@ -4,9 +4,12 @@
 - Product artifact: `@hunter-pi/cli@0.1.0-dev.0`
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Local platform: Windows / Node.js 24
-- Implementation commit: **this record is committed with the implementation; report the exact SHA after commit creation**
-- Remote Windows/Ubuntu CI: **PENDING; configured, not yet run**
+- Implementation commit: `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b`
+- Merge commit: `8573b1f62d154275bb81c3c07b432a3db40632bb`
+- Pull request: [#9](https://github.com/hunterzheng1/hunter-pi/pull/9)
+- Remote Windows/Ubuntu CI: **PASS for the implementation and exact merge commits**
 - Automated product result: **PASS within the scope below**
+- Clean-main Windows user installation: **PASS**
 - Real Windows interactive TUI: **PENDING manual smoke acknowledgement**
 - Bundled Core compatibility in the real TUI: **UNVERIFIED**
 - Real Provider login/request: **NOT_PROVEN**
@@ -57,7 +60,19 @@ The default disclosure references current OpenAI documentation that says privacy
 | `hpi version --json` from the installed artifact | PASS | product, Engine, source stamp state, update channel |
 | installed `hpi doctor --json` without setup/login | expected exit 2 / `BLOCKED` | missing setup/login is not reported as success; Engine is actually detected |
 
-The final private-path scan and `git diff --check` passed. The pre-commit path review found only Task 5 product-shell, validation, build, dependency, and contributor-status files; the focused commit and post-commit clean-status check remain required before push. Remote CI remains `PENDING` until GitHub actually runs it.
+The final private-path scan and `git diff --check` passed. The pre-commit path review found only Task 5 product-shell, validation, build, dependency, and contributor-status files. Focused commit `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` was created from a clean worktree, pushed, and merged without rewriting its failure history.
+
+## Remote and installed-artifact results
+
+| Exact source | Result | Evidence |
+|---|---|---|
+| PR commit `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` | PASS — Ubuntu 2m24s; Windows 11m50s; cross-platform Evidence 29s | [GitHub Actions run 30852408933](https://github.com/hunterzheng1/hunter-pi/actions/runs/30852408933) |
+| merge commit `8573b1f62d154275bb81c3c07b432a3db40632bb` | PASS — Ubuntu 2m20s; Windows 13m10s; cross-platform Evidence 38s | [GitHub Actions run 30853360439](https://github.com/hunterzheng1/hunter-pi/actions/runs/30853360439) |
+| clean-main tarball `@hunter-pi/cli@0.1.0-dev.0` | PASS — 112076 bytes; SHA-256 `962c4b25cb97911cdc727721b96ed91c0afc8a646d44f30ff4a06cf96ec8ade6` | built after the merge CI passed; installed for the current Windows user without creating or replacing a raw `pi` command |
+| installed `hpi version --json` | PASS — source `8573b1f62d154275bb81c3c07b432a3db40632bb`, `sourceState=CLEAN`, Pi `0.83.0` | product shell `sha256:fc7230b9388c715eca3a37b5bd4f70e8583f50cba54c6c35145534620a2d42a3`; Core `sha256:60555863b914f53945eb0889044a594a65f161d67a6eb0b587132b3f8a6e15c7` |
+| installed `hpi doctor --json` before setup/login/TUI smoke | expected exit 2 / `BLOCKED` | Node, temporary Git fixture, Pi Engine, and Core were `DETECTED`; configuration/disclosure/auth remained `BLOCKED`, interactive TUI remained `NOT_PROVEN` |
+
+The global command resolves for the current user, but its absolute installation path is intentionally not committed. This installation result is not an npm publication, installer, signature, real TUI, authentication, or Provider proof.
 
 ## Preserved RED and failure history
 

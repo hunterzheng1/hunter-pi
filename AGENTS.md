@@ -14,7 +14,7 @@ Before interpreting or changing the product, read:
 
 ## Current repository status
 
-- Tasks 0–3 are merged. Task 3 implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` and merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed exact Windows/Ubuntu CI. Task 4 is active: its provider-independent Windows receipt is local-only and exact Windows/Ubuntu CI plus cross-platform identity comparison remain `PENDING`. No real Provider or usable product has been proven yet.
+- Tasks 0–4 are merged. Task 4 implementation `8efe194a1c5f6256e68f1e8c20d0e59848376f2b` and merge `00f0d0d7d702779706e2a5aefac3d67ed0a49699` passed exact Windows/Ubuntu CI plus cross-platform Evidence identity comparison. Task 5 is the next bounded task; no real Provider, interactive TUI, or usable product has been proven yet.
 - Do not claim that `hpi`, a Windows installer, a Pi Host, plugin compatibility, or qualified updates exist until implementation and evidence are committed.
 - The current code proves provider-neutral Hunter Pi contracts and bounded public Pi Extension/JSON/RPC/SDK behavior with deterministic fixtures. It does not prove a real Provider interaction, interactive TUI, or usable product.
 - Implementation proceeds task by task from the active plan; do not silently expand to a Pi or Oh My Pi fork.

@@ -2,9 +2,9 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_4_PI_INTERFACE_SPIKE / NO_USABLE_PRODUCT`
-- Active task: `TASK_4` (`LOCAL_EVIDENCE`; exact remote Windows/Ubuntu and cross-platform identity gates remain `PENDING`)
-- First engine research candidate: Pi `0.83.0` / **NOT_PROVEN**
+- Current repository phase: `TASK_5_PRODUCT_SHELL / NO_USABLE_PRODUCT`
+- Active task: `TASK_5` (`NOT_STARTED`; Task 4 exact local, PR, merge, Windows/Ubuntu, and aggregate identity gates passed)
+- First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; REAL_PROVIDER_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
 ## Outcome

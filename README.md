@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已在 `main` 完成双平台契约基线，以及 Task 3 本地持久事件、脱敏 Evidence 与重放；真实 Pi 交互与产品入口仍未实现或验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它计划以官方 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。当前已在 `main` 完成双平台契约基线、Task 3 持久事件/脱敏 Evidence/重放，以及 Task 4 固定 Pi 公共接口验证；产品入口、交互 TUI 与真实 Provider 仍未实现或验证。
 
 ## 当前状态
 
-**Task 4 固定版本 Pi 公共接口 spike 已在本机 Windows 完成 provider-independent 实现与 Evidence；远端 Windows/Ubuntu CI 仍为 `PENDING`，`hpi` 尚未实现，因此还不是可日常使用产品。**
+**Task 4 固定版本 Pi 公共接口 spike 已在 Windows/Ubuntu 完成 provider-independent Evidence 与跨平台身份对账；`hpi` 尚未实现，因此还不是可日常使用产品。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 4 在自动创建的临时 Git fixture 中，以隔离配置和无网络 faux provider 实测 Extension 身份/有效工具图、JSON、RPC 取消和 SDK 新进程 Session 恢复；Pi Session 仍只作为外部引用，Hunter canonical Checkpoint、unknown-outcome reconciliation、完整后代进程树清理、真实 Provider 和交互 TUI 均未被该证据证明。`hpi` 命令、插件兼容、安装包和自动更新仍未实现或验证。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 4 在自动创建的临时 Git fixture 中，以隔离配置、Pi offline 启动/package 模式和确定性 faux provider 实测 Extension 身份/有效工具图、JSON、RPC 取消和 SDK 新进程 Session 恢复；操作系统网络隔离、Hunter canonical Checkpoint、unknown-outcome reconciliation、完整后代进程树清理、真实 Provider 和交互 TUI 均未被该证据证明。`hpi` 命令、插件兼容、安装包和自动更新仍未实现或验证。
 
 ## 开发基线
 

@@ -3,7 +3,7 @@
 - Date: 2026-08-03
 - Candidate: `@earendil-works/pi-coding-agent@0.83.0`
 - Candidate registry `gitHead`: `845d6ff1f6643aba440341cce877ce1c43ebbc39`
-- Decision: **CONTINUE after exact dual-platform CI; no fork proposal**
+- Decision: **CONTINUE to Task 5; no fork proposal**
 - Product status: **NO_USABLE_PRODUCT** until Task 5 supplies and validates `hpi`
 
 ## Evidence status
@@ -11,9 +11,9 @@
 | Evidence | Status | Meaning |
 |---|---|---|
 | [Local Windows Node 24 receipt](evidence/pi/windows-node24.json) | `SUPPORTED` within its schema bounds | The fixed package exercised Extension, JSON, RPC, and SDK behavior with a deterministic faux provider and Pi offline startup/package mode in an isolated temporary Git fixture; OS network isolation remains `NOT_PROVEN` |
-| GitHub Actions Windows receipt | `PENDING` | Workflow is configured but has not run for this change |
-| GitHub Actions Ubuntu receipt | `PENDING` | Workflow is configured but has not run for this change |
-| Cross-platform identity receipt | `PENDING` | The aggregate CI job has not yet compared actual Windows and Ubuntu artifacts |
+| GitHub Actions Windows receipt | `SUPPORTED` within schema bounds | Exact implementation and merge commits passed the Windows probe and uploaded strict receipts |
+| GitHub Actions Ubuntu receipt | `SUPPORTED` within schema bounds | Exact implementation and merge commits passed the Ubuntu probe and uploaded strict receipts |
+| Cross-platform identity receipt | `SUPPORTED` | Actual Windows and Ubuntu receipts bound the same candidate, source, executed adapter, and Core Extension fingerprints |
 | Interactive TUI | `NOT_PROVEN` | Deferred to Task 5 Windows acceptance |
 | Real Provider/login/model call | `NOT_PROVEN` | No credentials, login, network Provider call, or paid request were used |
 | Third-party Pi Package compatibility | `NOT_PROVEN` | No third-party package was activated |
@@ -58,7 +58,11 @@ git diff --check
   PASS
 ```
 
-The complete local repository gate passed. Exact remote CI remains `PENDING` until it actually runs.
+The complete local repository gate passed. Exact remote CI then ran and passed:
+
+- implementation `8efe194a1c5f6256e68f1e8c20d0e59848376f2b`: [PR run 30831361499](https://github.com/hunterzheng1/hunter-pi/actions/runs/30831361499) — Ubuntu `PASS` in 1m27s, Windows `PASS` in 9m04s, aggregate identity `PASS` in 26s;
+- merge `00f0d0d7d702779706e2a5aefac3d67ed0a49699`: [main run 30832264845](https://github.com/hunterzheng1/hunter-pi/actions/runs/30832264845) — Windows, Ubuntu, and aggregate identity all `PASS`;
+- downloaded PR and main artifacts were strict-parsed, independently recomputed, and scanned for forbidden credential/private-path patterns. Both sets retained source digest `sha256:529919240bf67dee8ac4335ac31cd642afbd4612f6118c65a13b1dae08607ecd`, execution digest `sha256:c3c0284294dc1d7944961bfc5587972ea423c46e545069d4b24efede16a7c892`, and real Provider status `NOT_PROVEN`.
 
 ## Preserved development history
 
@@ -83,4 +87,4 @@ Independent review closed the original capability-derivation, installed-artifact
 
 ## Recommendation and remaining stop lines
 
-Proceed to Task 5 only after the exact Task 4 commit passes both Windows and Ubuntu CI and their uploaded JSON receipts validate against the same artifact and source digest. Stop instead of proceeding if either platform cannot reproduce Core identity/tool graph, LF-only framing, active cancellation, fresh-process Session reopen, or root child cleanup. Task 5 may deliver Quick Session only; Managed Change still cannot claim canonical checkpoint, reconciliation, or process-tree finality until the later planned tasks prove them.
+Proceed to Task 5: both platforms reproduced Core identity/tool graph, LF-only framing, active cancellation, fresh-process Session reopen, and root child cleanup within the recorded scope, and the aggregate job validated identical artifact/source/execution identities. Task 5 may deliver Quick Session only; Managed Change still cannot claim canonical checkpoint, reconciliation, or process-tree finality until the later planned tasks prove them.

@@ -181,8 +181,8 @@ export function parseTask7VitestReport(
   const report = vitestReportSchema.parse(input);
   const assertions = report.testResults.flatMap((result) => result.assertionResults);
   if (
-    report.numTotalTestSuites !== 1 ||
-    report.numPassedTestSuites !== 1 ||
+    report.numTotalTestSuites !== 2 ||
+    report.numPassedTestSuites !== 2 ||
     report.numFailedTestSuites !== 0 ||
     report.numPendingTestSuites !== 0 ||
     report.numTotalTests !== TASK7_PLATFORM_CHECKS.length ||

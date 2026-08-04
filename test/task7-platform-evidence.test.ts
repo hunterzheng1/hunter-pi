@@ -27,8 +27,8 @@ afterEach(async () => {
 
 function passingReport(): Record<string, unknown> {
   return {
-    numTotalTestSuites: 1,
-    numPassedTestSuites: 1,
+    numTotalTestSuites: 2,
+    numPassedTestSuites: 2,
     numFailedTestSuites: 0,
     numPendingTestSuites: 0,
     numTotalTests: TASK7_PLATFORM_CHECKS.length,

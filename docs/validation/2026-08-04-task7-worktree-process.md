@@ -2,12 +2,12 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `75e4a17d4ecd9d8c1243a8746c1c2790745bdc03`
+- Selected v2 Evidence source: `PENDING after 6ffee095dde672d7ebca0e4e6ec60f2fdcb07ffc`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **TASK 7 COMPLETE / LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PASS / TASK 8 NOT_STARTED**
+- Task result: **LOCAL NOT_PROVEN / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -94,17 +94,22 @@ The replacement implementation defines strict v2 successful platform and consist
 | [`windows-local-v2-attempt-6.json`](evidence/task7/windows-local-v2-attempt-6.json) | `PASS`, 9/9 checks, 13123 ms | preserved local Windows receipt; superseded after closure review found a timing false-positive path |
 | [`ubuntu-wsl-v2-attempt-6.json`](evidence/task7/ubuntu-wsl-v2-attempt-6.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4445 ms | preserved local Ubuntu receipt; superseded after closure review found a timing false-positive path |
 | [`local-consistency-v2-attempt-6.json`](evidence/task7/local-consistency-v2-attempt-6.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded after closure review found a timing false-positive path |
-| [`windows-local-v2-attempt-7.json`](evidence/task7/windows-local-v2-attempt-7.json) | `PASS`, 9/9 checks, 14176 ms | selected local Windows receipt after proving the pre-release heartbeat state |
-| [`ubuntu-wsl-v2-attempt-7.json`](evidence/task7/ubuntu-wsl-v2-attempt-7.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4395 ms | selected local Ubuntu receipt after proving the pre-release heartbeat state |
-| [`local-consistency-v2-attempt-7.json`](evidence/task7/local-consistency-v2-attempt-7.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-7.json`](evidence/task7/windows-local-v2-attempt-7.json) | `PASS`, 9/9 checks, 14176 ms | preserved local Windows receipt; superseded after exact-head CI exposed another fixture-budget failure |
+| [`ubuntu-wsl-v2-attempt-7.json`](evidence/task7/ubuntu-wsl-v2-attempt-7.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4395 ms | preserved local Ubuntu receipt; superseded after exact-head CI exposed another fixture-budget failure |
+| [`local-consistency-v2-attempt-7.json`](evidence/task7/local-consistency-v2-attempt-7.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded after exact-head CI exposed another fixture-budget failure |
+| [`windows-local-v2-attempt-8.json`](evidence/task7/windows-local-v2-attempt-8.json) | `PASS`, 9/9 checks, 13386 ms | preserved Windows receipt; superseded after the full suite retained two more default-budget timeouts |
+| [`ubuntu-wsl-v2-attempt-8.json`](evidence/task7/ubuntu-wsl-v2-attempt-8.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4376 ms | preserved Ubuntu receipt; superseded after the full suite retained two more default-budget timeouts |
+| [`local-consistency-v2-attempt-8.json`](evidence/task7/local-consistency-v2-attempt-8.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded after the full suite retained two more default-budget timeouts |
+| [`windows-local-v2-attempt-9.json`](evidence/task7/windows-local-v2-attempt-9.json) | `NOT_PROVEN / SOURCE_IDENTITY`, 0 captured bytes | preserved clean-worktree refusal; no platform test ran and no Ubuntu or consistency receipt was produced |
 
-The selected pair binds source commit `75e4a17d4ecd9d8c1243a8746c1c2790745bdc03`, source digest `sha256:0fbe502e463fc3c3745d3cf898067bf20a16540740c37100039a46c7663b4206`, and verifier fingerprint `sha256:eebaf5e25808846242895c70c6ae6adb6cfb369b5bede5a7ce7f368100e825a2`.
+The last complete pair, attempt #8, binds source commit `e8c1a606e46c08c764ddf9ead039ce53b4ea1465`, source digest `sha256:3f038a05bdd9352e8e12ac2a5f6ff3017228610a31c002843ed5badb57708504`, and verifier fingerprint `sha256:a4963806490f4643901c989c5111fc0d1883fe7dfb2409f085e19bef7cd9300d`. It is preserved but no longer selected.
 
 The selected artifact SHA-256 values are:
 
-- Windows attempt #7: `6f67960246689fb573214eb5b55389bcc02ae7af4d5f3da081a62c155f88f204`;
-- Ubuntu attempt #7: `732a4b8d62c72a25f5f9acf8c58306244454f134e6f1612a3d241184caa29c6b`;
-- local consistency attempt #7: `a2bdee2f3b77b5da107659aa7ac2b9cf10049fe567f914be109a79ef40d688d0`;
+- Windows attempt #8: `16ebd1c4aa593cea31b0c648fcd544130c99ba6ed4bab4943d3b130931b8df19`;
+- Ubuntu attempt #8: `accf3470e0b481b19bb0bbfa8842a10ea6edb21c7ae96602a1b0d5f0da29071e`;
+- local consistency attempt #8: `166adfd47aa895abe7ddd3710a6fc02b8602456fe527dec01df34e55b34c20f4`;
+- Windows attempt #9 failure: `c8d9577262ac17de42fe047423c7221a1a0d044eb048da3f9277a80bb1506234`;
 - preserved Ubuntu v2 failure: `ab1751beec9ccc1ffbc2dbaa9758acdd9aa04a02e0c10575573cd9fa525c5c66`.
 
 The replacement nine-check platform matrix is required to prove:
@@ -147,21 +152,23 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - the post-hardening `npm run probe:task7` passed the exact Windows 6/6 matrix, and `npm run compare:task7-evidence` matched it against the preserved Ubuntu receipt while retaining `remoteCi=PENDING`;
 - strict tests parse and privacy-scan every committed Task 7 receipt and recompute both local consistency artifacts.
 
-## Selected attempt #7 local verification
+## Preserved attempt #8 and failed attempt #9
 
-- Windows passes the exact platform file 9/9. A fresh locked Ubuntu WSL clone passes 7 applicable checks with 2 Windows-only checks skipped. The exact five-file command for source `75e4a17` passes 65/65 in 73.7 seconds.
+- Attempt #8 passes Windows 9/9 and, in a fresh locked Ubuntu WSL clone, 7 applicable checks with 2 Windows-only checks skipped. Its exact five-file command passes 65/65 in 75.3 seconds.
 - A disposable Ubuntu 22.04 WSL clone passes the exact platform matrix with 7 applicable checks and 2 Windows-only checks skipped by declared applicability.
-- Windows and Ubuntu formal v2 platform attempt #7 receipts and their local consistency receipt pass against the exact identities above.
-- `npm run lint`, `npm run typecheck`, platform formatting, and `git diff --check` pass after the heartbeat assertion change. One earlier build overlapped a still-running `tsc --clean` from an aborted parallel check and failed with transient missing `dist` declarations; after confirming zero active build processes, the serial build exited 0 and the failure was not rewritten.
-- Full `npm run verify` for source `75e4a17` exits 0 in 408.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
+- Windows and Ubuntu formal v2 platform attempt #8 receipts and their local consistency receipt pass against their preserved identities above.
+- Full `npm run verify` for source `e8c1a60` stops in the unit-test stage at 293/295: the hooks-neutralization and same-shape content-drift real-Git cases take 5.427 and 6.220 seconds under Vitest's default five-second budget. Later verify stages did not run, and the failure was not rewritten.
+- Commit `6ffee095dde672d7ebca0e4e6ec60f2fdcb07ffc` applies one inherited 15-second timeout to the entire real-Git Workspace suite; its default file run passes 22/22 in 104.9 seconds and typecheck, format, and diff checks pass.
+- Windows attempt #9 stops before source hashing at `SOURCE_IDENTITY` because attempt #8 history was still uncommitted. It records `NOT_PROVEN`, zero captured bytes, and no source identity; no platform test ran, and no Ubuntu or consistency receipt exists.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
-- Strict Evidence passes 10/10. A separate count-only scan over all three attempt #7 receipts finds zero Windows absolute paths, UNC paths, private Windows or POSIX home paths, and credential-assignment shapes; all three file hashes match the selected values above.
-- Independent closure review confirms the release gate now observes `EXITED / ACTIVE / CLOSED / PENDING` plus a live detached PID before release, reports no Critical or Important finding, and independently recomputes the selected identities and 65/295 test counts.
+- A clean attempt #10 pair, strict Evidence, count-only privacy scan, full gates, and independent review remain `PENDING`; earlier results are not inferred for the changed verifier.
 
 ## CI and remaining boundaries
 
 CI defines independent Windows/Ubuntu Task 7 platform jobs and a strict aggregate identity comparator. PR #16 run [`30918642613`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30918642613) preserved its exact mixed result: both Task 7 containment jobs and the Task 7 identity aggregate passed; the base Ubuntu job failed because the detached child had completed before a fixed-delay `pending` assertion, and the base Windows job failed because the Unicode/structured-argv real-process case exceeded Vitest's default five seconds under full-suite load. Downstream Pi Evidence did not run because both base jobs were required. No Task 7 product assertion failed, and that failure history remains retained.
 
 PR #16 CI run [`30923849375`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30923849375) completed `success` on head `c2079bec7fdb9beafee5afbf5314b98e8b50f115`: `windows-latest / Node 24`, `ubuntu-latest / Node 24`, both exact Task 7 containment jobs, `Task 7 Evidence / Windows + Ubuntu identity`, and `Pi Evidence / Windows + Ubuntu identity` all passed. This is the required GitHub-hosted confirmation for the selected source and Evidence; local WSL alone was not treated as remote Ubuntu CI.
+
+The exact-head follow-up run [`30925340988`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30925340988) retained a Windows base-job timeout at `test/git-workspace-manager.test.ts:259`: 294/295 tests passed, but the real-Git operation-replay case took 5.54 seconds under the default five-second budget. Ubuntu, both Task 7 containment jobs, and the Task 7 identity aggregate passed; Pi Evidence was skipped because the Windows base dependency failed. Commit `e8c1a606e46c08c764ddf9ead039ce53b4ea1465` adds only the case-owned 15-second budget and does not change its request, receipt, registration-count, or equality assertions. Replacement remote CI remains `PENDING`.
 
 Even after exact CI passes, Task 7 proves these Hunter contracts only within disposable fixtures. It does not prove arbitrary user repositories, hostile kernel/process behavior outside the declared adapter assumptions, real Pi/Provider behavior, recovery after host crash, plugin isolation, a Windows installer, production readiness, or daily-use acceptance. Those claims remain `NOT_RUN` or `NOT_PROVEN` under their later tasks.

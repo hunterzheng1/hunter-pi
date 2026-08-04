@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "hpi-task7-platform-failure.v3",
+  "kind": "hunter-pi/task7-platform-failure",
+  "observedAt": "2026-08-04T16:00:39.342Z",
+  "status": "NOT_PROVEN",
+  "platform": "win32",
+  "stage": "SOURCE_IDENTITY",
+  "code": "TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE",
+  "source": null,
+  "exitCode": null,
+  "stdoutDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderrDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "observedBytes": 0,
+  "verifierVersion": "task7-verifier.v3",
+  "fixturePolicy": "AUTOMATIC_TEMPORARY_ONLY",
+  "providerRequests": "NOT_RUN",
+  "realRepositories": "NOT_RUN",
+  "remoteCi": "PENDING"
+}

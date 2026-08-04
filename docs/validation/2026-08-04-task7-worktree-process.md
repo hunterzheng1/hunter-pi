@@ -2,7 +2,7 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd`
+- Selected v2 Evidence source: `d47c4decfb6c857160004aa602f93d99b9943538`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
@@ -15,7 +15,9 @@ The pre-push independent review found reproducible hard-stop gaps: repository ho
 
 The seven v1 receipts below remain immutable historical observations, but none is selected as Task 7 completion Evidence after that review. The first replacement v2 pair also remains preserved: a later review found that included Git configuration could still activate filters, a second Host could replay a process operation without recovering the original process identity, stale disposal intent did not bind a workspace generation, invalid owner-reconciler output fell through as `DEAD`, and Linux PID signalling still had a reuse window. It also found missing branch-only compensation, post-remove ambiguity receipts, final-receipt state constraints, source revalidation, Ubuntu distribution qualification, and hard-link coverage.
 
-Commit `869e456c9d5feaa86dd4b359908bb3e2f7884812` remediates those findings. Attempt #3 Windows and Ubuntu receipts bind that exact clean commit and pass the expanded local matrix. The subsequent full-suite run retained one non-assertion failure: the first real-Git Workspace case took 5720 ms under parallel load and exceeded Vitest's default 5000 ms, while the same case passed alone in 3312 ms. Commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd` applies the explicit 15-second case bound already used by comparable real-Git fixtures; the Workspace file rerun passes 22/22. Attempt #4 is therefore the selected local pair. Independent final rereview and actual PR/main CI are still required.
+Commit `869e456c9d5feaa86dd4b359908bb3e2f7884812` remediates those findings. Attempt #3 Windows and Ubuntu receipts bind that exact clean commit and pass the expanded local matrix. The subsequent full-suite run retained one non-assertion failure: the first real-Git Workspace case took 5720 ms under parallel load and exceeded Vitest's default 5000 ms, while the same case passed alone in 3312 ms. Commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd` applies the explicit 15-second case bound already used by comparable real-Git fixtures; the Workspace file rerun passes 22/22 and attempt #4 binds that source.
+
+The next independent rereview still reproduced two Critical gaps on `c188695`: changing a caller-supplied bind operation identity let the same start operation launch once in each Host, and distinct prepare operations with the same payload fingerprint produced the same workspace-generation fingerprint, letting stale disposal delete the replacement generation. Commit `d47c4decfb6c857160004aa602f93d99b9943538` derives the only durable process-reservation key from the canonical start operation, rejects caller-selected bind identities, and includes the unique prepare operation in workspace fingerprint v2. Attempt #5 is the selected local pair. Independent final rereview and actual PR/main CI are still required.
 
 ## Frozen outcome and limits
 
@@ -81,17 +83,20 @@ The replacement implementation defines strict v2 successful platform and consist
 | [`windows-local-v2-attempt-3.json`](evidence/task7/windows-local-v2-attempt-3.json) | `PASS`, 9/9 checks, 14387 ms | preserved post-review Windows receipt; superseded after the full-suite fixture timeout |
 | [`ubuntu-wsl-v2-attempt-3.json`](evidence/task7/ubuntu-wsl-v2-attempt-3.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 5881 ms | preserved post-review Ubuntu receipt; superseded after the full-suite fixture timeout |
 | [`local-consistency-v2-attempt-3.json`](evidence/task7/local-consistency-v2-attempt-3.json) | `PASS / remoteCi=PENDING` | preserved post-review aggregate; superseded after the full-suite fixture timeout |
-| [`windows-local-v2-attempt-4.json`](evidence/task7/windows-local-v2-attempt-4.json) | `PASS`, 9/9 checks, 13843 ms | selected local Windows receipt after bounding the real-Git fixture |
-| [`ubuntu-wsl-v2-attempt-4.json`](evidence/task7/ubuntu-wsl-v2-attempt-4.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 6397 ms | selected local Ubuntu receipt after bounding the real-Git fixture |
-| [`local-consistency-v2-attempt-4.json`](evidence/task7/local-consistency-v2-attempt-4.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-4.json`](evidence/task7/windows-local-v2-attempt-4.json) | `PASS`, 9/9 checks, 13843 ms | preserved post-timeout Windows receipt; superseded after final rereview |
+| [`ubuntu-wsl-v2-attempt-4.json`](evidence/task7/ubuntu-wsl-v2-attempt-4.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 6397 ms | preserved post-timeout Ubuntu receipt; superseded after final rereview |
+| [`local-consistency-v2-attempt-4.json`](evidence/task7/local-consistency-v2-attempt-4.json) | `PASS / remoteCi=PENDING` | preserved post-timeout aggregate; superseded after final rereview |
+| [`windows-local-v2-attempt-5.json`](evidence/task7/windows-local-v2-attempt-5.json) | `PASS`, 9/9 checks, 16477 ms | selected local Windows receipt after closing the final rereview gaps |
+| [`ubuntu-wsl-v2-attempt-5.json`](evidence/task7/ubuntu-wsl-v2-attempt-5.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 5859 ms | selected local Ubuntu receipt after closing the final rereview gaps |
+| [`local-consistency-v2-attempt-5.json`](evidence/task7/local-consistency-v2-attempt-5.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
 
-The selected pair binds source commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd`, source digest `sha256:a30cd4e896a704c8b5cf21d5f175e6911b2180d9379cdfd8c95138533d1a8637`, and verifier fingerprint `sha256:73db8e74a18f42c9f32b32536fa34dfb3708e19c1bc98c8a4b4af23f71c0c550`.
+The selected pair binds source commit `d47c4decfb6c857160004aa602f93d99b9943538`, source digest `sha256:0c47aabba30a09606050f5dcb4bbcdd3f45f0ca6fde0e4e4b7c3041472175a93`, and verifier fingerprint `sha256:6e7074a57cfeb0e22407f65a527ff36db43c73aa494f5faa81407a96c5698633`.
 
 The selected artifact SHA-256 values are:
 
-- Windows attempt #4: `be5214fb5b0f09e945a7fce3333f1a2ee1613cbcde5c28626be6e3889733e5e7`;
-- Ubuntu attempt #4: `96b31c036cb2633cf68a2a43c61ac4278a0d36f989857bfbfe3dc13d30897d5b`;
-- local consistency attempt #4: `7a0c3296c1d5d4276a864f8339efd3380558c373a13b7bf5672ef826158c15dc`;
+- Windows attempt #5: `ccc69d441d08df29564da2ed2d1f04930e29e072508615302518d164dbf8809e`;
+- Ubuntu attempt #5: `313a85325a3dd6371b8bc6e95d25214030f569c70bfc36b75524145dacae1b19`;
+- local consistency attempt #5: `0c793ce3e3c2f93aee40596433387005318d5572db17fee90d3cd93a515f5362`;
 - preserved Ubuntu v2 failure: `ab1751beec9ccc1ffbc2dbaa9758acdd9aa04a02e0c10575573cd9fa525c5c66`.
 
 The replacement nine-check platform matrix is required to prove:
@@ -118,6 +123,8 @@ The replacement nine-check platform matrix is required to prove:
 
 The first full-suite invocation after the workspace cluster timed out without a reproducible assertion failure. No residual test process remained; a correct `npm test` rerun passed, and the failure was not rewritten as a PASS. During remediation, a five-file run reached 48/52 before four Windows Workspace cases exceeded Vitest's five-second default; the fixture process was reconciled, explicit 15-second case bounds were added, and the exact rerun passed 52/52. After follow-up hardening, a full-suite run passed 293/294 tests but retained one equivalent duration failure: the first real-Git case took 5720 ms under parallel load, then passed alone in 3312 ms and as part of the 22/22 Workspace file after receiving the same explicit 15-second bound. Both formal parser failures and this full-suite timeout remain retained rather than rewritten as PASS.
 
+The final rereview RED command then failed all three selected bypass cases: two workspace generations produced an equal fingerprint, while second Hosts with zero leases or another valid lease resolved a second `STARTED` receipt after changing the caller-selected reservation identity. After deriving the reservation from start identity and binding workspace generation to prepare identity, the minimum GREEN selection passes 4/4; complete Workspace and Managed Host files pass 34/34. The public start schema now rejects an independent bind identity before driver startup.
+
 The Ubuntu attempt #4 launcher also preserves two pre-probe failures: the first invocation carried a PowerShell BOM into Bash and used an incorrectly expanded SHA; the second allowed the Windows/WSL argument boundary to split a multiline `bash -lc` program. Neither reached `npm ci` or the platform probe, neither generated a receipt, and no fixture remained. The third evidence-based invocation used an explicit temporary shell file, checked the exact commit, passed the probe, removed its temporary clone through a validated trap, and then deleted the launcher file.
 
 ## Superseded local verification
@@ -132,14 +139,15 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - the post-hardening `npm run probe:task7` passed the exact Windows 6/6 matrix, and `npm run compare:task7-evidence` matched it against the preserved Ubuntu receipt while retaining `remoteCi=PENDING`;
 - strict tests parse and privacy-scan every committed Task 7 receipt and recompute both local consistency artifacts.
 
-## Selected attempt #4 local verification
+## Selected attempt #5 local verification
 
-- The exact five-file Workspace/lease/host/platform/Evidence command passes 64/64 in 79.69 seconds after follow-up hardening.
+- The exact five-file Workspace/lease/host/platform/Evidence command for source `d47c4de` passes 65/65 in 75.07 seconds; the two changed complete files separately pass 34/34.
 - A disposable Ubuntu 22.04 WSL clone passes the exact platform matrix with 7 applicable checks and 2 Windows-only checks skipped by declared applicability.
-- Windows and Ubuntu formal v2 platform attempt #4 receipts and their local consistency receipt pass against the exact identities above.
-- Final `npm run verify` for source `ea38a6b` exited 0 in 436 seconds: lint and typecheck passed; 36 test files / 294 tests passed; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then passed.
+- Windows and Ubuntu formal v2 platform attempt #5 receipts and their local consistency receipt pass against the exact identities above.
+- `npm run lint`, `npm run typecheck`, and a clean serial `npm run build` pass after the final rereview fixes. One earlier build overlapped a still-running `tsc --clean` from an aborted parallel check and failed with transient missing `dist` declarations; after confirming zero active build processes, the serial build exited 0 and the failure was not rewritten.
+- Final full `npm run verify` for source `d47c4de` exits 0 in 489.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
-- The strict Evidence test passes 10/10. A separate count-only scan over eight attempt #3/#4 receipt files found zero Windows absolute paths, UNC paths, private home paths, or credential-assignment shapes; `git diff --check` also passed.
+- The strict Evidence test passes 10/10. A separate count-only scan over all three attempt #5 receipts finds zero Windows absolute paths, UNC paths, private home paths, or credential-assignment shapes; `git diff --check` also passes.
 - Independent rereview and remote PR/main CI remain to be completed; neither is claimed early.
 
 ## CI and remaining boundaries

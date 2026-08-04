@@ -5,9 +5,9 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-04
-- Product status: **TASK_5_COMPLETE / WINDOWS_TUI_SMOKE_DETECTED / PROVIDER_AUTH_BLOCKED / TASK_6_NOT_STARTED**
+- Product status: **TASK_5_COMPLETE / PROVIDER_AUTH_DETECTED / TASK_6_IN_PROGRESS**
 - Current implementation: Tasks 1–5 are merged through the bounded interactive developer-preview milestone; Task 5 adds the single-artifact `hpi` npm developer preview, isolated configuration, versioned Provider disclosure with current-origin Doctor revalidation, metadata-only auth readiness, honest Doctor, integrity-bound product shell/Core Extension, Safe Mode, Quick Session boundaries, plugin doctor/disable recovery, and an exact dual-SHA-bound Windows TUI acknowledgement
-- Next gate: the owner must separately authorize and complete Provider-owned login before Task 6 can run its required real Pi Agent Step; no paid request, Provider capability, Managed Change, or production readiness is inferred from the completed Task 5 smoke
+- Next gate: execute Task 6's preregistered disposable-fixture Managed Change; Provider-owned login is metadata-only `DETECTED`, while the real request and Managed Change result remain `NOT_RUN` until exact Evidence exists
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)

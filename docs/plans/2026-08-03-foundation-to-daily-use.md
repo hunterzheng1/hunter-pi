@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_5_COMPLETE / WINDOWS_TUI_SMOKE_DETECTED / PROVIDER_AUTH_BLOCKED / TASK_6_NOT_STARTED`
-- Active task: `NONE` (Task 5 is complete within its provider-independent and manual-TUI bounds; Task 6 requires a real Pi Agent Step and remains paused until the owner separately authorizes Provider-owned login and any possible paid request)
+- Current repository phase: `TASK_5_COMPLETE / PROVIDER_AUTH_DETECTED / TASK_6_IN_PROGRESS`
+- Active task: `TASK_6` (the owner completed Provider-owned login and authorized one minimal paid-capable real request on 2026-08-04; execution remains confined to the preregistered disposable Git fixture)
 - First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; REAL_PROVIDER_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 

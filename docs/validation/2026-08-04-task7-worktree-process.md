@@ -2,7 +2,7 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `135febd20e0b317ea9b631269530c3ec341bb3c9`
+- Selected v2 Evidence source: `75e4a17d4ecd9d8c1243a8746c1c2790745bdc03`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
@@ -91,17 +91,20 @@ The replacement implementation defines strict v2 successful platform and consist
 | [`windows-local-v2-attempt-5.json`](evidence/task7/windows-local-v2-attempt-5.json) | `PASS`, 9/9 checks, 16477 ms | preserved post-rereview Windows receipt; superseded after CI timing failures |
 | [`ubuntu-wsl-v2-attempt-5.json`](evidence/task7/ubuntu-wsl-v2-attempt-5.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 5859 ms | preserved post-rereview Ubuntu receipt; superseded after CI timing failures |
 | [`local-consistency-v2-attempt-5.json`](evidence/task7/local-consistency-v2-attempt-5.json) | `PASS / remoteCi=PENDING` | preserved post-rereview aggregate; superseded after CI timing failures |
-| [`windows-local-v2-attempt-6.json`](evidence/task7/windows-local-v2-attempt-6.json) | `PASS`, 9/9 checks, 13123 ms | selected local Windows receipt after CI fixture-timing hardening |
-| [`ubuntu-wsl-v2-attempt-6.json`](evidence/task7/ubuntu-wsl-v2-attempt-6.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4445 ms | selected local Ubuntu receipt after CI fixture-timing hardening |
-| [`local-consistency-v2-attempt-6.json`](evidence/task7/local-consistency-v2-attempt-6.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-6.json`](evidence/task7/windows-local-v2-attempt-6.json) | `PASS`, 9/9 checks, 13123 ms | preserved local Windows receipt; superseded after closure review found a timing false-positive path |
+| [`ubuntu-wsl-v2-attempt-6.json`](evidence/task7/ubuntu-wsl-v2-attempt-6.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4445 ms | preserved local Ubuntu receipt; superseded after closure review found a timing false-positive path |
+| [`local-consistency-v2-attempt-6.json`](evidence/task7/local-consistency-v2-attempt-6.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded after closure review found a timing false-positive path |
+| [`windows-local-v2-attempt-7.json`](evidence/task7/windows-local-v2-attempt-7.json) | `PASS`, 9/9 checks, 14176 ms | selected local Windows receipt after proving the pre-release heartbeat state |
+| [`ubuntu-wsl-v2-attempt-7.json`](evidence/task7/ubuntu-wsl-v2-attempt-7.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4395 ms | selected local Ubuntu receipt after proving the pre-release heartbeat state |
+| [`local-consistency-v2-attempt-7.json`](evidence/task7/local-consistency-v2-attempt-7.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
 
-The selected pair binds source commit `135febd20e0b317ea9b631269530c3ec341bb3c9`, source digest `sha256:863f438dfc7e6f044df6da355de97e916dc7ed0d066f7a4d10ab7571b2ffe55f`, and verifier fingerprint `sha256:64d769505346c0d769bdaf080d82b29fc739810df9b8db3d92ccf757923762da`.
+The selected pair binds source commit `75e4a17d4ecd9d8c1243a8746c1c2790745bdc03`, source digest `sha256:0fbe502e463fc3c3745d3cf898067bf20a16540740c37100039a46c7663b4206`, and verifier fingerprint `sha256:eebaf5e25808846242895c70c6ae6adb6cfb369b5bede5a7ce7f368100e825a2`.
 
 The selected artifact SHA-256 values are:
 
-- Windows attempt #6: `06e34c5f0c6fa725ee4e6e75e3f1a22ea972ea49636e888a95c395815f9a5b03`;
-- Ubuntu attempt #6: `405b355f0fcd5f393c8e10bc97fb7a26722d2dd0a6f77a402f4c0628c75fd8b0`;
-- local consistency attempt #6: `dc4e2cfec978f11aa62070632e5c5752c1c01aa84e2366f02c23b75935a3d080`;
+- Windows attempt #7: `6f67960246689fb573214eb5b55389bcc02ae7af4d5f3da081a62c155f88f204`;
+- Ubuntu attempt #7: `732a4b8d62c72a25f5f9acf8c58306244454f134e6f1612a3d241184caa29c6b`;
+- local consistency attempt #7: `a2bdee2f3b77b5da107659aa7ac2b9cf10049fe567f914be109a79ef40d688d0`;
 - preserved Ubuntu v2 failure: `ab1751beec9ccc1ffbc2dbaa9758acdd9aa04a02e0c10575573cd9fa525c5c66`.
 
 The replacement nine-check platform matrix is required to prove:
@@ -144,16 +147,16 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - the post-hardening `npm run probe:task7` passed the exact Windows 6/6 matrix, and `npm run compare:task7-evidence` matched it against the preserved Ubuntu receipt while retaining `remoteCi=PENDING`;
 - strict tests parse and privacy-scan every committed Task 7 receipt and recompute both local consistency artifacts.
 
-## Selected attempt #6 local verification
+## Selected attempt #7 local verification
 
-- Windows passes the exact platform file 9/9. A fresh locked Ubuntu WSL clone passes 7 applicable checks with 2 Windows-only checks skipped. The exact five-file command for source `135febd` passes 65/65 in 92.61 seconds.
+- Windows passes the exact platform file 9/9. A fresh locked Ubuntu WSL clone passes 7 applicable checks with 2 Windows-only checks skipped. The exact five-file command for source `75e4a17` passes 65/65 in 73.7 seconds.
 - A disposable Ubuntu 22.04 WSL clone passes the exact platform matrix with 7 applicable checks and 2 Windows-only checks skipped by declared applicability.
-- Windows and Ubuntu formal v2 platform attempt #6 receipts and their local consistency receipt pass against the exact identities above.
-- `npm run lint`, `npm run typecheck`, and a clean serial `npm run build` pass after the final rereview fixes. One earlier build overlapped a still-running `tsc --clean` from an aborted parallel check and failed with transient missing `dist` declarations; after confirming zero active build processes, the serial build exited 0 and the failure was not rewritten.
-- Final full `npm run verify` for source `135febd` exits 0 in 489.7 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
+- Windows and Ubuntu formal v2 platform attempt #7 receipts and their local consistency receipt pass against the exact identities above.
+- `npm run lint`, `npm run typecheck`, platform formatting, and `git diff --check` pass after the heartbeat assertion change. One earlier build overlapped a still-running `tsc --clean` from an aborted parallel check and failed with transient missing `dist` declarations; after confirming zero active build processes, the serial build exited 0 and the failure was not rewritten.
+- Full `npm run verify` for source `75e4a17` exits 0 in 408.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
-- Strict Evidence passes 10/10. A separate count-only scan over all three attempt #6 receipts finds zero Windows absolute paths, UNC paths, private home paths, or credential-assignment shapes; `git diff --check` also passes.
-- Independent rereview of the timing-only test change and remote CI attempt #2 remain `PENDING`; earlier review/CI results are not inferred.
+- Strict Evidence passes 10/10. A separate count-only scan over all three attempt #7 receipts finds zero Windows absolute paths, UNC paths, private Windows or POSIX home paths, and credential-assignment shapes; all three file hashes match the selected values above.
+- Independent closure review and remote CI attempt #2 remain `PENDING`; earlier review/CI results are not inferred.
 
 ## CI and remaining boundaries
 

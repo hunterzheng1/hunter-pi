@@ -15,11 +15,17 @@ export default defineConfig({
       "@hunter-pi/engine-contracts": fileURLToPath(
         new URL("./packages/engine-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/managed-change": fileURLToPath(
+        new URL("./packages/managed-change/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/pi-host": fileURLToPath(
         new URL("./packages/pi-host/src/index.ts", import.meta.url),
       ),
       "@hunter-pi/testkit": fileURLToPath(
         new URL("./packages/testkit/src/index.ts", import.meta.url),
+      ),
+      "@hunter-pi/verification": fileURLToPath(
+        new URL("./packages/verification/src/index.ts", import.meta.url),
       ),
       "@hunter-pi/workflow-kernel": fileURLToPath(
         new URL("./packages/workflow-kernel/src/index.ts", import.meta.url),

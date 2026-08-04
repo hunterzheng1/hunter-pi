@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../domain" },
+    { "path": "../engine-contracts" },
+    { "path": "../evidence" },
+    { "path": "../pi-host" },
+    { "path": "../verification" },
+    { "path": "../workflow-kernel" }
+  ]
+}

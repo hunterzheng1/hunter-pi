@@ -1,0 +1,21 @@
+{
+  "name": "@hunter-pi/verification",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hunter Pi independent command verification",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@hunter-pi/domain": "0.0.0"
+  }
+}

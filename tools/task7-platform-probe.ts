@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import {
   TASK7_SOURCE_PATHSPEC,
+  TASK7_VERIFIER_PATHSPEC,
   assertTask7EvidencePrivacy,
   formatTask7Evidence,
   parseTask7VitestReport,
@@ -35,6 +36,7 @@ interface SourceIdentity {
   readonly commit: string;
   readonly digest: `sha256:${string}`;
   readonly testFileFingerprint: `sha256:${string}`;
+  readonly verifierFingerprint: `sha256:${string}`;
   readonly gitVersion: string;
 }
 
@@ -125,6 +127,15 @@ async function requireSuccessfulTextCommand(
   return result.stdout.toString("utf8").trim();
 }
 
+export async function assertTask7WorktreeClean(repositoryRoot: string): Promise<void> {
+  const status = await requireSuccessfulTextCommand(
+    "git",
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    repositoryRoot,
+  );
+  if (status.length > 0) throw new Error("Task 7 entire worktree is not clean");
+}
+
 function isContained(root: string, target: string): boolean {
   const targetRelative = relative(root, target);
   return (
@@ -135,32 +146,27 @@ function isContained(root: string, target: string): boolean {
   );
 }
 
-async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIdentity> {
-  const status = await requireSuccessfulTextCommand(
+async function computeTrackedDigest(
+  repositoryRoot: string,
+  pathspec: readonly string[],
+): Promise<`sha256:${string}`> {
+  const fileList = await requireSuccessfulTextCommand(
     "git",
-    ["status", "--porcelain=v1", "--untracked-files=all", "--", ...TASK7_SOURCE_PATHSPEC],
+    ["ls-files", "-z", "--", ...pathspec],
     repositoryRoot,
   );
-  if (status.length > 0) throw new Error("Task 7 source pathspec is not clean");
-  const [commit, gitVersionOutput, fileList] = await Promise.all([
-    requireSuccessfulTextCommand("git", ["rev-parse", "HEAD"], repositoryRoot),
-    requireSuccessfulTextCommand("git", ["--version"], repositoryRoot),
-    requireSuccessfulTextCommand(
-      "git",
-      ["ls-files", "-z", "--", ...TASK7_SOURCE_PATHSPEC],
-      repositoryRoot,
-    ),
-  ]);
-  if (!/^[a-f0-9]{40}$/u.test(commit)) throw new Error("Git commit identity is invalid");
-  const gitVersion = gitVersionOutput.replace(/^git version\s+/u, "");
   const files = fileList
     .split("\0")
     .filter((path) => path.length > 0)
     .sort((left, right) => left.localeCompare(right));
-  if (files.length === 0) throw new Error("Task 7 source pathspec selected no files");
+  if (files.length === 0) throw new Error("Task 7 pathspec selected no files");
+  for (const expected of pathspec) {
+    if (!files.some((path) => path === expected || path.startsWith(`${expected}/`))) {
+      throw new Error("Task 7 pathspec entry selected no tracked file");
+    }
+  }
   const canonicalRoot = await realpath(repositoryRoot);
   const hash = createHash("sha256");
-  let testFileFingerprint: `sha256:${string}` | undefined;
   for (const path of files) {
     const target = resolve(repositoryRoot, path);
     if (!isContained(repositoryRoot, target)) throw new Error("source file escaped repository");
@@ -175,19 +181,31 @@ async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIden
       entry.nlink !== 1 ||
       !isContained(canonicalRoot, canonicalTarget)
     ) {
-      throw new Error("Task 7 source pathspec contains an unsafe file");
+      throw new Error("Task 7 pathspec contains an unsafe file");
     }
     hash.update(`${path}\0${String(content.length)}\0`, "utf8");
     hash.update(content);
-    if (path === "test/managed-process-platform.test.ts") {
-      testFileFingerprint = digest(content);
-    }
   }
-  if (testFileFingerprint === undefined) throw new Error("Task 7 platform test is missing");
+  return `sha256:${hash.digest("hex")}`;
+}
+
+async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIdentity> {
+  await assertTask7WorktreeClean(repositoryRoot);
+  const [commit, gitVersionOutput, sourceDigest, verifierFingerprint, testContent] =
+    await Promise.all([
+      requireSuccessfulTextCommand("git", ["rev-parse", "HEAD"], repositoryRoot),
+      requireSuccessfulTextCommand("git", ["--version"], repositoryRoot),
+      computeTrackedDigest(repositoryRoot, TASK7_SOURCE_PATHSPEC),
+      computeTrackedDigest(repositoryRoot, TASK7_VERIFIER_PATHSPEC),
+      readFile(resolve(repositoryRoot, "test/managed-process-platform.test.ts")),
+    ]);
+  if (!/^[a-f0-9]{40}$/u.test(commit)) throw new Error("Git commit identity is invalid");
+  const gitVersion = gitVersionOutput.replace(/^git version\s+/u, "");
   return {
     commit,
-    digest: `sha256:${hash.digest("hex")}`,
-    testFileFingerprint,
+    digest: sourceDigest,
+    testFileFingerprint: digest(testContent),
+    verifierFingerprint,
     gitVersion,
   };
 }
@@ -195,7 +213,7 @@ async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIden
 function platformIdentity(): {
   readonly platform: "win32" | "linux";
   readonly platformLabel: "WINDOWS" | "UBUNTU";
-  readonly containment: "WINDOWS_JOB_OBJECT" | "POSIX_PROCESS_GROUP";
+  readonly containment: "WINDOWS_JOB_OBJECT" | "LINUX_SUBREAPER_PROCESS_TREE";
 } {
   if (process.platform === "win32") {
     return {
@@ -208,7 +226,7 @@ function platformIdentity(): {
     return {
       platform: "linux",
       platformLabel: "UBUNTU",
-      containment: "POSIX_PROCESS_GROUP",
+      containment: "LINUX_SUBREAPER_PROCESS_TREE",
     };
   }
   throw new Error("Task 7 platform probe supports only Windows and Linux");
@@ -222,7 +240,7 @@ function createFailureReceipt(
   const platform =
     process.platform === "win32" || process.platform === "linux" ? process.platform : "UNSUPPORTED";
   return task7PlatformFailureReceiptSchema.parse({
-    schemaVersion: "hpi-task7-platform-failure.v1",
+    schemaVersion: "hpi-task7-platform-failure.v2",
     kind: "hunter-pi/task7-platform-failure",
     observedAt: new Date().toISOString(),
     status,
@@ -233,6 +251,7 @@ function createFailureReceipt(
     stdoutDigest: result?.stdoutDigest ?? digest(""),
     stderrDigest: result?.stderrDigest ?? digest(""),
     observedBytes: result?.observedBytes ?? 0,
+    verifierVersion: "task7-verifier.v2",
     fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
     providerRequests: "NOT_RUN",
     realRepositories: "NOT_RUN",
@@ -281,9 +300,9 @@ export async function runTask7PlatformProbe(
     if (result.exitCode !== 0) return createFailureReceipt(stage, "FAIL", result);
     stage = "REPORT_PARSE";
     const report = JSON.parse(await readFile(reportPath, "utf8")) as unknown;
-    const checks = parseTask7VitestReport(report);
+    const checks = parseTask7VitestReport(report, platform.platform);
     const receipt = task7PlatformReceiptSchema.parse({
-      schemaVersion: "hpi-task7-platform-receipt.v1",
+      schemaVersion: "hpi-task7-platform-receipt.v2",
       kind: "hunter-pi/task7-platform-receipt",
       observedAt: endedAt.toISOString(),
       status: "PASS",
@@ -292,6 +311,8 @@ export async function runTask7PlatformProbe(
         commit: source.commit,
         digest: source.digest,
         pathspec: TASK7_SOURCE_PATHSPEC,
+        verifierPathspec: TASK7_VERIFIER_PATHSPEC,
+        verifierFingerprint: source.verifierFingerprint,
       },
       environment: {
         platform: platform.platform,

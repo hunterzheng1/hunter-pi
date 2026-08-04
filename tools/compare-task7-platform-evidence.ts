@@ -18,7 +18,16 @@ import {
 
 const fingerprintSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 
-export const task7PlatformConsistencySchema = z.strictObject({
+const task7PlatformCheckV1Schema = z.enum([
+  "structured-argv",
+  "nested-cancel",
+  "nested-timeout",
+  "delayed-output-finality",
+  "bounded-output",
+  "identity-mismatch",
+]);
+
+export const task7PlatformConsistencyV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-task7-platform-consistency.v1"),
   kind: z.literal("hunter-pi/task7-platform-consistency"),
   observedAt: z.iso.datetime({ offset: true }),
@@ -33,7 +42,7 @@ export const task7PlatformConsistencySchema = z.strictObject({
   }),
   checks: z.array(
     z.strictObject({
-      id: z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id)),
+      id: task7PlatformCheckV1Schema,
       status: z.literal("PASS"),
     }),
   ),
@@ -42,6 +51,53 @@ export const task7PlatformConsistencySchema = z.strictObject({
   realRepositories: z.literal("NOT_RUN"),
   remoteCi: z.literal("PENDING"),
 });
+export type Task7PlatformConsistencyV1 = z.infer<typeof task7PlatformConsistencyV1Schema>;
+
+export const task7PlatformConsistencySchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-task7-platform-consistency.v2"),
+    kind: z.literal("hunter-pi/task7-platform-consistency"),
+    observedAt: z.iso.datetime({ offset: true }),
+    status: z.literal("PASS"),
+    platforms: z.tuple([z.literal("win32"), z.literal("linux")]),
+    sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceDigest: fingerprintSchema,
+    verifierFingerprint: fingerprintSchema,
+    commandFingerprint: fingerprintSchema,
+    testFileFingerprint: fingerprintSchema,
+    receiptDigests: z.strictObject({
+      windows: fingerprintSchema,
+      ubuntu: fingerprintSchema,
+    }),
+    checks: z
+      .array(
+        z.strictObject({
+          id: z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id)),
+          windowsStatus: z.literal("PASS"),
+          ubuntuStatus: z.enum(["PASS", "NOT_RUN"]),
+        }),
+      )
+      .length(TASK7_PLATFORM_CHECKS.length),
+    fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+    providerRequests: z.literal("NOT_RUN"),
+    realRepositories: z.literal("NOT_RUN"),
+    remoteCi: z.literal("PENDING"),
+  })
+  .superRefine((receipt, context) => {
+    receipt.checks.forEach((result, index) => {
+      const check = TASK7_PLATFORM_CHECKS[index];
+      if (check === undefined) {
+        context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
+        return;
+      }
+      if (
+        result.id !== check.id ||
+        result.ubuntuStatus !== (check.platforms.includes("linux") ? "PASS" : "NOT_RUN")
+      ) {
+        context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
+      }
+    });
+  });
 export type Task7PlatformConsistency = z.infer<typeof task7PlatformConsistencySchema>;
 
 function canonicalJson(value: unknown): string {
@@ -82,29 +138,54 @@ export function compareTask7PlatformEvidence(
   if (JSON.stringify(windows.source.pathspec) !== JSON.stringify(ubuntu.source.pathspec)) {
     throw new Error("Task 7 platform receipts did not bind the same source pathspec");
   }
+  if (
+    JSON.stringify(windows.source.verifierPathspec) !==
+    JSON.stringify(ubuntu.source.verifierPathspec)
+  ) {
+    throw new Error("Task 7 platform receipts did not bind the same verifier pathspec");
+  }
+  if (windows.source.verifierFingerprint !== ubuntu.source.verifierFingerprint) {
+    throw new Error("Task 7 platform receipts did not bind the same verifier fingerprint");
+  }
   if (windows.execution.commandFingerprint !== ubuntu.execution.commandFingerprint) {
     throw new Error("Task 7 platform receipts did not bind the same command fingerprint");
   }
   if (windows.execution.testFileFingerprint !== ubuntu.execution.testFileFingerprint) {
     throw new Error("Task 7 platform receipts did not bind the same test file");
   }
-  if (JSON.stringify(windows.checks) !== JSON.stringify(ubuntu.checks)) {
-    throw new Error("Task 7 platform receipts did not pass the same check matrix");
-  }
+  const checks = TASK7_PLATFORM_CHECKS.map((check, index) => {
+    const windowsCheck = windows.checks[index];
+    const ubuntuCheck = ubuntu.checks[index];
+    if (
+      windowsCheck?.id !== check.id ||
+      ubuntuCheck?.id !== check.id ||
+      windowsCheck.status !== "PASS" ||
+      ubuntuCheck.status !== (check.platforms.includes("linux") ? "PASS" : "NOT_RUN")
+    ) {
+      throw new Error("Task 7 platform receipts did not pass the exact applicable matrix");
+    }
+    return {
+      id: check.id,
+      windowsStatus: "PASS" as const,
+      ubuntuStatus: ubuntuCheck.status,
+    };
+  });
   const result = task7PlatformConsistencySchema.parse({
-    schemaVersion: "hpi-task7-platform-consistency.v1",
+    schemaVersion: "hpi-task7-platform-consistency.v2",
     kind: "hunter-pi/task7-platform-consistency",
     observedAt,
     status: "PASS",
     platforms: ["win32", "linux"],
+    sourceCommit: windows.source.commit,
     sourceDigest: windows.source.digest,
+    verifierFingerprint: windows.source.verifierFingerprint,
     commandFingerprint: windows.execution.commandFingerprint,
     testFileFingerprint: windows.execution.testFileFingerprint,
     receiptDigests: {
       windows: digest(windows),
       ubuntu: digest(ubuntu),
     },
-    checks: windows.checks,
+    checks,
     fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
     providerRequests: "NOT_RUN",
     realRepositories: "NOT_RUN",

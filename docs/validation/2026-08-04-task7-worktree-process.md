@@ -51,7 +51,7 @@ The Windows sequencing was independently implemented against Microsoft Win32 doc
 
 ## Versioned Evidence
 
-The Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-task7-platform-failure.v1`, and `hpi-task7-platform-consistency.v1` schemas. All seven local records are retained:
+The superseded Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-task7-platform-failure.v1`, and `hpi-task7-platform-consistency.v1` schemas. Their historical parsers remain available and all seven local records are retained:
 
 | Artifact | Actual result | Disposition |
 |---|---|---|
@@ -63,9 +63,11 @@ The Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-task7-platf
 | [`local-consistency.json`](evidence/task7/local-consistency.json) | `PASS / remoteCi=PENDING` | exact source, command, test file, and six-check identities match |
 | [`local-consistency-attempt-2.json`](evidence/task7/local-consistency-attempt-2.json) | `PASS / remoteCi=PENDING` | post-hardening comparator also requires exact source-commit equality; remote status is unchanged |
 
-The formerly selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their incomplete source pathspec excluded the verifier and CI definition, which is why they are preserved but superseded. The replacement schema must bind all implementation, verifier, schema, test, build, and CI inputs from a clean commit.
+The formerly selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their incomplete source pathspec excluded the verifier and CI definition, which is why they are preserved but superseded.
 
-The exact platform matrix proves:
+The replacement implementation defines strict v2 platform, failure, and consistency schemas. Before hashing, the probe requires the entire Git worktree to be clean. Its source digest covers all application/package implementation, scripts, tests, tools, lockfile, Node/npm/build/lint/format/test configuration, and the pinned CI workflow; a separate verifier fingerprint binds the exact parser, comparator, focused tests, configuration, lockfile, and CI definition. Cross-platform consistency includes the exact source commit and rejects a verifier/pathspec mismatch. No v2 receipt is claimed here until both clean-commit platform probes run.
+
+The replacement nine-check platform matrix is required to prove:
 
 1. Unicode/spaced cwd and quote/backslash/metacharacter argv preservation without shell reconstruction;
 2. nested child/grandchild cancellation as one owned tree;
@@ -74,7 +76,8 @@ The exact platform matrix proves:
 5. bounded retained output with a digest over every observed byte;
 6. identity mismatch causing no platform termination call.
 7. a detached closed-stdio descendant remaining non-final until the owned tree is empty.
-8. on Windows, kernel signaled-state disambiguation preserving literal exit code 259.
+8. on Windows, a source-level guard requiring kernel signaled-state disambiguation;
+9. on Windows, a real process preserving literal exit code 259 after the kernel signals completion.
 
 ## Test-first history
 
@@ -88,9 +91,9 @@ The exact platform matrix proves:
 
 The first full-suite invocation after the workspace cluster timed out without a reproducible assertion failure. No residual test process remained; a correct `npm test` rerun passed, and the failure was not rewritten as a PASS. The first formal platform probe is likewise retained as `NOT_PROVEN` rather than replaced.
 
-## Local verification
+## Superseded local verification
 
-The final local branch state completed these gates on Windows x64:
+The pre-review local branch state completed these gates on Windows x64; they are retained as historical results and do not satisfy the replacement v2 gate:
 
 - the five focused workspace, lease, portable process-host, platform, and Evidence files passed 40/40 tests;
 - `npm run lint` and `npm run typecheck` exited 0;

@@ -7,7 +7,7 @@ import { z } from "zod";
 const fingerprintSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const commitSchema = z.string().regex(/^[a-f0-9]{40}$/u);
 
-export const TASK7_SOURCE_PATHSPEC = [
+const TASK7_SOURCE_PATHSPEC_V1 = [
   "package-lock.json",
   "package.json",
   "packages/domain/src",
@@ -19,54 +19,148 @@ export const TASK7_SOURCE_PATHSPEC = [
   "test/managed-process-platform.test.ts",
 ] as const;
 
+export const TASK7_VERIFIER_PATHSPEC = [
+  ".github/workflows/ci.yml",
+  ".gitattributes",
+  ".gitignore",
+  ".node-version",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierignore",
+  "eslint.config.mjs",
+  "package-lock.json",
+  "package.json",
+  "prettier.config.mjs",
+  "scripts/bundle-cli.mjs",
+  "test/file-lease-manager.test.ts",
+  "test/git-workspace-manager.test.ts",
+  "test/managed-process-host.test.ts",
+  "test/managed-process-platform.test.ts",
+  "test/support/temporary-test-directory.ts",
+  "test/task7-platform-evidence.test.ts",
+  "tools/compare-task7-platform-evidence.ts",
+  "tools/task7-platform-evidence.ts",
+  "tools/task7-platform-probe.ts",
+  "tools/tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+] as const;
+
+export const TASK7_SOURCE_PATHSPEC = [
+  ".github/workflows/ci.yml",
+  ".gitattributes",
+  ".gitignore",
+  ".node-version",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierignore",
+  "apps",
+  "eslint.config.mjs",
+  "package-lock.json",
+  "package.json",
+  "packages",
+  "prettier.config.mjs",
+  "scripts",
+  "test",
+  "tools",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+] as const;
+
+type Task7Platform = "win32" | "linux";
+
 export const TASK7_PLATFORM_CHECKS = [
   {
     id: "structured-argv",
     title: "preserves Unicode paths and structured argv without shell reconstruction",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
   },
   {
     id: "nested-cancel",
     title: "cancels an owned nested child and grandchild as one contained tree",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
   },
   {
     id: "nested-timeout",
     title: "times out and reconciles the exact nested process tree",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
   },
   {
     id: "delayed-output-finality",
     title: "keeps finality pending while a descendant holds inherited output handles",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
+  },
+  {
+    id: "detached-closed-stdio",
+    title: "keeps a detached closed-stdio descendant inside the reconciled process tree",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
   },
   {
     id: "bounded-output",
     title: "bounds retained output while hashing every observed byte",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
   },
   {
     id: "identity-mismatch",
     title: "does not signal a platform process tree when its identity fingerprint differs",
+    platforms: ["win32", "linux"] as readonly Task7Platform[],
+  },
+  {
+    id: "windows-signaled-state",
+    title: "uses kernel signaled state instead of reserving exit code 259",
+    platforms: ["win32"] as readonly Task7Platform[],
+  },
+  {
+    id: "windows-exit-259",
+    title: "preserves literal Windows exit code 259 after the process is signaled",
+    platforms: ["win32"] as readonly Task7Platform[],
   },
 ] as const;
 
-const sourcePathspecSchema = z.tuple(
-  TASK7_SOURCE_PATHSPEC.map((path) => z.literal(path)) as [
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[0]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[1]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[2]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[3]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[4]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[5]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[6]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[7]>,
-    z.ZodLiteral<(typeof TASK7_SOURCE_PATHSPEC)[8]>,
-  ],
+const TASK7_PLATFORM_CHECKS_V1 = TASK7_PLATFORM_CHECKS.slice(0, 4)
+  .map(({ id, title }) => ({ id, title }))
+  .concat([
+    { id: "bounded-output", title: "bounds retained output while hashing every observed byte" },
+    {
+      id: "identity-mismatch",
+      title: "does not signal a platform process tree when its identity fingerprint differs",
+    },
+  ]);
+
+function exactOrderedStrings(values: readonly string[], label: string) {
+  return z
+    .array(z.string())
+    .length(values.length)
+    .superRefine((actual, context) => {
+      if (JSON.stringify(actual) !== JSON.stringify(values)) {
+        context.addIssue({ code: "custom", message: `${label} must use the exact ordered set` });
+      }
+    });
+}
+
+const sourcePathspecV1Schema = exactOrderedStrings(
+  TASK7_SOURCE_PATHSPEC_V1,
+  "Task 7 v1 source pathspec",
+);
+const sourcePathspecSchema = exactOrderedStrings(TASK7_SOURCE_PATHSPEC, "Task 7 source pathspec");
+const verifierPathspecSchema = exactOrderedStrings(
+  TASK7_VERIFIER_PATHSPEC,
+  "Task 7 verifier pathspec",
 );
 
-const task7CheckIdSchema = z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id));
-const task7CheckResultSchema = z.strictObject({
-  id: task7CheckIdSchema,
+const task7CheckIdV1Schema = z.enum(
+  TASK7_PLATFORM_CHECKS_V1.map((check) => check.id) as [string, ...string[]],
+);
+const task7CheckResultV1Schema = z.strictObject({
+  id: task7CheckIdV1Schema,
   status: z.enum(["PASS", "FAIL", "NOT_PROVEN"]),
 });
 
-export const task7PlatformReceiptSchema = z
+export const task7PlatformReceiptV1Schema = z
   .strictObject({
     schemaVersion: z.literal("hpi-task7-platform-receipt.v1"),
     kind: z.literal("hunter-pi/task7-platform-receipt"),
@@ -76,7 +170,7 @@ export const task7PlatformReceiptSchema = z
       repository: z.literal("hunter-pi"),
       commit: commitSchema,
       digest: fingerprintSchema,
-      pathspec: sourcePathspecSchema,
+      pathspec: sourcePathspecV1Schema,
     }),
     environment: z.strictObject({
       platform: z.enum(["win32", "linux"]),
@@ -101,7 +195,7 @@ export const task7PlatformReceiptSchema = z
       expected: z.enum(["WINDOWS_JOB_OBJECT", "POSIX_PROCESS_GROUP"]),
       status: z.enum(["PASS", "NOT_PROVEN"]),
     }),
-    checks: z.array(task7CheckResultSchema).length(TASK7_PLATFORM_CHECKS.length),
+    checks: z.array(task7CheckResultV1Schema).length(TASK7_PLATFORM_CHECKS_V1.length),
     boundaries: z.strictObject({
       fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
       providerRequests: z.literal("NOT_RUN"),
@@ -120,6 +214,88 @@ export const task7PlatformReceiptSchema = z
     if (receipt.containment.expected !== expectedContainment) {
       context.addIssue({ code: "custom", message: "containment does not match platform" });
     }
+    if (
+      JSON.stringify(receipt.checks.map((check) => check.id)) !==
+      JSON.stringify(TASK7_PLATFORM_CHECKS_V1.map((check) => check.id))
+    ) {
+      context.addIssue({ code: "custom", message: "Task 7 v1 checks are not exact" });
+    }
+    if (
+      receipt.status === "PASS" &&
+      (receipt.execution.exitCode !== 0 ||
+        receipt.execution.reportStatus !== "COMPLETE" ||
+        receipt.containment.status !== "PASS" ||
+        receipt.checks.some((check) => check.status !== "PASS"))
+    ) {
+      context.addIssue({ code: "custom", message: "PASS receipt contains an unproven result" });
+    }
+  });
+export type Task7PlatformReceiptV1 = z.infer<typeof task7PlatformReceiptV1Schema>;
+
+const task7CheckIdSchema = z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id));
+const task7CheckResultSchema = z.strictObject({
+  id: task7CheckIdSchema,
+  status: z.enum(["PASS", "FAIL", "NOT_PROVEN", "NOT_RUN"]),
+});
+
+export const task7PlatformReceiptSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-task7-platform-receipt.v2"),
+    kind: z.literal("hunter-pi/task7-platform-receipt"),
+    observedAt: z.iso.datetime({ offset: true }),
+    status: z.enum(["PASS", "FAIL", "NOT_PROVEN"]),
+    source: z.strictObject({
+      repository: z.literal("hunter-pi"),
+      commit: commitSchema,
+      digest: fingerprintSchema,
+      pathspec: sourcePathspecSchema,
+      verifierPathspec: verifierPathspecSchema,
+      verifierFingerprint: fingerprintSchema,
+    }),
+    environment: z.strictObject({
+      platform: z.enum(["win32", "linux"]),
+      platformLabel: z.enum(["WINDOWS", "UBUNTU"]),
+      architecture: z.string().regex(/^[a-z0-9_-]{2,32}$/u),
+      nodeVersion: z.string().regex(/^v24\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u),
+      gitVersion: z.string().regex(/^\d+\.\d+\.\d+(?:\.[A-Za-z0-9.-]+)?$/u),
+    }),
+    execution: z.strictObject({
+      commandFingerprint: fingerprintSchema,
+      testFileFingerprint: fingerprintSchema,
+      startedAt: z.iso.datetime({ offset: true }),
+      endedAt: z.iso.datetime({ offset: true }),
+      durationMs: z.number().int().nonnegative(),
+      exitCode: z.number().int().nullable(),
+      reportStatus: z.enum(["COMPLETE", "NOT_PROVEN"]),
+      stdoutDigest: fingerprintSchema,
+      stderrDigest: fingerprintSchema,
+      observedBytes: z.number().int().nonnegative(),
+    }),
+    containment: z.strictObject({
+      expected: z.enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE"]),
+      status: z.enum(["PASS", "NOT_PROVEN"]),
+    }),
+    checks: z.array(task7CheckResultSchema).length(TASK7_PLATFORM_CHECKS.length),
+    boundaries: z.strictObject({
+      fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+      providerRequests: z.literal("NOT_RUN"),
+      realRepositories: z.literal("NOT_RUN"),
+      privateData: z.literal("EXCLUDED"),
+      remoteCi: z.literal("PENDING"),
+    }),
+  })
+  .superRefine((receipt, context) => {
+    const expectedLabel = receipt.environment.platform === "win32" ? "WINDOWS" : "UBUNTU";
+    const expectedContainment =
+      receipt.environment.platform === "win32"
+        ? "WINDOWS_JOB_OBJECT"
+        : "LINUX_SUBREAPER_PROCESS_TREE";
+    if (receipt.environment.platformLabel !== expectedLabel) {
+      context.addIssue({ code: "custom", message: "platform label does not match platform" });
+    }
+    if (receipt.containment.expected !== expectedContainment) {
+      context.addIssue({ code: "custom", message: "containment does not match platform" });
+    }
     const ids = receipt.checks.map((check) => check.id);
     if (JSON.stringify(ids) !== JSON.stringify(TASK7_PLATFORM_CHECKS.map((check) => check.id))) {
       context.addIssue({
@@ -132,14 +308,20 @@ export const task7PlatformReceiptSchema = z
       (receipt.execution.exitCode !== 0 ||
         receipt.execution.reportStatus !== "COMPLETE" ||
         receipt.containment.status !== "PASS" ||
-        receipt.checks.some((check) => check.status !== "PASS"))
+        receipt.checks.some((result, index) => {
+          const check = TASK7_PLATFORM_CHECKS[index];
+          const expected = check?.platforms.includes(receipt.environment.platform)
+            ? "PASS"
+            : "NOT_RUN";
+          return result.status !== expected;
+        }))
     ) {
       context.addIssue({ code: "custom", message: "PASS receipt contains an unproven result" });
     }
   });
 export type Task7PlatformReceipt = z.infer<typeof task7PlatformReceiptSchema>;
 
-export const task7PlatformFailureReceiptSchema = z.strictObject({
+export const task7PlatformFailureReceiptV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-task7-platform-failure.v1"),
   kind: z.literal("hunter-pi/task7-platform-failure"),
   observedAt: z.iso.datetime({ offset: true }),
@@ -151,6 +333,26 @@ export const task7PlatformFailureReceiptSchema = z.strictObject({
   stdoutDigest: fingerprintSchema,
   stderrDigest: fingerprintSchema,
   observedBytes: z.number().int().nonnegative(),
+  fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+  providerRequests: z.literal("NOT_RUN"),
+  realRepositories: z.literal("NOT_RUN"),
+  remoteCi: z.literal("PENDING"),
+});
+export type Task7PlatformFailureReceiptV1 = z.infer<typeof task7PlatformFailureReceiptV1Schema>;
+
+export const task7PlatformFailureReceiptSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-task7-platform-failure.v2"),
+  kind: z.literal("hunter-pi/task7-platform-failure"),
+  observedAt: z.iso.datetime({ offset: true }),
+  status: z.enum(["FAIL", "NOT_PROVEN"]),
+  platform: z.enum(["win32", "linux", "UNSUPPORTED"]),
+  stage: z.enum(["SOURCE_IDENTITY", "TEST_EXECUTION", "REPORT_PARSE", "EVIDENCE_WRITE"]),
+  code: z.literal("TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE"),
+  exitCode: z.number().int().nullable(),
+  stdoutDigest: fingerprintSchema,
+  stderrDigest: fingerprintSchema,
+  observedBytes: z.number().int().nonnegative(),
+  verifierVersion: z.literal("task7-verifier.v2"),
   fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
   providerRequests: z.literal("NOT_RUN"),
   realRepositories: z.literal("NOT_RUN"),
@@ -177,15 +379,26 @@ const vitestReportSchema = z.looseObject({
 
 export function parseTask7VitestReport(
   input: unknown,
-): { readonly id: (typeof TASK7_PLATFORM_CHECKS)[number]["id"]; readonly status: "PASS" }[] {
+  platform: Task7Platform,
+): {
+  readonly id: (typeof TASK7_PLATFORM_CHECKS)[number]["id"];
+  readonly status: "PASS" | "NOT_RUN";
+}[] {
   const report = vitestReportSchema.parse(input);
   const assertions = report.testResults.flatMap((result) => result.assertionResults);
+  const expectedPassed = TASK7_PLATFORM_CHECKS.filter((check) =>
+    check.platforms.includes(platform),
+  ).length;
+  const expectedPending = TASK7_PLATFORM_CHECKS.length - expectedPassed;
   if (
     report.numTotalTestSuites !== 2 ||
     report.numPassedTestSuites !== 2 ||
     report.numFailedTestSuites !== 0 ||
     report.numPendingTestSuites !== 0 ||
     report.numTotalTests !== TASK7_PLATFORM_CHECKS.length ||
+    report.numPassedTests !== expectedPassed ||
+    report.numFailedTests !== 0 ||
+    report.numPendingTests !== expectedPending ||
     assertions.length !== TASK7_PLATFORM_CHECKS.length
   ) {
     throw new Error("Vitest report did not contain the exact Task 7 platform matrix");
@@ -200,10 +413,12 @@ export function parseTask7VitestReport(
     if (matches.length !== 1) {
       throw new Error("Vitest report did not contain the exact Task 7 platform matrix");
     }
-    if (matches[0]?.status !== "passed") {
+    const applicable = check.platforms.includes(platform);
+    const expectedStatus = applicable ? "passed" : "pending";
+    if (matches[0]?.status !== expectedStatus) {
       throw new Error(`Task 7 platform check ${check.id} did not pass`);
     }
-    return { id: check.id, status: "PASS" as const };
+    return { id: check.id, status: applicable ? ("PASS" as const) : ("NOT_RUN" as const) };
   });
 }
 

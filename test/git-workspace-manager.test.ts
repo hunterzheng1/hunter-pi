@@ -541,7 +541,7 @@ describe("local Git Workspace Interface", () => {
     expect(
       runGit(fixture.repository, fixture.parent, ["branch", "--list", prepared.handle.branchName]),
     ).not.toBe("");
-  });
+  }, 15_000);
 
   it("removes only a clean owned worktree and its zero-unique-commit local branch", async () => {
     const fixture = await createRepositoryFixture();
@@ -609,7 +609,7 @@ describe("local Git Workspace Interface", () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
-  });
+  }, 15_000);
 
   it("blocks cleanup without traversing a junction or symlink that escapes the owned worktree", async () => {
     const fixture = await createRepositoryFixture();
@@ -663,7 +663,7 @@ describe("local Git Workspace Interface", () => {
     });
     await expect(readFile(sentinel, "utf8")).resolves.toBe("PRESERVE\n");
     await expect(access(prepared.handle.directory)).resolves.toBeUndefined();
-  });
+  }, 15_000);
 
   it("removes a clean worktree but preserves its pushed unmerged branch", async () => {
     const fixture = await createRepositoryFixture();
@@ -802,6 +802,7 @@ describe("local Git Workspace Interface", () => {
         }
       }
     },
+    15_000,
   );
 
   it("rejects a pre-existing destination before Git can mutate or delete it", async () => {

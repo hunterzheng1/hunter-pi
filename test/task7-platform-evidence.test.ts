@@ -5,20 +5,23 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runTask7ProbeCommand } from "../tools/task7-platform-probe.js";
+import { assertTask7WorktreeClean, runTask7ProbeCommand } from "../tools/task7-platform-probe.js";
 import {
   compareTask7PlatformEvidence,
-  task7PlatformConsistencySchema,
+  task7PlatformConsistencyV1Schema,
 } from "../tools/compare-task7-platform-evidence.js";
 import {
   TASK7_PLATFORM_CHECKS,
+  TASK7_SOURCE_PATHSPEC,
+  TASK7_VERIFIER_PATHSPEC,
   assertTask7EvidencePrivacy,
   parseTask7VitestReport,
   prepareTask7Output,
   readTask7EvidenceInput,
   resolveTask7OutputPath,
-  task7PlatformFailureReceiptSchema,
+  task7PlatformFailureReceiptV1Schema,
   task7PlatformReceiptSchema,
+  task7PlatformReceiptV1Schema,
 } from "../tools/task7-platform-evidence.js";
 
 const digest = (character: string): `sha256:${string}` => `sha256:${character.repeat(64)}`;
@@ -31,32 +34,36 @@ afterEach(async () => {
   );
 });
 
-function passingReport(): Record<string, unknown> {
+function passingReport(platform: "win32" | "linux"): Record<string, unknown> {
+  const assertions = TASK7_PLATFORM_CHECKS.map((check) => ({
+    ancestorTitles: ["local managed process platform"],
+    title: check.title,
+    status: check.platforms.includes(platform) ? "passed" : "pending",
+  }));
+  const passed = assertions.filter((assertion) => assertion.status === "passed").length;
+  const pending = assertions.length - passed;
   return {
     numTotalTestSuites: 2,
     numPassedTestSuites: 2,
     numFailedTestSuites: 0,
     numPendingTestSuites: 0,
     numTotalTests: TASK7_PLATFORM_CHECKS.length,
-    numPassedTests: TASK7_PLATFORM_CHECKS.length,
+    numPassedTests: passed,
     numFailedTests: 0,
-    numPendingTests: 0,
+    numPendingTests: pending,
     testResults: [
       {
-        assertionResults: TASK7_PLATFORM_CHECKS.map((check) => ({
-          ancestorTitles: ["local managed process platform"],
-          title: check.title,
-          status: "passed",
-        })),
+        assertionResults: assertions,
       },
     ],
   };
 }
 
 function receipt(platform: "win32" | "linux") {
-  const expectedContainment = platform === "win32" ? "WINDOWS_JOB_OBJECT" : "POSIX_PROCESS_GROUP";
+  const expectedContainment =
+    platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE";
   return task7PlatformReceiptSchema.parse({
-    schemaVersion: "hpi-task7-platform-receipt.v1",
+    schemaVersion: "hpi-task7-platform-receipt.v2",
     kind: "hunter-pi/task7-platform-receipt",
     observedAt: "2026-08-04T10:00:00.000Z",
     status: "PASS",
@@ -64,17 +71,9 @@ function receipt(platform: "win32" | "linux") {
       repository: "hunter-pi",
       commit: "a".repeat(40),
       digest: digest("1"),
-      pathspec: [
-        "package-lock.json",
-        "package.json",
-        "packages/domain/src",
-        "packages/execution/src",
-        "packages/workspace/src",
-        "test/file-lease-manager.test.ts",
-        "test/git-workspace-manager.test.ts",
-        "test/managed-process-host.test.ts",
-        "test/managed-process-platform.test.ts",
-      ],
+      pathspec: TASK7_SOURCE_PATHSPEC,
+      verifierPathspec: TASK7_VERIFIER_PATHSPEC,
+      verifierFingerprint: digest("6"),
     },
     environment: {
       platform,
@@ -96,7 +95,10 @@ function receipt(platform: "win32" | "linux") {
       observedBytes: 2048,
     },
     containment: { expected: expectedContainment, status: "PASS" },
-    checks: TASK7_PLATFORM_CHECKS.map((check) => ({ id: check.id, status: "PASS" })),
+    checks: TASK7_PLATFORM_CHECKS.map((check) => ({
+      id: check.id,
+      status: check.platforms.includes(platform) ? "PASS" : "NOT_RUN",
+    })),
     boundaries: {
       fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
       providerRequests: "NOT_RUN",
@@ -108,24 +110,27 @@ function receipt(platform: "win32" | "linux") {
 }
 
 describe("Task 7 platform Evidence", () => {
-  it("accepts exactly the six passing platform assertions and rejects missing or skipped cases", () => {
-    expect(parseTask7VitestReport(passingReport())).toEqual(
-      TASK7_PLATFORM_CHECKS.map((check) => ({ id: check.id, status: "PASS" })),
+  it("accepts exactly the platform-applicable matrix and rejects missing or wrongly skipped cases", () => {
+    expect(parseTask7VitestReport(passingReport("linux"), "linux")).toEqual(
+      TASK7_PLATFORM_CHECKS.map((check) => ({
+        id: check.id,
+        status: check.platforms.includes("linux") ? "PASS" : "NOT_RUN",
+      })),
     );
 
-    const missing = passingReport();
+    const missing = passingReport("win32");
     const result = missing["testResults"] as { assertionResults: unknown[] }[];
     result[0]?.assertionResults.pop();
-    expect(() => parseTask7VitestReport(missing)).toThrow(/exact Task 7 platform matrix/u);
+    expect(() => parseTask7VitestReport(missing, "win32")).toThrow(/exact Task 7 platform matrix/u);
 
-    const skipped = passingReport();
+    const skipped = passingReport("win32");
     const skippedResults = skipped["testResults"] as {
       assertionResults: { status: string }[];
     }[];
     if (skippedResults[0]?.assertionResults[0] !== undefined) {
       skippedResults[0].assertionResults[0].status = "pending";
     }
-    expect(() => parseTask7VitestReport(skipped)).toThrow(/did not pass/u);
+    expect(() => parseTask7VitestReport(skipped, "win32")).toThrow(/did not pass/u);
   });
 
   it("compares exact Windows and Ubuntu identities without converting pending CI into PASS", () => {
@@ -134,11 +139,12 @@ describe("Task 7 platform Evidence", () => {
     const compared = compareTask7PlatformEvidence(windows, ubuntu, "2026-08-04T10:01:00.000Z");
 
     expect(compared).toMatchObject({
-      schemaVersion: "hpi-task7-platform-consistency.v1",
+      schemaVersion: "hpi-task7-platform-consistency.v2",
       status: "PASS",
       platforms: ["win32", "linux"],
+      sourceCommit: "a".repeat(40),
       sourceDigest: digest("1"),
-      checks: TASK7_PLATFORM_CHECKS.map((check) => ({ id: check.id, status: "PASS" })),
+      verifierFingerprint: digest("6"),
       remoteCi: "PENDING",
     });
     expect(() =>
@@ -153,6 +159,37 @@ describe("Task 7 platform Evidence", () => {
         source: { ...ubuntu.source, commit: "b".repeat(40) },
       }),
     ).toThrow(/same source commit/u);
+    expect(() =>
+      compareTask7PlatformEvidence(windows, {
+        ...ubuntu,
+        source: { ...ubuntu.source, verifierFingerprint: digest("9") },
+      }),
+    ).toThrow(/same verifier fingerprint/u);
+  });
+
+  it("rejects an unrelated untracked file before hashing the Task 7 input set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hpi-t7-clean-fixture-"));
+    cleanupRoots.push(root);
+    await writeFile(join(root, "tracked.txt"), "tracked\n", "utf8");
+    for (const args of [
+      ["init"],
+      ["add", "tracked.txt"],
+      [
+        "-c",
+        "user.name=Hunter Pi Test",
+        "-c",
+        "user.email=hunter-pi@example.invalid",
+        "commit",
+        "-m",
+        "fixture",
+      ],
+    ]) {
+      const result = await runTask7ProbeCommand("git", args, root);
+      expect(result.exitCode).toBe(0);
+    }
+    await expect(assertTask7WorktreeClean(root)).resolves.toBeUndefined();
+    await writeFile(join(root, "unrelated.txt"), "must block\n", "utf8");
+    await expect(assertTask7WorktreeClean(root)).rejects.toThrow(/entire worktree is not clean/u);
   });
 
   it("rejects device-local paths and credential-shaped content even inside schema-valid text", () => {
@@ -277,32 +314,25 @@ describe("Task 7 platform Evidence", () => {
       readJson("local-consistency-attempt-2.json"),
     ]);
 
-    expect(task7PlatformFailureReceiptSchema.parse(failed)).toMatchObject({
+    expect(task7PlatformFailureReceiptV1Schema.parse(failed)).toMatchObject({
       status: "NOT_PROVEN",
       stage: "REPORT_PARSE",
       exitCode: 0,
     });
-    expect(task7PlatformReceiptSchema.parse(preliminary)).toMatchObject({
+    expect(task7PlatformReceiptV1Schema.parse(preliminary)).toMatchObject({
       status: "PASS",
       source: { commit: "bdf1b01a3ffb9c9b7a2bd6a6a485588071456841" },
     });
-    const parsedWindows = task7PlatformReceiptSchema.parse(windows);
-    const parsedUbuntu = task7PlatformReceiptSchema.parse(ubuntu);
+    const parsedWindows = task7PlatformReceiptV1Schema.parse(windows);
+    const parsedUbuntu = task7PlatformReceiptV1Schema.parse(ubuntu);
     expect(parsedWindows.source.commit).toBe("760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10");
     expect(parsedUbuntu.source.commit).toBe(parsedWindows.source.commit);
-    const parsedConsistency = task7PlatformConsistencySchema.parse(consistency);
-    expect(
-      compareTask7PlatformEvidence(parsedWindows, parsedUbuntu, parsedConsistency.observedAt),
-    ).toEqual(parsedConsistency);
-    const parsedHardenedWindows = task7PlatformReceiptSchema.parse(hardenedWindows);
-    const parsedHardenedConsistency = task7PlatformConsistencySchema.parse(hardenedConsistency);
-    expect(
-      compareTask7PlatformEvidence(
-        parsedHardenedWindows,
-        parsedUbuntu,
-        parsedHardenedConsistency.observedAt,
-      ),
-    ).toEqual(parsedHardenedConsistency);
+    const parsedConsistency = task7PlatformConsistencyV1Schema.parse(consistency);
+    expect(parsedConsistency.sourceDigest).toBe(parsedWindows.source.digest);
+    const parsedHardenedWindows = task7PlatformReceiptV1Schema.parse(hardenedWindows);
+    const parsedHardenedConsistency = task7PlatformConsistencyV1Schema.parse(hardenedConsistency);
+    expect(parsedHardenedConsistency.sourceDigest).toBe(parsedHardenedWindows.source.digest);
+    expect(() => compareTask7PlatformEvidence(parsedWindows, parsedUbuntu)).toThrow();
     for (const value of [
       failed,
       preliminary,

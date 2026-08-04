@@ -84,7 +84,7 @@ Ubuntu runs the same provider-neutral contracts with a subreaper-owned process t
 
 ### Cluster 5 — Evidence and closeout
 
-- generate a strict redacted Task 7 Evidence envelope from deterministic fixture results;
+- generate strict redacted Task 7 Evidence v2 envelopes that bind the exact clean source commit, full implementation/test/config/CI input set, and a distinct verifier fingerprint;
 - scan for credential-shaped content, raw private prompts, and device-local absolute paths;
 - run focused suites, full `npm run verify`, and `git diff --check`;
 - obtain an independent code review;

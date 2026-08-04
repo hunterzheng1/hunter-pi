@@ -69,6 +69,15 @@ export {
   type RunPiPublicInterfaceProbeOptions,
 } from "./probe.js";
 export {
+  PiOperationReplayConflictError,
+  Task6PiEngineHost,
+  runTask6PiJsonProcess,
+  task6PiProcessResultSchema,
+  type Task6PiEngineHostOptions,
+  type Task6PiProcessRequest,
+  type Task6PiProcessResult,
+} from "./task6-engine-host.js";
+export {
   PI_CANDIDATE,
   PI_PROBE_BUILT_EXECUTION_FILES,
   PI_PROBE_SOURCE_FILES,

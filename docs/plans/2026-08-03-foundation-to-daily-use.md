@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_6_LOCAL_GO / REMOTE_CI_PENDING / TASK_7_NOT_STARTED`
-- Active task: `TASK_6_CLOSEOUT` (the exact disposable-fixture request and local gates passed; push, Windows/Ubuntu CI, merge, and branch cleanup remain)
+- Current repository phase: `TASK_6_MERGED_MAIN_CI_PASS / TASK_7_ACTIVE`
+- Active task: `TASK_7_WORKTREE_LEASE_PROCESS_HOST`
 - First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; EXACT_TASK_6_REQUEST_DETECTED; BROADER_PROVIDER_RELIABILITY_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
@@ -202,7 +202,7 @@ Preregistered Task 6 scorecard:
 
 Outcome is deterministic: **GO** only if every item passes; **REVISE** if all zero-tolerance and correctness conditions pass but the intervention or overhead target misses; **STOP** on any zero-tolerance failure or a required public-interface blocker. Real user repositories remain prohibited until Task 7 passes its containment gates.
 
-Implementation status on 2026-08-04: **LOCAL GO / PR CI PASS / MERGE PENDING**. The first real disposable-fixture run preserved the required execution, verification, review, and cleanup history, but did not retain Pi captured-output bytes and assigned the full 262144-byte Run limit independently to Pi and each verifier; its premature `GO` was superseded without erasing the run. The correction partitions the same frozen total into 229376 bytes for Pi and 16384 bytes for each verifier, records provider-neutral output usage, sums every component, and makes failed or missing reconciliation blocking. A separately authorized corrected request from clean source `e36ee52764065cea02982962e2f84ff9ed3d0034` then passed with 90476 Pi bytes plus 17 and 13 verifier bytes, 90506 total, zero findings, and successful cleanup. Product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` passed PR #15 run `30884876277` on Windows, Ubuntu, and the aggregate Evidence identity gate; merge and main CI remain pending.
+Implementation status on 2026-08-04: **MERGED / MAIN CI PASS**. The first real disposable-fixture run preserved the required execution, verification, review, and cleanup history, but did not retain Pi captured-output bytes and assigned the full 262144-byte Run limit independently to Pi and each verifier; its premature `GO` was superseded without erasing the run. The correction partitions the same frozen total into 229376 bytes for Pi and 16384 bytes for each verifier, records provider-neutral output usage, sums every component, and makes failed or missing reconciliation blocking. A separately authorized corrected request from clean source `e36ee52764065cea02982962e2f84ff9ed3d0034` then passed with 90476 Pi bytes plus 17 and 13 verifier bytes, 90506 total, zero findings, and successful cleanup. Product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` and documentation commit `3c4d5e5200f29a70a607fa6d40be63a6c99b92c9` passed their PR gates; PR #15 merged as `b77937f689bca859a29c7df22025ce12e875bda4`, and exact main run `30886919708` passed Windows, Ubuntu, and aggregate Evidence identity.
 
 ## Task 7 — Git worktree, leases, and managed process host
 
@@ -218,6 +218,8 @@ Deliverables:
 - branch-hygiene receipts.
 
 Stop on any reproducible source-loss, escaped process tree, or ambiguous cleanup result.
+
+Detailed execution: [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md).
 
 ## Task 8 — Verification adequacy and review/fixback
 

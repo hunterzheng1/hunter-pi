@@ -2,13 +2,16 @@
 
 ## Status
 
-Tasks 0–5 are complete within the bounded interactive developer-preview milestone. Task 6 has a bounded local `GO` from exact clean product source `e36ee52764065cea02982962e2f84ff9ed3d0034`: after preserving the first run's resource-accounting gap, a separately authorized request ran only in an automatically created disposable Git fixture, retained the failed Attempt, kept Agent return observational, passed independent verification and deterministic review, reconciled 90506 captured bytes against the 262144-byte Run budget, and cleaned up. Product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` passed PR #15 run `30884876277` on Windows, Ubuntu, and the aggregate identity gate. Merge/main CI is still pending, broader Provider reliability is not proven, and real repositories stay prohibited until Task 7.
+Tasks 0–6 are complete within their recorded bounds. Task 6 product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` passed PR #15, documentation HEAD `3c4d5e5200f29a70a607fa6d40be63a6c99b92c9` passed the final PR gates, and merge `b77937f689bca859a29c7df22025ce12e875bda4` passed exact Windows, Ubuntu, and aggregate Evidence main CI. The real request remains bounded to its disposable fixture; broader Provider reliability and real-repository safety are not proven.
+
+Task 7 is the only active task. Its detailed execution and hard-stop rules are frozen in [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md). Real repositories and Provider requests remain prohibited during Task 7.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 
 The next implementation sequence is defined in:
 
 - [2026-08-03 — Foundation to daily use](2026-08-03-foundation-to-daily-use.md)
+- [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md)
 
 Only one task is active at a time. Selecting a task does not authorize later tasks, a Pi/OMP fork, desktop work, publishing, paid model use, or external production writes unless the owner explicitly expands the scope.
 

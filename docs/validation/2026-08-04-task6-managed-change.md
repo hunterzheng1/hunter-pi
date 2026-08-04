@@ -6,8 +6,8 @@
 - Local platform: Windows / Node.js 24
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Provider authentication metadata: **DETECTED**
-- Real Provider request: **AUTHORIZED / NOT_RUN**
-- Task result: **PENDING**
+- Real Provider request: **DETECTED within the exact disposable fixture run**
+- Task result: **LOCAL GO / REMOTE CI PENDING**
 
 ## Frozen outcome and non-goals
 
@@ -78,4 +78,19 @@ The artifact must not contain credential values, cookies, authorization headers,
 - Hunter-only overhead, excluding Agent and declared-check runtime, is at most ten minutes;
 - final summary identifies every required check, Attempt, blocking finding, and unresolved risk.
 
-Result is **GO** only if every item passes; **REVISE** if correctness and all zero-tolerance items pass but intervention or overhead misses; **STOP** for a zero-tolerance failure or required public-interface blocker. Until this artifact is populated from the real run and all gates pass, Task 6 remains `PENDING` and real repositories remain prohibited.
+Result is **GO** only if every item passes; **REVISE** if correctness and all zero-tolerance items pass but intervention or overhead misses; **STOP** for a zero-tolerance failure or required public-interface blocker.
+
+## Observed result
+
+The one authorized request ran from the clean packaged product source `164fc28ac423ac3cdccf91b9a7f0c36ca51612df` through `hpi managed fixture --json`. The Provider request returned an `APPLIED` operation receipt and Pi emitted 53 bounded JSON records. Those facts are evidence of this exact request only, not a general Provider capability or production-readiness claim.
+
+- Attempt 1: `INCOMPLETE / FAILED`, preserved with its exact failure Evidence;
+- Agent return: observed while the Change was `VERIFYING`;
+- Attempt 2: `RETURNED / PASSED` after independent `node verify.mjs` execution;
+- deterministic review: `PASS`, zero blocking findings, no extra mutation;
+- fixture cleanup: `PASS`;
+- scorecard: zero false `READY`, source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `462.1939 ms`;
+- full local `npm run verify`: `PASS` on the exact implementation source before the request;
+- Windows/Ubuntu remote CI: `PENDING` until this branch is pushed.
+
+The committed Evidence artifact SHA-256 is `6fc88c7e86bdcd5605c98adba12e9a2a007f7a45f138ed29a38b4b221a4ee718`. Its strict schema, retained-content hashes, path privacy, prompt exclusion, and credential-shaped text checks pass locally. Task 6 therefore has a local `GO`; real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.

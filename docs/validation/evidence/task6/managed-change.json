@@ -1,0 +1,599 @@
+{
+  "schemaVersion": "hpi-task6-managed-change.v1",
+  "observedAt": "2026-08-04T05:33:41.188Z",
+  "taskResult": "GO",
+  "productSource": {
+    "commit": "164fc28ac423ac3cdccf91b9a7f0c36ca51612df",
+    "state": "CLEAN"
+  },
+  "engineRelease": {
+    "packageName": "@earendil-works/pi-coding-agent",
+    "version": "0.83.0"
+  },
+  "provider": {
+    "id": "openai-codex",
+    "authStatus": "DETECTED",
+    "requestStatus": "DETECTED",
+    "promptFingerprint": "sha256:a44fce084f7ee994aedf0c0e59c0f048f4b48cb0260c1f69170ddb78b2b16b31"
+  },
+  "fixture": {
+    "fixturePolicy": "AUTOMATIC_TEMPORARY_GIT_ONLY",
+    "baseCommit": "1843a6815b0cd2b9968263ab68434f48ec18a959",
+    "includePaths": ["result.txt"],
+    "excludePaths": ["scratch.txt"],
+    "dirtyPaths": ["result.txt", "scratch.txt"],
+    "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+    "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+    "excludedContentFingerprint": "sha256:f876633d5daf0aa3732b1619ac6bd30ab6fdb0c5b164b7ebb7c4e6a8a5741e9e"
+  },
+  "capabilityReceipt": {
+    "schemaVersion": "1.0.0",
+    "observedAt": "2026-08-04T05:33:29.525Z",
+    "results": [
+      {
+        "capability": "START_ATTEMPT",
+        "status": "SUPPORTED"
+      },
+      {
+        "capability": "SEND_INPUT",
+        "status": "SUPPORTED"
+      },
+      {
+        "capability": "OBSERVE",
+        "status": "SUPPORTED"
+      },
+      {
+        "capability": "CLOSE",
+        "status": "SUPPORTED"
+      }
+    ]
+  },
+  "operationReceipts": [
+    {
+      "schemaVersion": "1.0.0",
+      "operationReceiptId": "opreceipt_task6-start",
+      "operationId": "op_task6-start",
+      "fingerprint": "sha256:cdd5dae58eda36fbece4159c1cc8a001b6e4398b84bcf593ce038e4d29155177",
+      "outcome": "APPLIED",
+      "observedEffects": ["engine-handle-created"],
+      "observedAt": "2026-08-04T05:33:29.528Z"
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "operationReceiptId": "opreceipt_task6-send",
+      "operationId": "op_task6-send",
+      "fingerprint": "sha256:a44fce084f7ee994aedf0c0e59c0f048f4b48cb0260c1f69170ddb78b2b16b31",
+      "outcome": "APPLIED",
+      "observedEffects": ["agent-operation-returned"],
+      "observedAt": "2026-08-04T05:33:40.855Z"
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "operationReceiptId": "opreceipt_task6-close",
+      "operationId": "op_task6-close",
+      "fingerprint": "sha256:acbd26e18a202fbe627c8c5b6c49c8a203895ea130d70feb508349b0b2655e03",
+      "outcome": "APPLIED",
+      "observedEffects": ["engine-handle-closed"],
+      "observedAt": "2026-08-04T05:33:40.856Z"
+    }
+  ],
+  "lifecycleAfterAgentReturn": "VERIFYING",
+  "projection": {
+    "schemaVersion": "1.0.0",
+    "change": {
+      "schemaVersion": "1.0.0",
+      "changeId": "chg_task6",
+      "title": "Verify one disposable Hunter Pi Managed Change",
+      "goal": "Make result.txt pass the declared independent check",
+      "nonGoals": ["Mutate a real repository", "Commit, push, publish, or deploy"],
+      "constraints": [
+        "Only result.txt may change",
+        "scratch.txt remains explicitly excluded",
+        "One real Pi Agent request is permitted"
+      ],
+      "lifecycle": "READY",
+      "createdAt": "2026-08-04T05:33:29.204Z"
+    },
+    "planRevision": {
+      "schemaVersion": "1.0.0",
+      "planRevisionId": "plan_task6",
+      "changeId": "chg_task6",
+      "revision": 1,
+      "workspaceId": "workspace_task6",
+      "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "goal": "Make result.txt pass the declared independent check",
+      "nonGoals": ["Mutate a real repository", "Commit, push, publish, or deploy"],
+      "constraints": [
+        "Only result.txt may change",
+        "scratch.txt remains explicitly excluded",
+        "One real Pi Agent request is permitted"
+      ],
+      "steps": [
+        {
+          "stepId": "step_task6-agent",
+          "title": "Fix the disposable result through Pi",
+          "dependsOn": [],
+          "required": true,
+          "inputContractFingerprint": "sha256:3085e7d5e80320c395971977cf56775b4c38ea022d30072ddf119acd0c37e504",
+          "outputContractFingerprint": "sha256:cc7f419e131e37691ecfe900a02ddc0e37f4ec10d09dff5a58c15accba1f36f7",
+          "kind": "agent"
+        },
+        {
+          "stepId": "step_task6-review",
+          "title": "Review exact fixture mutations",
+          "dependsOn": ["step_task6-agent"],
+          "required": true,
+          "inputContractFingerprint": "sha256:9c572e1b1c6032299b527f8586c32d25bcb20a4d8f544d65898a1c9e56c92915",
+          "outputContractFingerprint": "sha256:085ef68a5b814f18fe16af097426bdea8a41fe2afb6d2f5f22536c52089c0c5e",
+          "kind": "review",
+          "inputFingerprint": "sha256:fe717ff620fe3d978b817244fcdbd6d1db00152330edf1f14792de46184b632c",
+          "reviewDefinitionFingerprint": "sha256:0369b54cb5597c76435cace918e52c3c41f286391f31b675e87be495438dab6b",
+          "configurationFingerprint": "sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a"
+        }
+      ],
+      "checks": [
+        {
+          "checkId": "check_task6-result",
+          "version": 1,
+          "label": "Disposable result check",
+          "kind": "command",
+          "required": true,
+          "definition": {
+            "executable": "node",
+            "argv": ["verify.mjs"],
+            "workingDirectoryReference": "fixture-repository"
+          },
+          "definitionFingerprint": "sha256:5799272c7c837fc9515188dd9f3368cc6ed0aa6da5ea10885ed90b2173f6a310",
+          "configurationFingerprint": "sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a"
+        }
+      ],
+      "loopPolicy": {
+        "maxIterations": 2,
+        "maxElapsedMs": 600000,
+        "repeatedFailureLimit": 2,
+        "resourceBudgets": {
+          "maxAgentTurns": 1,
+          "maxExternalOperations": 4,
+          "maxCommands": 2,
+          "maxOutputBytes": 262144
+        },
+        "stopOnUserInput": true,
+        "stopOnWorkspaceDrift": true
+      },
+      "createdAt": "2026-08-04T05:33:29.204Z"
+    },
+    "run": {
+      "schemaVersion": "1.0.0",
+      "runId": "run_task6",
+      "changeId": "chg_task6",
+      "planRevisionId": "plan_task6",
+      "workspaceId": "workspace_task6",
+      "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "lifecycle": "READY",
+      "archiveStatus": "UNARCHIVED",
+      "startedAt": "2026-08-04T05:33:29.204Z"
+    },
+    "attempts": [
+      {
+        "schemaVersion": "1.0.0",
+        "attemptId": "att_task6-1",
+        "runId": "run_task6",
+        "planRevisionId": "plan_task6",
+        "sequence": 1,
+        "elapsedMsAtStart": 0,
+        "remainingResourceBudgets": {
+          "maxAgentTurns": 1,
+          "maxExternalOperations": 4,
+          "maxCommands": 2,
+          "maxOutputBytes": 262144
+        },
+        "executionStatus": "INCOMPLETE",
+        "verificationStatus": "FAILED",
+        "startedAt": "2026-08-04T05:33:29.211Z"
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "attemptId": "att_task6-2",
+        "runId": "run_task6",
+        "planRevisionId": "plan_task6",
+        "sequence": 2,
+        "previousAttemptId": "att_task6-1",
+        "failureEvidenceIds": ["evidence_task6-verify-1"],
+        "retryReason": "Apply one bounded Pi fixback for the exact failed result check.",
+        "precedingFailureFingerprint": "sha256:8acd38e24dc5864cbaa631f70a759fc7fd53cc2eeaa1d233e17d2b390fa2b49e",
+        "retryStopConditions": {
+          "userInputRequired": false,
+          "workspaceDriftDetected": false
+        },
+        "elapsedMsAtStart": 1,
+        "remainingResourceBudgets": {
+          "maxAgentTurns": 1,
+          "maxExternalOperations": 4,
+          "maxCommands": 1,
+          "maxOutputBytes": 262127
+        },
+        "executionStatus": "RETURNED",
+        "verificationStatus": "PASSED",
+        "startedAt": "2026-08-04T05:33:29.523Z"
+      }
+    ],
+    "observations": [
+      {
+        "schemaVersion": "1.0.0",
+        "observationId": "obs_task6-preparation",
+        "runId": "run_task6",
+        "attemptId": "att_task6-1",
+        "kind": "PROCESS_EXITED",
+        "observedAt": "2026-08-04T05:33:29.216Z",
+        "summary": "The deliberate fixture preparation process exited; Verification is required.",
+        "evidenceIds": ["evidence_task6-preparation"]
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "observationId": "obs_task6-agent-1",
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "stepId": "step_task6-agent",
+        "kind": "OUTPUT_CAPTURED",
+        "observedAt": "2026-08-04T05:33:40.855Z",
+        "summary": "Pi JSON emitted 53 bounded records; content retained by digest only.",
+        "evidenceIds": ["evidence_task6-agent"]
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "observationId": "obs_task6-agent-2",
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "stepId": "step_task6-agent",
+        "kind": "AGENT_RETURNED",
+        "observedAt": "2026-08-04T05:33:40.855Z",
+        "summary": "Pi emitted agent_end; independent Verification is still required.",
+        "evidenceIds": ["evidence_task6-agent"]
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "observationId": "obs_task6-agent-3",
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "stepId": "step_task6-agent",
+        "kind": "PROCESS_EXITED",
+        "observedAt": "2026-08-04T05:33:40.855Z",
+        "summary": "Pi process exit was observed with code 0; it is not a success result.",
+        "evidenceIds": ["evidence_task6-agent"]
+      }
+    ],
+    "verificationReceipts": [
+      {
+        "schemaVersion": "1.0.0",
+        "verificationReceiptId": "verify_task6-1",
+        "runId": "run_task6",
+        "attemptId": "att_task6-1",
+        "checkId": "check_task6-result",
+        "checkVersion": 1,
+        "checkDefinitionFingerprint": "sha256:5799272c7c837fc9515188dd9f3368cc6ed0aa6da5ea10885ed90b2173f6a310",
+        "resultFingerprint": "sha256:8acd38e24dc5864cbaa631f70a759fc7fd53cc2eeaa1d233e17d2b390fa2b49e",
+        "outcome": "FAIL",
+        "startedAt": "2026-08-04T05:33:29.389Z",
+        "endedAt": "2026-08-04T05:33:29.519Z",
+        "observedAt": "2026-08-04T05:33:29.519Z",
+        "inputFingerprint": "sha256:d2607a1e9941762fdbf96764c09dafcb1da3f99b23d0dee5efd399acc065a510",
+        "configFingerprint": "sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a",
+        "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+        "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+        "environmentFingerprint": "sha256:ba33c3dd628f51a322775b67360991c81ce7f807b5bc32b1c83314a565a8cc9e",
+        "resultStatus": {
+          "kind": "EXIT_CODE",
+          "exitCode": 1,
+          "timedOut": false
+        },
+        "output": {
+          "stdoutDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrDigest": "sha256:729d9d34f1d516be23ecddd870ae6808a50cc5749da3920968d37594379826ea",
+          "artifactDigests": [],
+          "capturedBytes": 17,
+          "stdoutTruncated": false,
+          "stderrTruncated": false,
+          "redaction": {
+            "applied": true,
+            "fieldsRemoved": 2
+          }
+        },
+        "evidenceIds": ["evidence_task6-verify-1"]
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "verificationReceiptId": "verify_task6-2",
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "checkId": "check_task6-result",
+        "checkVersion": 1,
+        "checkDefinitionFingerprint": "sha256:5799272c7c837fc9515188dd9f3368cc6ed0aa6da5ea10885ed90b2173f6a310",
+        "resultFingerprint": "sha256:be1e72b96eb118a1800fee2c15a2450663267dfe01151c2e845c40cae7f33381",
+        "outcome": "PASS",
+        "startedAt": "2026-08-04T05:33:41.04Z",
+        "endedAt": "2026-08-04T05:33:41.102Z",
+        "observedAt": "2026-08-04T05:33:41.102Z",
+        "inputFingerprint": "sha256:71dd38be71070d990da2a52e9c7265303ef1248be60cf71b41073853eefb4c67",
+        "configFingerprint": "sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a",
+        "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+        "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+        "environmentFingerprint": "sha256:ba33c3dd628f51a322775b67360991c81ce7f807b5bc32b1c83314a565a8cc9e",
+        "resultStatus": {
+          "kind": "EXIT_CODE",
+          "exitCode": 0,
+          "timedOut": false
+        },
+        "output": {
+          "stdoutDigest": "sha256:2a7374b31a2d44164e33dd0e6e1f5a3174b73b05c1a94200e5bf7baeedf488ee",
+          "stderrDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "artifactDigests": [],
+          "capturedBytes": 13,
+          "stdoutTruncated": false,
+          "stderrTruncated": false,
+          "redaction": {
+            "applied": true,
+            "fieldsRemoved": 2
+          }
+        },
+        "evidenceIds": ["evidence_task6-verify-2"]
+      }
+    ],
+    "humanReceipts": [],
+    "reviewReceipts": [
+      {
+        "schemaVersion": "1.0.0",
+        "reviewReceiptId": "review_task6",
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "stepId": "step_task6-review",
+        "inputFingerprint": "sha256:fe717ff620fe3d978b817244fcdbd6d1db00152330edf1f14792de46184b632c",
+        "reviewDefinitionFingerprint": "sha256:0369b54cb5597c76435cace918e52c3c41f286391f31b675e87be495438dab6b",
+        "configurationFingerprint": "sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a",
+        "workspaceFingerprint": "sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af",
+        "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+        "resultFingerprint": "sha256:013af55c7456db8bfe2b76184668cc1db1aa2d17ee18d54a57e09f3540c09d40",
+        "outcome": "PASS",
+        "observedAt": "2026-08-04T05:33:41.182Z",
+        "findings": [],
+        "evidenceIds": ["evidence_task6-review"]
+      }
+    ],
+    "checkpoints": [],
+    "checks": [
+      {
+        "schemaVersion": "1.0.0",
+        "checkId": "check_task6-result",
+        "required": true,
+        "status": "PASS"
+      }
+    ],
+    "eventCursor": 10
+  },
+  "evidence": [
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-preparation",
+      "kind": "observation",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-1"
+      },
+      "createdAt": "2026-08-04T05:33:29.214Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:85e0efc8ea924cf67aecf022d46de6b6af17f3ffaba6b722e138d9141294f6f1",
+      "summary": "The deliberate failing fixture preparation completed.",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "{\"fixturePolicy\":\"AUTOMATIC_TEMPORARY_GIT_ONLY\",\"dirtyPaths\":[\"result.txt\",\"scratch.txt\"],\"deliberateFailure\":true}",
+        "capturedBytes": 115,
+        "totalBytes": 115,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 115
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-verify-1",
+      "kind": "verification",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-1",
+        "verificationReceiptId": "verify_task6-1"
+      },
+      "createdAt": "2026-08-04T05:33:29.521Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:3c2cb3fdfba510ef29080eec7161711c3c802454ebfc95bf27834b21b00617ca",
+      "summary": "Attempt 1 independent command Verification failed as preregistered.",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "{\"schemaVersion\":\"1.0.0\",\"verificationReceiptId\":\"verify_task6-1\",\"runId\":\"run_task6\",\"attemptId\":\"att_task6-1\",\"checkId\":\"check_task6-result\",\"checkVersion\":1,\"checkDefinitionFingerprint\":\"sha256:5799272c7c837fc9515188dd9f3368cc6ed0aa6da5ea10885ed90b2173f6a310\",\"resultFingerprint\":\"sha256:8acd38e24dc5864cbaa631f70a759fc7fd53cc2eeaa1d233e17d2b390fa2b49e\",\"outcome\":\"FAIL\",\"startedAt\":\"2026-08-04T05:33:29.389Z\",\"endedAt\":\"2026-08-04T05:33:29.519Z\",\"observedAt\":\"2026-08-04T05:33:29.519Z\",\"inputFingerprint\":\"sha256:d2607a1e9941762fdbf96764c09dafcb1da3f99b23d0dee5efd399acc065a510\",\"configFingerprint\":\"sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a\",\"workspaceFingerprint\":\"sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af\",\"sourceFingerprint\":\"sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94\",\"environmentFingerprint\":\"sha256:ba33c3dd628f51a322775b67360991c81ce7f807b5bc32b1c83314a565a8cc9e\",\"resultStatus\":{\"kind\":\"EXIT_CODE\",\"exitCode\":1,\"timedOut\":false},\"output\":{\"stdoutDigest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"stderrDigest\":\"sha256:729d9d34f1d516be23ecddd870ae6808a50cc5749da3920968d37594379826ea\",\"artifactDigests\":[],\"capturedBytes\":17,\"stdoutTruncated\":false,\"stderrTruncated\":false,\"redaction\":{\"applied\":true,\"fieldsRemoved\":2}},\"evidenceIds\":[\"evidence_task6-verify-1\"]}",
+        "capturedBytes": 1399,
+        "totalBytes": 1399,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 1399
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-agent",
+      "kind": "observation",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-2"
+      },
+      "createdAt": "2026-08-04T05:33:40.856Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:92f724c655fbe6007f3bb481f45d89d3a98682043bf4436e3ee9de4699d640b6",
+      "summary": "The bounded Pi Agent operation returned provider-neutral observations.",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "{\"startOperation\":{\"schemaVersion\":\"1.0.0\",\"operationReceiptId\":\"opreceipt_task6-start\",\"operationId\":\"op_task6-start\",\"fingerprint\":\"sha256:cdd5dae58eda36fbece4159c1cc8a001b6e4398b84bcf593ce038e4d29155177\",\"outcome\":\"APPLIED\",\"observedEffects\":[\"engine-handle-created\"],\"observedAt\":\"2026-08-04T05:33:29.528Z\"},\"sendOperation\":{\"schemaVersion\":\"1.0.0\",\"operationReceiptId\":\"opreceipt_task6-send\",\"operationId\":\"op_task6-send\",\"fingerprint\":\"sha256:a44fce084f7ee994aedf0c0e59c0f048f4b48cb0260c1f69170ddb78b2b16b31\",\"outcome\":\"APPLIED\",\"observedEffects\":[\"agent-operation-returned\"],\"observedAt\":\"2026-08-04T05:33:40.855Z\"},\"closeOperation\":{\"schemaVersion\":\"1.0.0\",\"operationReceiptId\":\"opreceipt_task6-close\",\"operationId\":\"op_task6-close\",\"fingerprint\":\"sha256:acbd26e18a202fbe627c8c5b6c49c8a203895ea130d70feb508349b0b2655e03\",\"outcome\":\"APPLIED\",\"observedEffects\":[\"engine-handle-closed\"],\"observedAt\":\"2026-08-04T05:33:40.856Z\"},\"observationKinds\":[\"OUTPUT_CAPTURED\",\"AGENT_RETURNED\",\"PROCESS_EXITED\"]}",
+        "capturedBytes": 1006,
+        "totalBytes": 1006,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 1006
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-verify-2",
+      "kind": "verification",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-2",
+        "verificationReceiptId": "verify_task6-2"
+      },
+      "createdAt": "2026-08-04T05:33:41.102Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:f3e66f6c6286b997684d0604f70c2b936a4cdb36f3832593dec4bbd2f85f6637",
+      "summary": "Attempt 2 independent command Verification returned PASS.",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "{\"schemaVersion\":\"1.0.0\",\"verificationReceiptId\":\"verify_task6-2\",\"runId\":\"run_task6\",\"attemptId\":\"att_task6-2\",\"checkId\":\"check_task6-result\",\"checkVersion\":1,\"checkDefinitionFingerprint\":\"sha256:5799272c7c837fc9515188dd9f3368cc6ed0aa6da5ea10885ed90b2173f6a310\",\"resultFingerprint\":\"sha256:be1e72b96eb118a1800fee2c15a2450663267dfe01151c2e845c40cae7f33381\",\"outcome\":\"PASS\",\"startedAt\":\"2026-08-04T05:33:41.040Z\",\"endedAt\":\"2026-08-04T05:33:41.102Z\",\"observedAt\":\"2026-08-04T05:33:41.102Z\",\"inputFingerprint\":\"sha256:71dd38be71070d990da2a52e9c7265303ef1248be60cf71b41073853eefb4c67\",\"configFingerprint\":\"sha256:c03aa6c320ca30556200e0764f83d52e19615d4292896074345b753d7e57ea1a\",\"workspaceFingerprint\":\"sha256:54104194267ccafb1a396f1b8a179a8ba6c1213ba7e5a6bbad821712280ca0af\",\"sourceFingerprint\":\"sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94\",\"environmentFingerprint\":\"sha256:ba33c3dd628f51a322775b67360991c81ce7f807b5bc32b1c83314a565a8cc9e\",\"resultStatus\":{\"kind\":\"EXIT_CODE\",\"exitCode\":0,\"timedOut\":false},\"output\":{\"stdoutDigest\":\"sha256:2a7374b31a2d44164e33dd0e6e1f5a3174b73b05c1a94200e5bf7baeedf488ee\",\"stderrDigest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"artifactDigests\":[],\"capturedBytes\":13,\"stdoutTruncated\":false,\"stderrTruncated\":false,\"redaction\":{\"applied\":true,\"fieldsRemoved\":2}},\"evidenceIds\":[\"evidence_task6-verify-2\"]}",
+        "capturedBytes": 1399,
+        "totalBytes": 1399,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 1399
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-review",
+      "kind": "review",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-2"
+      },
+      "createdAt": "2026-08-04T05:33:41.182Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:00cecb9354b6a5a5538f2c75f5f9f9571c35e6b6b1a26855a78eaecdddcb0ebe",
+      "summary": "Deterministic Task 6 review completed with 0 blocking finding(s).",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "{\"dirtyPaths\":[\"result.txt\",\"scratch.txt\"],\"resultReady\":true,\"excludedContentUnchanged\":true,\"baseCommitUnchanged\":true,\"findings\":[]}",
+        "capturedBytes": 135,
+        "totalBytes": 135,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 135
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    },
+    {
+      "schemaVersion": "1.0.0",
+      "evidenceId": "evidence_task6-summary",
+      "kind": "run_summary",
+      "scope": {
+        "runId": "run_task6",
+        "attemptId": "att_task6-2"
+      },
+      "createdAt": "2026-08-04T05:33:41.185Z",
+      "sourceFingerprint": "sha256:d8f3376f940a1ad2153d66466d9ca71d79f1577b1336bc9aa0547c4e34946b94",
+      "contentClass": "SUMMARY",
+      "contentHash": "sha256:aec7dc3673d5e53e79204d96496eadb619c679bc98c602dc880901d7384d7a5f",
+      "summary": "Run run_task6 summary (READY).",
+      "capture": {
+        "mediaType": "text/plain; charset=utf-8",
+        "retentionStatus": "RETAINED",
+        "capturedText": "Run run_task6 — READY\nGoal: Make result.txt pass the declared independent check\nAttempt att_task6-1: execution=INCOMPLETE, verification=FAILED\nAttempt att_task6-2: execution=RETURNED, verification=PASSED\nCheck check_task6-result: PASS (required)\nEvidence: 5 envelope(s) (RETAINED=5)\nUnresolved: none",
+        "capturedBytes": 301,
+        "totalBytes": 301,
+        "truncated": false,
+        "cursor": {
+          "startByte": 0,
+          "endByte": 301
+        }
+      },
+      "redaction": {
+        "version": "hunter-redaction/1",
+        "applied": false,
+        "fieldsRemoved": 0,
+        "categories": []
+      }
+    }
+  ],
+  "finalSummary": {
+    "attempts": [
+      "att_task6-1:execution=INCOMPLETE,verification=FAILED",
+      "att_task6-2:execution=RETURNED,verification=PASSED"
+    ],
+    "checks": ["check_task6-result:PASS"],
+    "blockingFindings": [],
+    "unresolvedRisks": [
+      "Task 6 uses a disposable fixture only; real repositories remain prohibited until Task 7.",
+      "The Pi Host has PROCESS_AUTHORITY and Task 7 process-tree containment is NOT_PROVEN.",
+      "Interrupt, Checkpoint, reconciliation, and resume remain NOT_PROVEN in the Task 6 JSON Host.",
+      "Remote Windows and Ubuntu CI remain PENDING until this exact source is pushed."
+    ]
+  },
+  "scorecard": {
+    "zeroFalseReady": true,
+    "sourceLoss": false,
+    "secretLeak": false,
+    "failedAttemptPreserved": true,
+    "fixbackPass": true,
+    "unplannedInterventions": 0,
+    "overheadMs": 462.1939000000002,
+    "overheadWithinLimit": true,
+    "summaryComplete": true
+  },
+  "cleanup": {
+    "status": "PASS"
+  },
+  "remoteCi": "PENDING"
+}

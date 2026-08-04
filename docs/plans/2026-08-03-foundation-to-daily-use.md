@@ -2,9 +2,9 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_5_COMPLETE / PROVIDER_AUTH_DETECTED / TASK_6_IN_PROGRESS`
-- Active task: `TASK_6` (the owner completed Provider-owned login and authorized one minimal paid-capable real request on 2026-08-04; execution remains confined to the preregistered disposable Git fixture)
-- First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; REAL_PROVIDER_NOT_PROVEN**
+- Current repository phase: `TASK_6_LOCAL_GO / REMOTE_CI_PENDING / TASK_7_NOT_STARTED`
+- Active task: `TASK_6_CLOSEOUT` (the exact disposable-fixture request and local gates passed; push, Windows/Ubuntu CI, merge, and branch cleanup remain)
+- First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; EXACT_TASK_6_REQUEST_DETECTED; BROADER_PROVIDER_RELIABILITY_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
 ## Outcome

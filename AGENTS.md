@@ -16,7 +16,7 @@ Before interpreting or changing the product, read:
 
 - Tasks 0–6 are complete within their recorded bounds. Task 6 product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` and documentation commit `3c4d5e5200f29a70a607fa6d40be63a6c99b92c9` passed their Windows/Ubuntu and aggregate Evidence gates; PR #15 merged as `b77937f689bca859a29c7df22025ce12e875bda4`, whose exact main CI passed the same gates.
 - Task 6 proves one separately authorized real Provider request only in an automatically created disposable Git fixture. Broader Provider reliability, recovery, real-repository safety, production readiness, and daily-use acceptance remain `NOT_PROVEN`.
-- Task 7 is active on its own isolated branch. It owns Git worktree lifecycle, writer/resource leases, managed process finality, Windows process-tree containment, adversarial cleanup fixtures, and branch-hygiene receipts. All mutation tests remain disposable; real user repositories and Provider requests are prohibited during this task.
+- Task 7 is active on its own isolated branch. Its local Windows/Ubuntu disposable-fixture Evidence passes for Git worktree lifecycle, writer/resource leases, managed process finality, platform process-tree containment, adversarial cleanup, and branch hygiene; remote CI remains `PENDING`. Real user repositories and Provider requests are prohibited during this task.
 - Do not claim a Windows installer, general plugin compatibility, qualified updates, production readiness, or daily-use acceptance until their later tasks and Evidence are complete. Do not silently expand to a Pi or Oh My Pi fork.
 
 ## Product invariants

@@ -129,6 +129,8 @@ Future sandboxing is an adapter choice and must not be overstated. Until an isol
 - An uncertain process identity is not killed by PID alone and is not called cleaned up.
 - Non-zero exit, timeout, cancellation, and launcher failure remain distinct outcomes.
 
+Task 7 locally exercises the exact Windows Job Object and Ubuntu process-group adapters with nested descendants, timeout, cancellation, stale identity, and delayed output handles. This establishes a fixture-scoped containment result, not an OS sandbox or a claim that arbitrary Plugin code cannot intentionally create a separate authority boundary.
+
 ## Evidence privacy
 
 Evidence schemas use allowlisted fields rather than collecting and then redacting arbitrary objects. Redaction is defense in depth, not the primary collection strategy.

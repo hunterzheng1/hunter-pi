@@ -162,6 +162,8 @@ Mutating probes run only in automatically created temporary Git fixtures. Cleanu
 
 Runs Pi and verification commands with explicit argv, bounded output, timeouts, identity, and process-tree isolation. Windows requires native process-tree containment; an unavailable isolation mechanism is not silently downgraded for Managed Change.
 
+Task 7 implements this behind one provider-neutral host. Windows atomically creates the target inside a kill-on-close Job Object with a restricted inherited-handle list; Ubuntu uses a dedicated, identity-checked process-group/session leader. Both adapters keep process exit, timeout, and cancellation separate from terminal finality and from Verification. The Task 7 result is limited to disposable fixtures until exact remote CI and later real-repository acceptance run.
+
 ## Event and decision flow
 
 ```text

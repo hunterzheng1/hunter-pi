@@ -3,7 +3,7 @@
 - Created: 2026-08-04
 - Source baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
 - Branch: `codex/task7-worktree-process`
-- Status: `ACTIVE / LOCAL IMPLEMENTATION IN PROGRESS / REMOTE CI PENDING`
+- Status: `ACTIVE / LOCAL WINDOWS+UBUNTU PASS / REMOTE CI PENDING`
 - Scope: provider-neutral, automatically created Git and process fixtures only
 
 ## Outcome
@@ -98,3 +98,7 @@ No Task 7 fixture may call Pi or a model Provider. A future real-repository pilo
 ## Completion evidence
 
 The handoff records every RED and GREEN command, focused/full local result, exact source and Evidence digest, Windows/Ubuntu CI URL and conclusion, skipped or `NOT_PROVEN` capability, branch/worktree disposition, and the fact that Task 8 has not started.
+
+## Local disposition
+
+Clusters 1–5 are implemented on the isolated Task 7 branch. Strict local receipts bind Windows Job Object and Ubuntu WSL process-group runs to source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`; all six platform cases pass on both platforms. The first Windows Evidence parse remains preserved as `NOT_PROVEN`, and the selected local aggregate retains `remoteCi=PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).

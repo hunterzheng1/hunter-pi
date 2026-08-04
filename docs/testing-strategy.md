@@ -128,6 +128,8 @@ Task 1 starts with one `quality` matrix job on both required platforms. Later ta
 | `quality` (Task 1) | Windows and Ubuntu | locked install, repository Doctor, lint, typecheck, unit tests, strict compiler fixture, build, format, external package import, and clean-install smoke |
 | `core` (Task 2+) | Windows and Ubuntu | domain/kernel/Fake/plugin fixture tests as those packages gain behavior |
 | `pi-contract` (Task 4+) | Windows and Ubuntu | fixed free/provider-independent Pi surfaces; paid/login cases explicitly skipped and reported |
+| `task7-platform` (Task 7+) | Windows and Ubuntu | exact structured argv, nested cancel/timeout, delayed-handle finality, bounded output, and identity-mismatch fixtures |
+| `task7-evidence-consistency` (Task 7+) | Ubuntu aggregate | strict Windows/Ubuntu source, command, test-file, schema, and six-check identity comparison |
 
 A configured but unrun job is `PENDING`. A skipped provider-dependent test is not a platform PASS for that capability.
 

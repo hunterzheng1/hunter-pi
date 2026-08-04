@@ -7,7 +7,7 @@
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **LOCAL V2 PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PENDING / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -156,7 +156,7 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - Full `npm run verify` for source `75e4a17` exits 0 in 408.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
 - Strict Evidence passes 10/10. A separate count-only scan over all three attempt #7 receipts finds zero Windows absolute paths, UNC paths, private Windows or POSIX home paths, and credential-assignment shapes; all three file hashes match the selected values above.
-- Independent closure review and remote CI attempt #2 remain `PENDING`; earlier review/CI results are not inferred.
+- Independent closure review confirms the release gate now observes `EXITED / ACTIVE / CLOSED / PENDING` plus a live detached PID before release, reports no Critical or Important finding, and independently recomputes the selected identities and 65/295 test counts. Remote CI attempt #2 remains `PENDING`; earlier CI results are not inferred.
 
 ## CI and remaining boundaries
 

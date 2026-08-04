@@ -2,7 +2,7 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `51c419283e481655f6794220aedb347eb2269344`
+- Selected v2 Evidence source: `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
@@ -13,7 +13,9 @@
 
 The pre-push independent review found reproducible hard-stop gaps: repository hooks and filters could execute; ignored files could be deleted; same-shape source content drift and post-create failures could orphan a worktree; physical/registration mismatch emitted no receipt; lease inspection could race launch and lease generations could be stranded between two publications; a detached Linux descendant could escape the process group; Windows exit code 259 was ambiguous; OS-bound strings admitted NUL; and Evidence did not bind its verifier/CI definition.
 
-The seven v1 receipts below remain immutable historical observations, but none is selected as Task 7 completion Evidence after that review. Replacement v2 Windows and Ubuntu receipts now bind one clean fixed commit and pass the expanded local matrix. Independent rereview and actual PR/main CI are still required.
+The seven v1 receipts below remain immutable historical observations, but none is selected as Task 7 completion Evidence after that review. The first replacement v2 pair also remains preserved: a later review found that included Git configuration could still activate filters, a second Host could replay a process operation without recovering the original process identity, stale disposal intent did not bind a workspace generation, invalid owner-reconciler output fell through as `DEAD`, and Linux PID signalling still had a reuse window. It also found missing branch-only compensation, post-remove ambiguity receipts, final-receipt state constraints, source revalidation, Ubuntu distribution qualification, and hard-link coverage.
+
+Commit `869e456c9d5feaa86dd4b359908bb3e2f7884812` remediates those findings. Attempt #3 Windows and Ubuntu receipts bind that exact clean commit and pass the expanded local matrix. The subsequent full-suite run retained one non-assertion failure: the first real-Git Workspace case took 5720 ms under parallel load and exceeded Vitest's default 5000 ms, while the same case passed alone in 3312 ms. Commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd` applies the explicit 15-second case bound already used by comparable real-Git fixtures; the Workspace file rerun passes 22/22. Attempt #4 is therefore the selected local pair. Independent final rereview and actual PR/main CI are still required.
 
 ## Frozen outcome and limits
 
@@ -30,12 +32,14 @@ The public workspace module exposes prepare, inspect, and dispose operations whi
 - an exact clean worktree is created from the declared repository root and base commit without changing dirty, staged, or untracked source-checkout bytes;
 - operation replay is idempotent and a changed payload conflicts;
 - dirty/untracked content, unique commits, unpushed work, review-dependent branches, and ambiguous cleanup are preserved;
-- symlink, junction/reparse, hard-link, existing-target, and Windows current-directory lock cases fail closed;
+- effective included Git configuration is enumerated before mutation, filter drivers are neutralized, and conditional or worktree-specific configuration surfaces fail closed;
+- stale disposal intent binds the exact workspace fingerprint and cannot remove a replacement generation;
+- symlink, junction/reparse, hard-link, existing-target, destination-race, and Windows current-directory lock cases fail closed;
 - portable receipts contain relative identities and fingerprints, not device-local absolute paths.
 
 ### Writer and resource leases
 
-The file-backed lease module publishes each operation receipt and all resulting generations as one immutable transaction under an exact physical state root. Managed-process startup atomically binds its complete lease set to one session fingerprint before launch, and only that binding may release it. The focused suite proves one active writer per workspace, atomic resource-set exclusion, monotonic renewal, non-owner/binding release rejection, idempotent replay, pre-commit crash cleanup, and fail-closed handling of clock rollback, malformed committed transactions, aliases, and hard links. Expiry alone never authorizes takeover: owner liveness must be independently `DEAD`; `NOT_PROVEN` preserves the lease.
+The file-backed lease module publishes each operation receipt and all resulting generations as one immutable transaction under an exact physical state root. Managed-process startup atomically reserves its operation and binds its complete lease set to one session fingerprint before launch, including an empty lease set; only that binding may release owned leases. A different Host cannot turn a replayed reservation into a second external process when the original identity is unavailable. The focused suite proves one active writer per workspace, atomic resource-set exclusion, monotonic renewal, non-owner/binding release rejection, idempotent replay, pre-commit crash cleanup, and fail-closed handling of clock rollback, malformed committed transactions, aliases, and hard links. Expiry alone never authorizes takeover: owner liveness must parse as exactly `DEAD`; invalid or `NOT_PROVEN` reconciliation preserves the lease.
 
 ### Managed process host
 
@@ -44,7 +48,7 @@ The public host accepts an explicit executable, argument array, physical cwd, ex
 The production factory has no shell or PID-only fallback:
 
 - Windows creates a Job Object with `KILL_ON_JOB_CLOSE`, restricts inherited handles, creates the target suspended with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, verifies membership, and only then resumes it. The helper checks `WaitForSingleObject` before reading the exit code, so literal code 259 is not confused with `STILL_ACTIVE`; finality still waits for an empty Job and both output pipes at EOF.
-- Ubuntu uses canonical `/usr/bin/python3` to establish `PR_SET_CHILD_SUBREAPER` before executing a dedicated Node helper as the exact process-group and session leader. The helper follows `/proc` parentage and repeatedly identity-checks/terminates all live descendants, including a `setsid` child with closed stdio. Its private control protocol is separate from target stdout/stderr; missing subreaper prerequisites fail closed without a weaker fallback.
+- Ubuntu uses canonical `/usr/bin/python3` to establish `PR_SET_CHILD_SUBREAPER` before executing a dedicated Node helper as the exact process-group and session leader. The helper follows `/proc` parentage and repeatedly identity-checks all live descendants, including a `setsid` child with closed stdio. Final signalling opens a Linux pidfd before rechecking `/proc` start time and signals through that descriptor, so PID reuse cannot redirect the termination request. Its private control protocol is separate from target stdout/stderr; missing subreaper or pidfd prerequisites fail closed without a weaker fallback.
 - A mismatched or unproven identity is not terminated. Adapter or reconciliation ambiguity produces `NOT_PROVEN` and keeps resource ownership conservative.
 
 The Windows sequencing was independently implemented against Microsoft Win32 documentation; the exact external research cross-check and license review are recorded in [Task 7 Windows Job Object provenance](../provenance/2026-08-04-task7-windows-job-object-reference.md).
@@ -65,23 +69,29 @@ The superseded Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-
 
 The formerly selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their incomplete source pathspec excluded the verifier and CI definition, which is why they are preserved but superseded.
 
-The replacement implementation defines strict v2 platform, failure, and consistency schemas. Before hashing, the probe requires the entire Git worktree to be clean. Its source digest covers all application/package implementation, scripts, tests, tools, lockfile, Node/npm/build/lint/format/test configuration, and the pinned CI workflow; a separate verifier fingerprint binds the exact parser, comparator, focused tests, configuration, lockfile, and CI definition. Cross-platform consistency includes the exact source commit and rejects a verifier/pathspec mismatch.
+The replacement implementation defines strict v2 successful platform and consistency schemas. Historical v1/v2 failure envelopes remain parseable; current failures use strict v3 so every failure emitted after source identification binds the exact source commit, source digest, source pathspec, and verifier fingerprint. Before and after hashing or test execution, the probe requires the exact source commit and entire Git worktree to remain clean. Its source digest covers all application/package implementation, scripts, tests, tools, lockfile, Node/npm/build/lint/format/test configuration, and the pinned CI workflow; a separate verifier fingerprint binds the exact parser, comparator, focused tests, configuration, lockfile, and CI definition. Cross-platform consistency includes the exact source commit and rejects a verifier/pathspec mismatch. Linux receipts qualify `/etc/os-release` as Ubuntu rather than relabelling an arbitrary Linux host.
 
 | V2 artifact | Actual result | Disposition |
 |---|---|---|
 | [`windows-local-v2.json`](evidence/task7/windows-local-v2.json) | `PASS`, 9/9 checks | preserved attempt #1 from `bafbffd`; superseded because the Linux skip parser then changed |
 | [`ubuntu-wsl-v2-attempt-1.json`](evidence/task7/ubuntu-wsl-v2-attempt-1.json) | `NOT_PROVEN / REPORT_PARSE`, test exit 0 | preserved exact failure: Vitest emitted `skipped`, while the preregistered parser expected `pending` |
-| [`windows-local-v2-attempt-2.json`](evidence/task7/windows-local-v2-attempt-2.json) | `PASS`, 9/9 checks | selected local Windows receipt |
-| [`ubuntu-wsl-v2-attempt-2.json`](evidence/task7/ubuntu-wsl-v2-attempt-2.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks | selected local Ubuntu receipt |
-| [`local-consistency-v2.json`](evidence/task7/local-consistency-v2.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-2.json`](evidence/task7/windows-local-v2-attempt-2.json) | `PASS`, 9/9 checks | preserved first replacement Windows receipt; superseded after later review |
+| [`ubuntu-wsl-v2-attempt-2.json`](evidence/task7/ubuntu-wsl-v2-attempt-2.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks | preserved first replacement Ubuntu receipt; superseded after later review |
+| [`local-consistency-v2.json`](evidence/task7/local-consistency-v2.json) | `PASS / remoteCi=PENDING` | preserved first replacement aggregate; superseded after later review |
+| [`windows-local-v2-attempt-3.json`](evidence/task7/windows-local-v2-attempt-3.json) | `PASS`, 9/9 checks, 14387 ms | preserved post-review Windows receipt; superseded after the full-suite fixture timeout |
+| [`ubuntu-wsl-v2-attempt-3.json`](evidence/task7/ubuntu-wsl-v2-attempt-3.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 5881 ms | preserved post-review Ubuntu receipt; superseded after the full-suite fixture timeout |
+| [`local-consistency-v2-attempt-3.json`](evidence/task7/local-consistency-v2-attempt-3.json) | `PASS / remoteCi=PENDING` | preserved post-review aggregate; superseded after the full-suite fixture timeout |
+| [`windows-local-v2-attempt-4.json`](evidence/task7/windows-local-v2-attempt-4.json) | `PASS`, 9/9 checks, 13843 ms | selected local Windows receipt after bounding the real-Git fixture |
+| [`ubuntu-wsl-v2-attempt-4.json`](evidence/task7/ubuntu-wsl-v2-attempt-4.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 6397 ms | selected local Ubuntu receipt after bounding the real-Git fixture |
+| [`local-consistency-v2-attempt-4.json`](evidence/task7/local-consistency-v2-attempt-4.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
 
-The selected pair binds source commit `51c419283e481655f6794220aedb347eb2269344`, source digest `sha256:6aafd3a91ff0b80d6ae51f0a3ebb818d893565941ea6ea03dd360c84de8a58e1`, and verifier fingerprint `sha256:9f5c511afc42664a5444b30b1e29ea460ecdf52b5dae74fec7fbcf4c38ed18a6`.
+The selected pair binds source commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd`, source digest `sha256:a30cd4e896a704c8b5cf21d5f175e6911b2180d9379cdfd8c95138533d1a8637`, and verifier fingerprint `sha256:73db8e74a18f42c9f32b32536fa34dfb3708e19c1bc98c8a4b4af23f71c0c550`.
 
 The selected artifact SHA-256 values are:
 
-- Windows attempt #2: `e7987e00b3abdfe0aaac96054219a8c9fa8ef35d47c2b35a11ec20c948dbb112`;
-- Ubuntu attempt #2: `a198d060894fa975d8d21e074b96057184bf6bf3ab447fe35f3031de4f813cf3`;
-- local consistency v2: `2372e07dbba6344d5dba3549144c98fec7d7029c6e96fda402164334ae6d1dc9`;
+- Windows attempt #4: `be5214fb5b0f09e945a7fce3333f1a2ee1613cbcde5c28626be6e3889733e5e7`;
+- Ubuntu attempt #4: `96b31c036cb2633cf68a2a43c61ac4278a0d36f989857bfbfe3dc13d30897d5b`;
+- local consistency attempt #4: `7a0c3296c1d5d4276a864f8339efd3380558c373a13b7bf5672ef826158c15dc`;
 - preserved Ubuntu v2 failure: `ab1751beec9ccc1ffbc2dbaa9758acdd9aa04a02e0c10575573cd9fa525c5c66`.
 
 The replacement nine-check platform matrix is required to prove:
@@ -100,13 +110,15 @@ The replacement nine-check platform matrix is required to prove:
 
 | Cluster | RED evidence | GREEN evidence |
 |---|---|---|
-| Workspace | public factory absent; review later reproduced hook/filter execution, ignored-file loss, content drift, orphan creation, and registration mismatch | 16 disposable Git/worktree cases pass |
-| Leases | manager absent; review later reproduced inspect/start and two-publication races | 11 transaction/binding/storage adversarial cases pass |
-| Portable process host | host absent; review later reproduced lease reuse and NUL admission | 8 host/finality/binding contract cases pass |
-| Platform containment | factory absent; review later reproduced detached Linux escape and Windows 259 ambiguity | Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN` real process-tree checks pass |
-| Evidence | comparator absent; review later reproduced an incomplete source/verifier input set | 8 strict v1/v2 matrix, privacy, comparison, clean-worktree, output-path, link, and committed-history tests pass |
+| Workspace | public factory absent; reviews later reproduced hook/filter execution, included-filter source loss, ignored-file loss, content drift, orphan creation, stale cleanup, and registration mismatch | disposable Git/worktree fixtures cover effective config, link, destination-race, identity, and cleanup reconciliation boundaries |
+| Leases | manager absent; reviews later reproduced inspect/start, cross-host replay, invalid-owner, and two-publication races | transaction/binding/storage fixtures cover non-empty and zero-resource operation reservation plus strict owner reconciliation |
+| Portable process host | host absent; reviews later reproduced lease reuse, unverifiable replay, invalid final receipts, and NUL admission | host/finality/binding contract fixtures fail closed before any duplicate external process effect |
+| Platform containment | factory absent; reviews later reproduced detached Linux escape, PID-reuse signalling risk, and Windows 259 ambiguity | Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN` real process-tree checks pass |
+| Evidence | comparator absent; reviews later reproduced incomplete source/verifier inputs, source revalidation, and Linux-distribution gaps | strict historical/current schema, privacy, comparison, clean-source, output-path, link, distro, and committed-history fixtures pass |
 
-The first full-suite invocation after the workspace cluster timed out without a reproducible assertion failure. No residual test process remained; a correct `npm test` rerun passed, and the failure was not rewritten as a PASS. During remediation, a five-file run reached 48/52 before four Windows Workspace cases exceeded Vitest's five-second default; the fixture process was reconciled, explicit 15-second case bounds were added, and the exact rerun passed 52/52. Both formal parser failures remain retained rather than rewritten as PASS.
+The first full-suite invocation after the workspace cluster timed out without a reproducible assertion failure. No residual test process remained; a correct `npm test` rerun passed, and the failure was not rewritten as a PASS. During remediation, a five-file run reached 48/52 before four Windows Workspace cases exceeded Vitest's five-second default; the fixture process was reconciled, explicit 15-second case bounds were added, and the exact rerun passed 52/52. After follow-up hardening, a full-suite run passed 293/294 tests but retained one equivalent duration failure: the first real-Git case took 5720 ms under parallel load, then passed alone in 3312 ms and as part of the 22/22 Workspace file after receiving the same explicit 15-second bound. Both formal parser failures and this full-suite timeout remain retained rather than rewritten as PASS.
+
+The Ubuntu attempt #4 launcher also preserves two pre-probe failures: the first invocation carried a PowerShell BOM into Bash and used an incorrectly expanded SHA; the second allowed the Windows/WSL argument boundary to split a multiline `bash -lc` program. Neither reached `npm ci` or the platform probe, neither generated a receipt, and no fixture remained. The third evidence-based invocation used an explicit temporary shell file, checked the exact commit, passed the probe, removed its temporary clone through a validated trap, and then deleted the launcher file.
 
 ## Superseded local verification
 
@@ -120,15 +132,15 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - the post-hardening `npm run probe:task7` passed the exact Windows 6/6 matrix, and `npm run compare:task7-evidence` matched it against the preserved Ubuntu receipt while retaining `remoteCi=PENDING`;
 - strict tests parse and privacy-scan every committed Task 7 receipt and recompute both local consistency artifacts.
 
-## Replacement local verification
+## Selected attempt #4 local verification
 
-- Windows focused Workspace/lease/host/platform/Evidence suites pass 52/52.
-- A disposable Ubuntu 22.04 WSL clone passes 26 focused lease/host/platform checks with 2 Windows-only checks skipped by applicability.
-- Windows and Ubuntu formal v2 platform attempt #2 receipts and their local consistency receipt pass against the exact identities above.
-- `npm run lint`, `npm run typecheck`, `npm run build`, and `npm run format:check` have exited 0 after remediation.
-- Full `npm run verify` exited 0 in 325.4 seconds: 36 test files / 282 tests passed, followed by strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes.
+- The exact five-file Workspace/lease/host/platform/Evidence command passes 64/64 in 79.69 seconds after follow-up hardening.
+- A disposable Ubuntu 22.04 WSL clone passes the exact platform matrix with 7 applicable checks and 2 Windows-only checks skipped by declared applicability.
+- Windows and Ubuntu formal v2 platform attempt #4 receipts and their local consistency receipt pass against the exact identities above.
+- Final `npm run verify` for source `ea38a6b` exited 0 in 436 seconds: lint and typecheck passed; 36 test files / 294 tests passed; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then passed.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
-- Final privacy/status checks, independent rereview, and remote PR/main CI remain to be completed; none is claimed early.
+- The strict Evidence test passes 10/10. A separate count-only scan over eight attempt #3/#4 receipt files found zero Windows absolute paths, UNC paths, private home paths, or credential-assignment shapes; `git diff --check` also passed.
+- Independent rereview and remote PR/main CI remain to be completed; neither is claimed early.
 
 ## CI and remaining boundaries
 

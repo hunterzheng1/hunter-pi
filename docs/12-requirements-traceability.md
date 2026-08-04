@@ -12,7 +12,7 @@ This matrix assigns each designed user outcome and non-functional family to an i
 | Task 4 — Pi spike | HP-US-003, HP-US-012, HP-US-030, HP-US-052, HP-US-053 | fixed-version Extension/JSON/RPC/SDK receipts on Windows and Ubuntu |
 | Task 5 — Product Shell | HP-US-001–005, HP-US-010, HP-US-012, HP-US-042 | clean external install, Doctor privacy, provider disclosure/login cancellation, Quick Session, Safe Mode, raw Pi coexistence |
 | Task 6 — Managed fixture slice | HP-US-011, HP-US-020, HP-US-022–025, HP-US-027 | disposable fixture promotion/dirty-state assignment, real failed Attempt, fixback Attempt, independent Verification, review, deterministic value scorecard |
-| Task 7 — Worktree/process | HP-US-021, HP-US-031 | independent-review remediation active; prior local receipts superseded; replacement worktree/lease/process/Evidence matrix and remote CI PENDING |
+| Task 7 — Worktree/process | HP-US-021, HP-US-031 | replacement local v2 worktree/lease/process/Evidence matrix PASS; independent rereview and remote CI PENDING; prior failures preserved |
 | Task 8 — Adequacy/fixback | HP-US-022–027 | selected/executed/passed accounting, stale reuse rejection, Human Receipt, blocking findings |
 | Task 9 — Recovery/archive | HP-US-030–033 | forced interruption matrix, identity reconciliation, outcome/archive separation, archive replay, clean second-device clone/import fixture and portable-device limits |
 | Task 10 — Plugins | HP-US-040–043 | exact package provenance, effective tool graph, separate Compatibility/Trust/Isolation receipts, broken-plugin Safe Mode |

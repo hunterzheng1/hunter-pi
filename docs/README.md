@@ -5,8 +5,8 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-04
-- Product status: **TASK_6_MERGED_MAIN_CI_PASS / TASK_7_REMEDIATION_ACTIVE / PRIOR_TASK_7_EVIDENCE_SUPERSEDED**
-- Current implementation: Tasks 1–6 are merged through the bounded disposable-fixture Managed Change milestone; Task 7 is remediating independently reproduced source-loss, lease-race, process-escape, and Evidence-identity gaps
+- Product status: **TASK_6_MERGED_MAIN_CI_PASS / TASK_7_LOCAL_V2_PASS / REREVIEW_AND_REMOTE_CI_PENDING**
+- Current implementation: Tasks 1–6 are merged through the bounded disposable-fixture Managed Change milestone; Task 7 has local replacement proof for the independently reproduced source-loss, lease-race, process-escape, and Evidence-identity gaps
 - Next gate: the fixed clean commit must pass the expanded local Windows/Ubuntu matrix, independent rereview, and actual PR/main CI; real repositories remain prohibited meanwhile
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
@@ -20,7 +20,7 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Task 6 local Managed Change: **GO within the exact disposable-fixture bounds** — after the first run's resource-accounting gap was preserved and corrected, one separately authorized request from clean source `e36ee52764065cea02982962e2f84ff9ed3d0034` changed only `result.txt`; Agent return remained an Observation, the deliberate first failure remained visible, the second independent check, deterministic review, cumulative 90506 / 262144-byte resource accounting, and cleanup all passed. The committed Evidence SHA-256 is `573800451fc04de3aa251b75be19e7d28b010cb27aae7abd1443ec3428527092`
 - Task 6 remote PR CI: **PASS for product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5`** — run `30884876277` passed Ubuntu in 2m42s, Windows in 15m13s, and the Windows/Ubuntu Pi/Hunter identity comparator in 33s. The Evidence envelope itself retains `remoteCi=PENDING` because that was true when the local real-run artifact was emitted; later CI disposition is append-only documentation, not a rewrite of the envelope.
 - Task 6 merge and main CI: **PASS** — documentation HEAD `3c4d5e5200f29a70a607fa6d40be63a6c99b92c9` passed final PR run `30885990025`; PR #15 merged as `b77937f689bca859a29c7df22025ce12e875bda4`, and exact main run `30886919708` passed Ubuntu in 2m22s, Windows in 15m31s, and aggregate Evidence identity in 35s.
-- Task 7 earlier local platform Evidence: **SUPERSEDED for completion** — the immutable receipts remain preserved, including the first `NOT_PROVEN` parse, but independent review showed that their matrix and source digest omitted required hard-stop cases and verifier inputs. Replacement Evidence and remote CI remain `PENDING`.
+- Task 7 local platform Evidence: **V2 WINDOWS/UBUNTU/CONSISTENCY PASS; REREVIEW AND REMOTE CI PENDING** — all earlier receipts remain preserved, including both `NOT_PROVEN` parser attempts. The selected v2 pair binds the same clean source commit, full input digest, verifier fingerprint, nine-check applicability matrix, and `remoteCi=PENDING`.
 - Real interactive Pi TUI: **DETECTED within startup, Core loading, command-display, and clean-exit acknowledgement bounds**
 - Real Provider: **DETECTED for the exact Task 6 disposable-fixture request; broader reliability, recovery, real-repository safety, and production readiness remain NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**

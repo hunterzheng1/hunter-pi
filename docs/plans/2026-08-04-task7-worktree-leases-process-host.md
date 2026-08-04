@@ -3,7 +3,7 @@
 - Created: 2026-08-04
 - Source baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
 - Branch: `codex/task7-worktree-process`
-- Status: `ACTIVE / INDEPENDENT-REVIEW REMEDIATION / PRIOR EVIDENCE SUPERSEDED / REMOTE CI PENDING`
+- Status: `ACTIVE / LOCAL V2 PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING`
 - Scope: provider-neutral, automatically created Git and process fixtures only
 
 ## Outcome
@@ -102,4 +102,4 @@ The handoff records every RED and GREEN command, focused/full local result, exac
 
 ## Local disposition
 
-Clusters 1–5 produced an initial implementation and preserved local receipts, but independent review reproduced source-loss, lease-race, detached-process, and verifier-identity gaps. Those receipts are superseded for Task completion without being rewritten or deleted. Workspace remediation disables repository executable integrations, fingerprints source content and index state, preserves ignored files, compensates post-create failures, and emits a blocked mismatch receipt. Lease publication/session binding and both platform adapters have local corrective implementations; replacement Evidence and remote CI remain active and `PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).
+Clusters 1–5 produced an initial implementation and preserved local receipts, but independent review reproduced source-loss, lease-race, detached-process, and verifier-identity gaps. Those receipts remain preserved and superseded without being rewritten or deleted. Workspace, lease publication/session binding, both platform adapters, and Evidence v2 now have passing replacement local fixtures; the v2 Ubuntu parser failure is also retained. Independent rereview and remote CI remain `PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).

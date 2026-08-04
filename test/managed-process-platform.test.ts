@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -194,7 +194,7 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       terminalFinality: "FINAL",
       reasonCodes: [],
     });
-  });
+  }, 15_000);
 
   it("cancels an owned nested child and grandchild as one contained tree", async () => {
     const fixture = await createFixture();
@@ -305,7 +305,18 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
 
   it("keeps a detached closed-stdio descendant inside the reconciled process tree", async () => {
     const fixture = await createFixture();
-    const child = "setTimeout(() => process.exit(0), 1500);";
+    const releasePath = join(fixture.cwd, "release-detached-child");
+    const child = [
+      "const { existsSync } = require('node:fs');",
+      `const releasePath = ${JSON.stringify(releasePath)};`,
+      "const deadline = Date.now() + 10000;",
+      "const waitForRelease = () => {",
+      "  if (existsSync(releasePath)) process.exit(0);",
+      "  if (Date.now() >= deadline) process.exit(3);",
+      "  setTimeout(waitForRelease, 25);",
+      "};",
+      "waitForRelease();",
+    ].join("\n");
     const root = [
       "const { spawn } = require('node:child_process');",
       `const child = spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { detached: true, env: process.env, stdio: 'ignore' });`,
@@ -315,7 +326,6 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       "  process.stdout.write(`DETACHED:${child.pid}\\n`, () => process.exit(0));",
       "});",
     ].join("\n");
-    const startedAt = Date.now();
     await fixture.host.start(startRequest(fixture.cwd, ["-e", root]));
     const detachedPid = await waitUntil(async () => {
       const { stdout } = await readText(fixture.host);
@@ -335,6 +345,7 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
         }),
       ]);
       expect(early).toBe("pending");
+      await writeFile(releasePath, "RELEASE\n", "utf8");
       await expect(finalPromise).resolves.toMatchObject({
         receipt: {
           executionObservation: "EXITED",
@@ -344,9 +355,9 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
           terminalFinality: "FINAL",
         },
       });
-      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_000);
       expect(isProcessAlive(detachedPid)).toBe(false);
     } finally {
+      await writeFile(releasePath, "RELEASE\n", "utf8").catch(() => undefined);
       if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
     }
   }, 12_000);

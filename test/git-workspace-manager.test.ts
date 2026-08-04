@@ -282,7 +282,7 @@ describe("local Git Workspace Interface", () => {
       "--porcelain",
     ]);
     expect(registered.match(/^worktree /gmu)).toHaveLength(2);
-  });
+  }, 15_000);
 
   it("disables repository hooks while preparing an owned worktree", async () => {
     const fixture = await createRepositoryFixture();

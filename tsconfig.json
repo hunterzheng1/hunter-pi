@@ -9,6 +9,7 @@
     "paths": {
       "@hunter-pi/cli": ["./apps/cli/src/index.ts"],
       "@hunter-pi/domain": ["./packages/domain/src/index.ts"],
+      "@hunter-pi/execution": ["./packages/execution/src/index.ts"],
       "@hunter-pi/evidence": ["./packages/evidence/src/index.ts"],
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
       "@hunter-pi/managed-change": ["./packages/managed-change/src/index.ts"],

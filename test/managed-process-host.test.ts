@@ -10,6 +10,7 @@ import {
   createFileLeaseManager,
   leaseAcquireRequestSchema,
   leaseReleaseRequestSchema,
+  managedProcessFinalReceiptSchema,
   managedProcessStartRequestSchema,
 } from "@hunter-pi/execution";
 import * as processHostModule from "../packages/execution/src/managed-process-host.js";
@@ -178,9 +179,8 @@ function startRequest(cwd: string, leases: readonly Record<string, unknown>[] = 
     timeoutMs: 60_000,
     maxOutputBytes: 8,
     leases,
-    leaseBindOperationId: leases.length > 0 ? "op_process-lease-bind" : null,
-    leaseBindOperationFingerprint:
-      leases.length > 0 ? fingerprint("operation:process-lease-bind") : null,
+    leaseBindOperationId: "op_process-lease-bind",
+    leaseBindOperationFingerprint: fingerprint("operation:process-lease-bind"),
   };
 }
 
@@ -203,6 +203,27 @@ function terminalSnapshot(
 }
 
 describe("managed process host", () => {
+  it("rejects a caller-authored FINAL receipt until tree, output, and leases are reconciled", () => {
+    const candidate = {
+      schemaVersion: "hpi-process-final-receipt.v1",
+      sessionId: "process_task7-forged-final",
+      executionObservation: "EXITED",
+      exitCode: 0,
+      processTreeState: "ACTIVE",
+      outputState: "OPEN",
+      leaseState: "HELD",
+      observedBytes: 0,
+      retainedBytes: 0,
+      outputDigest: fingerprint("empty-output"),
+      truncated: false,
+      terminalFinality: "FINAL",
+      reasonCodes: [],
+      observedAt: "2026-08-04T10:00:05.000Z",
+    };
+
+    expect(managedProcessFinalReceiptSchema.safeParse(candidate).success).toBe(false);
+  });
+
   it("keeps argv structured, bounds logs, and waits for tree, streams, and leases before finality", async () => {
     const fixture = await createFixture();
     const ownerFingerprint = fingerprint("process-owner");
@@ -342,6 +363,77 @@ describe("managed process host", () => {
     expect(driver.startCalls).toBe(1);
     driver.settle(terminalSnapshot());
     await host.awaitFinal("process_task7-session");
+  });
+
+  it("fails closed instead of spawning an exact leased start replay in a second host", async () => {
+    const fixture = await createFixture();
+    const ownerFingerprint = fingerprint("cross-host-replay-owner");
+    await fixture.leaseManager.acquire(
+      leaseAcquireRequestSchema.parse({
+        schemaVersion: "hpi-lease-acquire.v1",
+        operationId: "op_cross-host-replay-acquire",
+        operationFingerprint: fingerprint("operation:cross-host-replay-acquire"),
+        leaseId: "lease_cross-host-replay",
+        workspaceId: "workspace_cross-host-replay",
+        ownerFingerprint,
+        resources: ["cross_host_replay_slot"],
+        ttlMs: 60_000,
+      }),
+    );
+    const firstDriver = new ControllableDriver();
+    const secondDriver = new ControllableDriver();
+    const firstHost = requireCreateHost()({
+      driver: firstDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const secondHost = requireCreateHost()({
+      driver: secondDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const request = startRequest(fixture.cwd, [
+      {
+        leaseId: "lease_cross-host-replay",
+        ownerFingerprint,
+        releaseOperationId: "op_cross-host-replay-release",
+        releaseOperationFingerprint: fingerprint("operation:cross-host-replay-release"),
+      },
+    ]);
+
+    await firstHost.start(request);
+    await expect(secondHost.start({ ...request })).rejects.toMatchObject({
+      name: "ManagedProcessError",
+      code: "PROCESS_OPERATION_REPLAY_NOT_PROVEN",
+    });
+    expect(firstDriver.startCalls).toBe(1);
+    expect(secondDriver.startCalls).toBe(0);
+
+    firstDriver.settle(terminalSnapshot());
+    await firstHost.awaitFinal("process_task7-session");
+  });
+
+  it("durably reserves an exact unleased start operation across host instances", async () => {
+    const fixture = await createFixture();
+    const firstDriver = new ControllableDriver();
+    const secondDriver = new ControllableDriver();
+    const firstHost = requireCreateHost()({
+      driver: firstDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const secondHost = requireCreateHost()({
+      driver: secondDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const request = startRequest(fixture.cwd);
+
+    await firstHost.start(request);
+    await expect(secondHost.start({ ...request })).rejects.toMatchObject({
+      code: "PROCESS_OPERATION_REPLAY_NOT_PROVEN",
+    });
+    expect(firstDriver.startCalls).toBe(1);
+    expect(secondDriver.startCalls).toBe(0);
+
+    firstDriver.settle(terminalSnapshot());
+    await firstHost.awaitFinal("process_task7-session");
   });
 
   it("rejects NUL in every OS-bound process input before calling the platform driver", async () => {

@@ -120,7 +120,7 @@ export const leaseBindRequestSchema = z
     operationId: operationIdSchema,
     operationFingerprint: fingerprintSchema,
     bindingFingerprint: fingerprintSchema,
-    leases: z.array(leaseBindingEntrySchema).min(1).max(128),
+    leases: z.array(leaseBindingEntrySchema).max(128),
   })
   .superRefine((request, context) => {
     if (new Set(request.leases.map((lease) => lease.leaseId)).size !== request.leases.length) {
@@ -135,10 +135,15 @@ export const leaseBindReceiptSchema = z.strictObject({
   outcome: z.literal("BOUND"),
   bindingFingerprint: fingerprintSchema,
   leaseSetFingerprint: fingerprintSchema,
-  leaseCount: z.number().int().positive(),
+  leaseCount: z.number().int().nonnegative(),
   observedAt: timestampSchema,
 });
 export type LeaseBindReceipt = z.infer<typeof leaseBindReceiptSchema>;
+
+export interface LeaseBindResult {
+  readonly receipt: LeaseBindReceipt;
+  readonly application: "APPLIED" | "REPLAYED";
+}
 
 export const leaseMutationReceiptSchema = z
   .strictObject({
@@ -186,7 +191,7 @@ export type LeaseStatusReceipt = z.infer<typeof leaseStatusReceiptSchema>;
 
 export interface LeaseManager {
   acquire(request: LeaseAcquireRequest): Promise<{ readonly receipt: LeaseAcquireReceipt }>;
-  bind(request: LeaseBindRequest): Promise<{ readonly receipt: LeaseBindReceipt }>;
+  bind(request: LeaseBindRequest): Promise<LeaseBindResult>;
   inspect(leaseId: WriterLeaseId): Promise<{ readonly receipt: LeaseStatusReceipt }>;
   renew(request: LeaseRenewRequest): Promise<{ readonly receipt: LeaseMutationReceipt }>;
   release(request: LeaseReleaseRequest): Promise<{ readonly receipt: LeaseMutationReceipt }>;

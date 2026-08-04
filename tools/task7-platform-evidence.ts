@@ -340,7 +340,7 @@ export const task7PlatformFailureReceiptV1Schema = z.strictObject({
 });
 export type Task7PlatformFailureReceiptV1 = z.infer<typeof task7PlatformFailureReceiptV1Schema>;
 
-export const task7PlatformFailureReceiptSchema = z.strictObject({
+export const task7PlatformFailureReceiptV2Schema = z.strictObject({
   schemaVersion: z.literal("hpi-task7-platform-failure.v2"),
   kind: z.literal("hunter-pi/task7-platform-failure"),
   observedAt: z.iso.datetime({ offset: true }),
@@ -358,6 +358,52 @@ export const task7PlatformFailureReceiptSchema = z.strictObject({
   realRepositories: z.literal("NOT_RUN"),
   remoteCi: z.literal("PENDING"),
 });
+export type Task7PlatformFailureReceiptV2 = z.infer<typeof task7PlatformFailureReceiptV2Schema>;
+
+const task7FailureSourceSchema = z.strictObject({
+  repository: z.literal("hunter-pi"),
+  commit: commitSchema,
+  digest: fingerprintSchema,
+  pathspec: sourcePathspecSchema,
+  verifierPathspec: verifierPathspecSchema,
+  verifierFingerprint: fingerprintSchema,
+  testFileFingerprint: fingerprintSchema,
+});
+
+export const task7PlatformFailureReceiptSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-task7-platform-failure.v3"),
+    kind: z.literal("hunter-pi/task7-platform-failure"),
+    observedAt: z.iso.datetime({ offset: true }),
+    status: z.enum(["FAIL", "NOT_PROVEN"]),
+    platform: z.enum(["win32", "linux", "UNSUPPORTED"]),
+    stage: z.enum([
+      "SOURCE_IDENTITY",
+      "TEST_EXECUTION",
+      "REPORT_PARSE",
+      "SOURCE_REVALIDATION",
+      "EVIDENCE_WRITE",
+    ]),
+    code: z.literal("TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE"),
+    source: task7FailureSourceSchema.nullable(),
+    exitCode: z.number().int().nullable(),
+    stdoutDigest: fingerprintSchema,
+    stderrDigest: fingerprintSchema,
+    observedBytes: z.number().int().nonnegative(),
+    verifierVersion: z.literal("task7-verifier.v3"),
+    fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+    providerRequests: z.literal("NOT_RUN"),
+    realRepositories: z.literal("NOT_RUN"),
+    remoteCi: z.literal("PENDING"),
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.stage !== "SOURCE_IDENTITY" && receipt.source === null) {
+      context.addIssue({
+        code: "custom",
+        message: "post-identity Task 7 failures must bind the exact source and verifier",
+      });
+    }
+  });
 export type Task7PlatformFailureReceipt = z.infer<typeof task7PlatformFailureReceiptSchema>;
 
 const vitestAssertionSchema = z.looseObject({

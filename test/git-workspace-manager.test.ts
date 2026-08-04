@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, link, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -85,12 +85,14 @@ interface GitWorkspaceManager {
     readonly operationId: string;
     readonly operationFingerprint: string;
     readonly workspaceId: string;
+    readonly workspaceFingerprint: string;
   }): Promise<{
     readonly receipt: {
       readonly schemaVersion: "hpi-workspace-disposal-receipt.v1";
       readonly action: "DISPOSE";
       readonly outcome: "APPLIED" | "BLOCKED";
       readonly workspaceId: string;
+      readonly workspaceFingerprint: string;
       readonly worktreeState: "REMOVED" | "PRESERVED";
       readonly registrationState: "REMOVED" | "REGISTERED" | "AMBIGUOUS";
       readonly branchState: "REMOVED" | "PRESERVED";
@@ -334,6 +336,162 @@ describe("local Git Workspace Interface", () => {
     );
   });
 
+  it("neutralizes filters loaded through a local include before Git can mutate ignored source data", async () => {
+    const fixture = await createRepositoryFixture();
+    const ignoredPath = join(fixture.repository, "ignored.log");
+    const filterPath = join(fixture.parent, "included-clean-filter.sh");
+    const includedConfig = join(fixture.parent, "included-filter.conf");
+    await Promise.all([
+      writeFile(join(fixture.repository, ".git", "info", "exclude"), "ignored.log\n", "utf8"),
+      writeFile(ignoredPath, "UNIQUE_IGNORED_SOURCE_DATA\n", "utf8"),
+      writeFile(
+        filterPath,
+        `#!/bin/sh\nrm -f '${ignoredPath.replaceAll("\\", "/")}'\ncat\n`,
+        "utf8",
+      ),
+    ]);
+    await chmod(filterPath, 0o755);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "--file",
+      includedConfig,
+      "filter.hpiunsafe.clean",
+      `"${filterPath.replaceAll("\\", "/")}"`,
+    ]);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "--file",
+      includedConfig,
+      "filter.hpiunsafe.required",
+      "true",
+    ]);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "include.path",
+      includedConfig.replaceAll("\\", "/"),
+    ]);
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+
+    await expect(
+      manager.prepare({
+        schemaVersion: "hpi-workspace-prepare.v1",
+        operationId: "op_task7-included-filter-neutralization",
+        operationFingerprint: fingerprint("task7-included-filter-neutralization"),
+        workspaceId: "workspace_task7-included-filter-neutralization",
+        repository: fixture.repository,
+        baseCommit: fixture.baseCommit,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { outcome: "APPLIED", sourceCheckout: { preserved: true } },
+    });
+    await expect(readFile(ignoredPath, "utf8")).resolves.toBe("UNIQUE_IGNORED_SOURCE_DATA\n");
+  });
+
+  it("leaves no branch or worktree orphan when branch-conditional config makes checkout fail", async () => {
+    const fixture = await createRepositoryFixture();
+    const failingFilter = join(fixture.parent, "conditional-smudge-filter.sh");
+    const includedConfig = join(fixture.parent, "conditional-filter.conf");
+    const workspaceId = "workspace_task7-conditional-filter-failure";
+    await writeFile(failingFilter, "#!/bin/sh\nexit 17\n", "utf8");
+    await chmod(failingFilter, 0o755);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "--file",
+      includedConfig,
+      "filter.hpiunsafe.clean",
+      "cat",
+    ]);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "--file",
+      includedConfig,
+      "filter.hpiunsafe.smudge",
+      `"${failingFilter.replaceAll("\\", "/")}"`,
+    ]);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "--file",
+      includedConfig,
+      "filter.hpiunsafe.required",
+      "true",
+    ]);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "includeIf.onbranch:hpi/**.path",
+      includedConfig.replaceAll("\\", "/"),
+    ]);
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+
+    await expect(
+      manager.prepare({
+        schemaVersion: "hpi-workspace-prepare.v1",
+        operationId: "op_task7-conditional-filter-failure",
+        operationFingerprint: fingerprint("task7-conditional-filter-failure"),
+        workspaceId,
+        repository: fixture.repository,
+        baseCommit: fixture.baseCommit,
+      }),
+    ).rejects.toThrow();
+    expect(
+      runGit(fixture.repository, fixture.parent, ["branch", "--list", `hpi/${workspaceId}`]),
+    ).toBe("");
+    await expect(access(join(fixture.ownedRoot, workspaceId))).rejects.toThrow();
+  });
+
+  it("removes its exact branch when a destination race makes worktree creation fail", async () => {
+    const fixture = await createRepositoryFixture();
+    const workspaceId = "workspace_task7-destination-race";
+    const destination = join(fixture.ownedRoot, workspaceId);
+    const branchRef = join(fixture.repository, ".git", "refs", "heads", "hpi", workspaceId);
+    const racer = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          "const { existsSync, writeFileSync, unlinkSync } = require('node:fs');",
+          "const [branchRef, destination] = process.argv.slice(1);",
+          "process.stdout.write('READY\\n');",
+          "const deadline = Date.now() + 10000;",
+          "const timer = setInterval(() => {",
+          "  if (existsSync(branchRef)) {",
+          "    clearInterval(timer);",
+          "    writeFileSync(destination, 'RACING_DESTINATION\\n');",
+          "    setTimeout(() => { unlinkSync(destination); process.exit(0); }, 1000);",
+          "  } else if (Date.now() >= deadline) { clearInterval(timer); process.exit(2); }",
+          "}, 1);",
+        ].join("\n"),
+        branchRef,
+        destination,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+    const [ready] = (await once(racer.stdout, "data")) as [Buffer];
+    expect(ready.toString("utf8")).toContain("READY");
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+
+    try {
+      await expect(
+        manager.prepare({
+          schemaVersion: "hpi-workspace-prepare.v1",
+          operationId: "op_task7-destination-race",
+          operationFingerprint: fingerprint("task7-destination-race"),
+          workspaceId,
+          repository: fixture.repository,
+          baseCommit: fixture.baseCommit,
+        }),
+      ).rejects.toThrow();
+      if (racer.exitCode === null) await once(racer, "exit");
+      expect(racer.exitCode).toBe(0);
+      expect(
+        runGit(fixture.repository, fixture.parent, ["branch", "--list", `hpi/${workspaceId}`]),
+      ).toBe("");
+      await expect(access(destination)).rejects.toThrow();
+    } finally {
+      if (racer.exitCode === null) racer.kill();
+      if (racer.exitCode === null) await once(racer, "exit");
+    }
+  }, 15_000);
+
   it("preserves ignored files instead of deleting them with an otherwise clean worktree", async () => {
     const fixture = await createRepositoryFixture();
     await writeFile(join(fixture.repository, ".git", "info", "exclude"), "ignored.log\n", "utf8");
@@ -362,6 +520,7 @@ describe("local Git Workspace Interface", () => {
         operationId: "op_task7-ignored-dispose",
         operationFingerprint: fingerprint("task7-ignored-dispose"),
         workspaceId: prepared.handle.workspaceId,
+        workspaceFingerprint: prepared.receipt.workspaceFingerprint,
       }),
     ).resolves.toMatchObject({ receipt: { outcome: "BLOCKED", reasonCodes: ["IGNORED_CONTENT"] } });
     await expect(readFile(ignoredFile, "utf8")).resolves.toBe("PRESERVE\n");
@@ -425,6 +584,7 @@ describe("local Git Workspace Interface", () => {
         operationId: "op_task7-missing-physical-dispose",
         operationFingerprint: fingerprint("task7-missing-physical-dispose"),
         workspaceId: prepared.handle.workspaceId,
+        workspaceFingerprint: prepared.receipt.workspaceFingerprint,
       }),
     ).resolves.toMatchObject({
       receipt: {
@@ -519,6 +679,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-preserve-dispose",
       operationFingerprint: fingerprint("task7-preserve-dispose"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     });
     expect(disposal.receipt).toMatchObject({
       schemaVersion: "hpi-workspace-disposal-receipt.v1",
@@ -578,6 +739,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-remove-dispose",
       operationFingerprint: fingerprint("task7-remove-dispose"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     });
     expect(disposal.receipt).toMatchObject({
       schemaVersion: "hpi-workspace-disposal-receipt.v1",
@@ -609,6 +771,99 @@ describe("local Git Workspace Interface", () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
+  }, 15_000);
+
+  it("blocks a delayed cleanup intent from deleting a newer workspace generation with the same id", async () => {
+    const fixture = await createRepositoryFixture();
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const workspaceId = "workspace_task7-delayed-cleanup";
+    const first = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-delayed-cleanup-first-prepare",
+      operationFingerprint: fingerprint("task7-delayed-cleanup-first-prepare"),
+      workspaceId,
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    await manager.dispose({
+      schemaVersion: "hpi-workspace-dispose.v1",
+      operationId: "op_task7-delayed-cleanup-first-dispose",
+      operationFingerprint: fingerprint("task7-delayed-cleanup-first-dispose"),
+      workspaceId,
+      workspaceFingerprint: first.receipt.workspaceFingerprint,
+    });
+    const second = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-delayed-cleanup-second-prepare",
+      operationFingerprint: fingerprint("task7-delayed-cleanup-second-prepare"),
+      workspaceId,
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    expect(second.receipt.workspaceFingerprint).not.toBe(first.receipt.workspaceFingerprint);
+
+    await expect(
+      manager.dispose({
+        schemaVersion: "hpi-workspace-dispose.v1",
+        operationId: "op_task7-delayed-cleanup-stale-dispose",
+        operationFingerprint: fingerprint("task7-delayed-cleanup-stale-dispose"),
+        workspaceId,
+        workspaceFingerprint: first.receipt.workspaceFingerprint,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { outcome: "BLOCKED", reasonCodes: ["WORKSPACE_IDENTITY_DRIFT"] },
+    });
+    await expect(access(second.handle.directory)).resolves.toBeUndefined();
+  }, 15_000);
+
+  it("returns a blocked receipt when the physical target reappears after Git reports removal", async () => {
+    const fixture = await createRepositoryFixture();
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepared = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-post-remove-mismatch-prepare",
+      operationFingerprint: fingerprint("task7-post-remove-mismatch-prepare"),
+      workspaceId: "workspace_task7-post-remove-mismatch",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    const recreator = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const {existsSync,mkdirSync}=require('node:fs');const target=process.argv[1];process.stdout.write('READY\\n');const deadline=Date.now()+10000;while(Date.now()<deadline){if(!existsSync(target)){mkdirSync(target);process.exit(0)}}process.exit(2)",
+        prepared.handle.directory,
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+    const [ready] = (await once(recreator.stdout, "data")) as [Buffer];
+    expect(ready.toString("utf8")).toContain("READY");
+
+    try {
+      await expect(
+        manager.dispose({
+          schemaVersion: "hpi-workspace-dispose.v1",
+          operationId: "op_task7-post-remove-mismatch-dispose",
+          operationFingerprint: fingerprint("task7-post-remove-mismatch-dispose"),
+          workspaceId: prepared.handle.workspaceId,
+          workspaceFingerprint: prepared.receipt.workspaceFingerprint,
+        }),
+      ).resolves.toMatchObject({
+        receipt: {
+          outcome: "BLOCKED",
+          worktreeState: "PRESERVED",
+          registrationState: "AMBIGUOUS",
+          branchState: "PRESERVED",
+          reasonCodes: ["CLEANUP_AMBIGUOUS"],
+        },
+      });
+    } finally {
+      if (recreator.exitCode === null) recreator.kill();
+      if (recreator.exitCode === null) await once(recreator, "exit");
+    }
   }, 15_000);
 
   it("blocks cleanup without traversing a junction or symlink that escapes the owned worktree", async () => {
@@ -653,6 +908,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-link-dispose",
       operationFingerprint: fingerprint("task7-link-dispose"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     });
     expect(disposal.receipt).toMatchObject({
       outcome: "BLOCKED",
@@ -663,6 +919,43 @@ describe("local Git Workspace Interface", () => {
     });
     await expect(readFile(sentinel, "utf8")).resolves.toBe("PRESERVE\n");
     await expect(access(prepared.handle.directory)).resolves.toBeUndefined();
+  }, 15_000);
+
+  it("blocks cleanup when an owned worktree contains a hard-linked file", async () => {
+    const fixture = await createRepositoryFixture();
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepared = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-hardlink-prepare",
+      operationFingerprint: fingerprint("task7-hardlink-prepare"),
+      workspaceId: "workspace_task7-hardlink",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    const outside = join(fixture.parent, "hardlink-source.txt");
+    await writeFile(outside, "PRESERVE_HARDLINK_SOURCE\n", "utf8");
+    await link(outside, join(prepared.handle.directory, "hardlink-copy.txt"));
+
+    await expect(manager.inspect(prepared.handle.workspaceId)).resolves.toMatchObject({
+      receipt: {
+        decision: "PRESERVE",
+        linkedEntries: 1,
+        linkAssessment: { status: "BLOCKED", unresolvedTargets: 1 },
+        reasonCodes: ["DIRTY_WORKTREE", "UNSAFE_LINKS"],
+      },
+    });
+    await expect(
+      manager.dispose({
+        schemaVersion: "hpi-workspace-dispose.v1",
+        operationId: "op_task7-hardlink-dispose",
+        operationFingerprint: fingerprint("task7-hardlink-dispose"),
+        workspaceId: prepared.handle.workspaceId,
+        workspaceFingerprint: prepared.receipt.workspaceFingerprint,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { outcome: "BLOCKED", reasonCodes: ["DIRTY_WORKTREE", "UNSAFE_LINKS"] },
+    });
+    await expect(readFile(outside, "utf8")).resolves.toBe("PRESERVE_HARDLINK_SOURCE\n");
   }, 15_000);
 
   it("removes a clean worktree but preserves its pushed unmerged branch", async () => {
@@ -727,6 +1020,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-pushed-dispose",
       operationFingerprint: fingerprint("task7-pushed-dispose"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     });
     expect(disposal.receipt).toMatchObject({
       outcome: "APPLIED",
@@ -785,6 +1079,7 @@ describe("local Git Workspace Interface", () => {
           operationId: "op_task7-ambiguous-dispose",
           operationFingerprint: fingerprint("task7-ambiguous-dispose"),
           workspaceId: prepared.handle.workspaceId,
+          workspaceFingerprint: prepared.receipt.workspaceFingerprint,
         });
         expect(disposal.receipt).toMatchObject({
           outcome: "BLOCKED",
@@ -862,6 +1157,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-disposal-replay",
       operationFingerprint: fingerprint("task7-disposal-replay"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     };
 
     const first = await manager.dispose(request);
@@ -869,7 +1165,7 @@ describe("local Git Workspace Interface", () => {
 
     expect(first.receipt.outcome).toBe("APPLIED");
     expect(replay).toEqual(first);
-  });
+  }, 15_000);
 
   it("rejects a disposal operation replay whose fingerprint changed", async () => {
     const fixture = await createRepositoryFixture();
@@ -888,6 +1184,7 @@ describe("local Git Workspace Interface", () => {
       operationId: "op_task7-disposal-conflict",
       operationFingerprint: fingerprint("task7-disposal-original"),
       workspaceId: prepared.handle.workspaceId,
+      workspaceFingerprint: prepared.receipt.workspaceFingerprint,
     };
     await manager.dispose(request);
 
@@ -897,5 +1194,5 @@ describe("local Git Workspace Interface", () => {
         operationFingerprint: fingerprint("task7-disposal-changed"),
       }),
     ).rejects.toThrow(/operation replay/u);
-  });
+  }, 15_000);
 });

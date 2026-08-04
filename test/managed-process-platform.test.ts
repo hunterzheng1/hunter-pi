@@ -14,6 +14,10 @@ import {
   type ManagedProcessHost,
 } from "@hunter-pi/execution";
 import { LinuxSubreaperProcessTreeDriver } from "../packages/execution/src/posix-process-group-driver.js";
+import {
+  linuxPidfdSignalSource,
+  linuxSubreaperProcessTreeHelperSource,
+} from "../packages/execution/src/posix-process-group-helper-source.js";
 import { windowsJobHelperSource } from "../packages/execution/src/windows-job-helper-source.js";
 import { WindowsJobObjectDriver } from "../packages/execution/src/windows-job-driver.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
@@ -67,8 +71,8 @@ function startRequest(
     timeoutMs: options.timeoutMs ?? 15_000,
     maxOutputBytes: options.maxOutputBytes ?? 1_048_576,
     leases: [],
-    leaseBindOperationId: null,
-    leaseBindOperationFingerprint: null,
+    leaseBindOperationId: "op_platform-process-reservation",
+    leaseBindOperationFingerprint: fingerprint("operation:platform-process-reservation"),
   });
 }
 
@@ -400,6 +404,10 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
   });
 
   it("does not signal a platform process tree when its identity fingerprint differs", async () => {
+    expect(linuxPidfdSignalSource).toContain("pidfd_send_signal");
+    expect(linuxSubreaperProcessTreeHelperSource).not.toContain(
+      'process.kill(identity.pid, "SIGKILL")',
+    );
     const fixture = await createFixture();
     const driver =
       process.platform === "win32"

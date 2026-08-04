@@ -60,17 +60,9 @@ function runGit(
   arguments_: readonly string[],
 ): Buffer {
   const hooksRoot = join(environmentRoot, ".hpi-disabled-hooks");
-  const filterProbe = spawnSync(
+  const configurationProbe = spawnSync(
     "git",
-    [
-      "-C",
-      repository,
-      "config",
-      "--local",
-      "--name-only",
-      "--get-regexp",
-      "^filter\\..*\\.(clean|smudge|process|required)$",
-    ],
+    ["-C", repository, "config", "--local", "--includes", "--name-only", "--list"],
     {
       env: gitEnvironment(environmentRoot),
       maxBuffer: 1024 * 1024,
@@ -79,16 +71,26 @@ function runGit(
     },
   );
   if (
-    filterProbe.error !== undefined ||
-    (filterProbe.status !== 0 && filterProbe.status !== 1) ||
-    filterProbe.stderr.length > 0
+    configurationProbe.error !== undefined ||
+    configurationProbe.status !== 0 ||
+    configurationProbe.stderr.length > 0
   ) {
-    throw new Error("owned Git filter configuration could not be inspected safely");
+    throw new Error("owned Git configuration could not be inspected safely");
+  }
+  const effectiveKeys = configurationProbe.stdout
+    .toString("utf8")
+    .split(/\r?\n/u)
+    .filter((key) => key.length > 0);
+  if (
+    effectiveKeys.some((key) => {
+      const normalized = key.toLowerCase();
+      return normalized.startsWith("includeif.") || normalized === "extensions.worktreeconfig";
+    })
+  ) {
+    throw new Error("dynamic repository Git configuration is not safe for an owned worktree");
   }
   const filterDrivers = new Set(
-    filterProbe.stdout
-      .toString("utf8")
-      .split(/\r?\n/u)
+    effectiveKeys
       .map((key) => /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu.exec(key)?.[1])
       .filter((driver): driver is string => driver !== undefined),
   );
@@ -447,19 +449,12 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       workspaceFingerprint,
       sourceFingerprint,
     };
-    let worktreeAdded = false;
+    let branchCreated = false;
     let canonicalDestination: string;
     try {
-      runGit(repository, this.#ownedRoot, [
-        "worktree",
-        "add",
-        "--quiet",
-        "-b",
-        branchName,
-        destination,
-        parsed.baseCommit,
-      ]);
-      worktreeAdded = true;
+      runGit(repository, this.#ownedRoot, ["branch", "--no-track", branchName, parsed.baseCommit]);
+      branchCreated = true;
+      runGit(repository, this.#ownedRoot, ["worktree", "add", "--quiet", destination, branchName]);
       this.#workspaces.set(parsed.workspaceId, provisional);
 
       canonicalDestination = await requirePhysicalRoot(destination, "created worktree");
@@ -504,7 +499,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         throw new Error("source checkout changed while preparing the owned worktree");
       }
     } catch (error) {
-      if (worktreeAdded) {
+      if (branchCreated) {
         const compensated = await this.#compensateFailedPrepare(provisional);
         if (compensated) this.#workspaces.delete(parsed.workspaceId);
         else {
@@ -560,65 +555,70 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
           runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
         ),
       ]);
-      if (
-        !physicalPathExists ||
-        !worktreeIsRegistered(registrationOutput, workspace.handle.directory)
-      ) {
-        return false;
-      }
-      const directory = await requirePhysicalRoot(
+      const registrationExists = worktreeIsRegistered(
+        registrationOutput,
         workspace.handle.directory,
-        "failed created worktree",
       );
-      assertContained(this.#ownedRoot, directory);
-      const [head, branch, status, links] = await Promise.all([
-        Promise.resolve(
-          runGit(directory, this.#ownedRoot, ["rev-parse", "HEAD"]).toString("utf8").trim(),
-        ),
-        Promise.resolve(
-          runGit(directory, this.#ownedRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
-            .toString("utf8")
-            .trim(),
-        ),
-        Promise.resolve(
-          runGit(directory, this.#ownedRoot, [
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-          ]),
-        ),
-        inspectLinkedEntries(directory),
-      ]);
-      if (
-        head !== workspace.handle.baseCommit ||
-        branch !== workspace.handle.branchName ||
-        status.length !== 0 ||
-        links.total !== 0
-      ) {
-        return false;
-      }
-      runGit(workspace.repository, this.#ownedRoot, [
-        "worktree",
-        "remove",
-        workspace.handle.directory,
-      ]);
-      if (
-        (await pathExists(workspace.handle.directory)) ||
-        worktreeIsRegistered(
-          runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+      if (registrationExists) {
+        if (!physicalPathExists) return false;
+        const directory = await requirePhysicalRoot(
           workspace.handle.directory,
-        )
-      ) {
-        return false;
+          "failed created worktree",
+        );
+        assertContained(this.#ownedRoot, directory);
+        const [head, branch, status, links] = await Promise.all([
+          Promise.resolve(
+            runGit(directory, this.#ownedRoot, ["rev-parse", "HEAD"]).toString("utf8").trim(),
+          ),
+          Promise.resolve(
+            runGit(directory, this.#ownedRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
+              .toString("utf8")
+              .trim(),
+          ),
+          Promise.resolve(
+            runGit(directory, this.#ownedRoot, [
+              "status",
+              "--porcelain=v1",
+              "-z",
+              "--untracked-files=all",
+              "--ignored=matching",
+            ]),
+          ),
+          inspectLinkedEntries(directory),
+        ]);
+        if (
+          head !== workspace.handle.baseCommit ||
+          branch !== workspace.handle.branchName ||
+          status.length !== 0 ||
+          links.total !== 0
+        ) {
+          return false;
+        }
+        runGit(workspace.repository, this.#ownedRoot, [
+          "worktree",
+          "remove",
+          workspace.handle.directory,
+        ]);
+        if (
+          (await pathExists(workspace.handle.directory)) ||
+          worktreeIsRegistered(
+            runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+            workspace.handle.directory,
+          )
+        ) {
+          return false;
+        }
       }
       const branchHead = runGit(workspace.repository, this.#ownedRoot, [
-        "rev-parse",
+        "for-each-ref",
+        "--format=%(objectname)",
         `refs/heads/${workspace.handle.branchName}`,
       ])
         .toString("utf8")
         .trim();
+      if (branchHead.length === 0) {
+        return !physicalPathExists && !registrationExists;
+      }
       if (branchHead !== workspace.handle.baseCommit) return false;
       runGit(workspace.repository, this.#ownedRoot, [
         "branch",
@@ -631,7 +631,12 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
           "branch",
           "--list",
           workspace.handle.branchName,
-        ]).length === 0
+        ]).length === 0 &&
+        !(await pathExists(workspace.handle.directory)) &&
+        !worktreeIsRegistered(
+          runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+          workspace.handle.directory,
+        )
       );
     } catch {
       return false;
@@ -806,6 +811,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       JSON.stringify({
         schemaVersion: parsed.schemaVersion,
         workspaceId: parsed.workspaceId,
+        workspaceFingerprint: parsed.workspaceFingerprint,
       }),
     );
     const existing = this.#disposalOperations.get(parsed.operationId);
@@ -820,6 +826,61 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
     }
     const workspace = this.#workspaces.get(parsed.workspaceId);
     if (workspace === undefined) throw new Error("workspace is not owned by this manager");
+    if (workspace.workspaceFingerprint !== parsed.workspaceFingerprint) {
+      const [physicalPathExists, registrationOutput, branchOutput] = await Promise.all([
+        pathExists(workspace.handle.directory),
+        Promise.resolve(
+          runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+        ),
+        Promise.resolve(
+          runGit(workspace.repository, this.#ownedRoot, [
+            "for-each-ref",
+            "--format=%(refname)",
+            `refs/heads/${workspace.handle.branchName}`,
+          ]),
+        ),
+      ]);
+      const registrationExists = worktreeIsRegistered(
+        registrationOutput,
+        workspace.handle.directory,
+      );
+      const branchRemains = branchOutput.toString("utf8").trim().length > 0;
+      const result = {
+        receipt: workspaceDisposalReceiptSchema.parse({
+          schemaVersion: "hpi-workspace-disposal-receipt.v1",
+          action: "DISPOSE",
+          outcome: "BLOCKED",
+          workspaceId: parsed.workspaceId,
+          workspaceFingerprint: parsed.workspaceFingerprint,
+          hygieneFingerprint: sha256(
+            JSON.stringify({
+              schemaVersion: "hpi-workspace-stale-disposal.v1",
+              expectedWorkspaceFingerprint: parsed.workspaceFingerprint,
+              currentWorkspaceFingerprint: workspace.workspaceFingerprint,
+              physicalPathExists,
+              registrationExists,
+              branchRemains,
+            }),
+          ),
+          worktreeState: physicalPathExists ? "PRESERVED" : "REMOVED",
+          registrationState:
+            physicalPathExists === registrationExists
+              ? registrationExists
+                ? "REGISTERED"
+                : "REMOVED"
+              : "AMBIGUOUS",
+          branchState: branchRemains ? "PRESERVED" : "REMOVED",
+          reasonCodes: ["WORKSPACE_IDENTITY_DRIFT"],
+          observedAt: this.#now(),
+        }),
+      };
+      this.#disposalOperations.set(parsed.operationId, {
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        result,
+      });
+      return result;
+    }
     const [physicalPathExists, registrationOutput] = await Promise.all([
       pathExists(workspace.handle.directory),
       Promise.resolve(
@@ -842,6 +903,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
           action: "DISPOSE",
           outcome: "BLOCKED",
           workspaceId: parsed.workspaceId,
+          workspaceFingerprint: parsed.workspaceFingerprint,
           hygieneFingerprint: sha256(
             JSON.stringify({
               schemaVersion: "hpi-workspace-mismatch.v1",
@@ -909,6 +971,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
             action: "DISPOSE",
             outcome: "BLOCKED",
             workspaceId: parsed.workspaceId,
+            workspaceFingerprint: parsed.workspaceFingerprint,
             hygieneFingerprint: hygiene.receipt.hygieneFingerprint,
             worktreeState: physicalPathRemains ? "PRESERVED" : "REMOVED",
             registrationState:
@@ -939,7 +1002,47 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         ),
       ]);
       if (physicalPathRemains || registrationRemains) {
-        throw new Error("worktree cleanup result is ambiguous; branch was preserved");
+        const branchRemains =
+          runGit(workspace.repository, this.#ownedRoot, [
+            "for-each-ref",
+            "--format=%(refname)",
+            `refs/heads/${workspace.handle.branchName}`,
+          ])
+            .toString("utf8")
+            .trim().length > 0;
+        const sourceSnapshotAfterMismatch = await sourceCheckoutSnapshot(
+          workspace.repository,
+          this.#ownedRoot,
+        );
+        if (sourceSnapshotAfterMismatch !== sourceSnapshotBefore) {
+          throw new Error("source checkout changed during an ambiguous worktree cleanup");
+        }
+        const result = {
+          receipt: workspaceDisposalReceiptSchema.parse({
+            schemaVersion: "hpi-workspace-disposal-receipt.v1",
+            action: "DISPOSE",
+            outcome: "BLOCKED",
+            workspaceId: parsed.workspaceId,
+            workspaceFingerprint: parsed.workspaceFingerprint,
+            hygieneFingerprint: hygiene.receipt.hygieneFingerprint,
+            worktreeState: physicalPathRemains ? "PRESERVED" : "REMOVED",
+            registrationState:
+              physicalPathRemains === registrationRemains
+                ? registrationRemains
+                  ? "REGISTERED"
+                  : "REMOVED"
+                : "AMBIGUOUS",
+            branchState: branchRemains ? "PRESERVED" : "REMOVED",
+            reasonCodes: ["CLEANUP_AMBIGUOUS"],
+            observedAt: this.#now(),
+          }),
+        };
+        this.#disposalOperations.set(parsed.operationId, {
+          operationFingerprint: parsed.operationFingerprint,
+          requestFingerprint,
+          result,
+        });
+        return result;
       }
       if (hygiene.receipt.branchDisposition.localBranch === "REMOVE") {
         runGit(workspace.repository, this.#ownedRoot, [
@@ -974,6 +1077,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
           action: "DISPOSE",
           outcome: "APPLIED",
           workspaceId: parsed.workspaceId,
+          workspaceFingerprint: parsed.workspaceFingerprint,
           hygieneFingerprint: hygiene.receipt.hygieneFingerprint,
           worktreeState: "REMOVED",
           registrationState: "REMOVED",
@@ -996,6 +1100,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         action: "DISPOSE",
         outcome: "BLOCKED",
         workspaceId: parsed.workspaceId,
+        workspaceFingerprint: parsed.workspaceFingerprint,
         hygieneFingerprint: hygiene.receipt.hygieneFingerprint,
         worktreeState: "PRESERVED",
         registrationState: "REGISTERED",

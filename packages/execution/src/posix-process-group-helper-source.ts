@@ -15,6 +15,50 @@ os.environ["HPI_SUBREAPER_ESTABLISHED"] = "1"
 os.execv(sys.argv[1], sys.argv[1:])
 `;
 
+export const linuxPidfdSignalSource = String.raw`
+import os
+import signal
+import sys
+
+EXIT_GONE = 3
+EXIT_IDENTITY_CHANGED = 42
+EXIT_UNAVAILABLE = 70
+
+try:
+    pid = int(sys.argv[1])
+    expected_start_time = sys.argv[2]
+    if pid <= 0 or not expected_start_time.isdigit():
+        raise ValueError("invalid identity")
+except (IndexError, ValueError):
+    sys.exit(EXIT_UNAVAILABLE)
+
+try:
+    pidfd = os.pidfd_open(pid, 0)
+except ProcessLookupError:
+    sys.exit(EXIT_GONE)
+except (AttributeError, OSError):
+    sys.exit(EXIT_UNAVAILABLE)
+
+try:
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as proc_stat:
+            value = proc_stat.read()
+    except FileNotFoundError:
+        sys.exit(EXIT_GONE)
+    end = value.rfind(")")
+    fields = value[end + 2:].strip().split() if end >= 0 else []
+    if len(fields) < 20 or fields[19] != expected_start_time:
+        sys.exit(EXIT_IDENTITY_CHANGED)
+    try:
+        signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+    except ProcessLookupError:
+        sys.exit(EXIT_GONE)
+    except (AttributeError, OSError):
+        sys.exit(EXIT_UNAVAILABLE)
+finally:
+    os.close(pidfd)
+`;
+
 export const linuxSubreaperProcessTreeHelperSource = String.raw`
 import { readdir, readFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
@@ -27,6 +71,11 @@ const send = (value) => {
 };
 
 const ignoredProcErrors = new Set(["ENOENT", "ESRCH"]);
+const infrastructurePids = new Set();
+const pidfdSignalerPath = process.argv[2];
+if (typeof pidfdSignalerPath !== "string" || pidfdSignalerPath.length === 0) {
+  throw new Error("PIDFD_SIGNALER_UNAVAILABLE");
+}
 
 const parseProcIdentity = async (pid) => {
   const value = await readFile("/proc/" + String(pid) + "/stat", "utf8");
@@ -84,21 +133,40 @@ const liveDescendants = async () => {
       if (visited.has(identity.pid)) continue;
       visited.add(identity.pid);
       pending.push(identity.pid);
-      if (identity.state !== "Z" && identity.state !== "X") descendants.push(identity);
+      if (
+        identity.state !== "Z" &&
+        identity.state !== "X" &&
+        !infrastructurePids.has(identity.pid)
+      ) {
+        descendants.push(identity);
+      }
     }
   }
   return descendants;
 };
 
+const signalIdentityWithPidfd = (identity) =>
+  new Promise((resolve, reject) => {
+    const signaler = spawn(
+      "/usr/bin/python3",
+      [pidfdSignalerPath, String(identity.pid), identity.startTime],
+      { shell: false, stdio: "ignore" },
+    );
+    if (signaler.pid !== undefined) infrastructurePids.add(signaler.pid);
+    signaler.once("error", reject);
+    signaler.once("close", (code) => {
+      if (signaler.pid !== undefined) infrastructurePids.delete(signaler.pid);
+      if (code === 0 || code === 3) {
+        resolve();
+        return;
+      }
+      reject(new Error(code === 42 ? "PROCESS_IDENTITY_CHANGED" : "PIDFD_SIGNAL_FAILED"));
+    });
+  });
+
 const killIdentified = async (identities) => {
   for (const identity of identities) {
-    try {
-      const current = await parseProcIdentity(identity.pid);
-      if (current.startTime !== identity.startTime) throw new Error("PROCESS_IDENTITY_CHANGED");
-      process.kill(identity.pid, "SIGKILL");
-    } catch (error) {
-      if (!ignoredProcErrors.has(error?.code)) throw error;
-    }
+    await signalIdentityWithPidfd(identity);
   }
 };
 

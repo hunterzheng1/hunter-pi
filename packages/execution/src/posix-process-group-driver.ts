@@ -20,6 +20,7 @@ import {
   type ManagedProcessDriverStartRequest,
 } from "./process-platform.js";
 import {
+  linuxPidfdSignalSource,
   linuxSubreaperProcessTreeHelperSource,
   linuxSubreaperShimSource,
 } from "./posix-process-group-helper-source.js";
@@ -236,14 +237,16 @@ class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
     const helperRoot = await mkdtemp(join(tmpdir(), "hpi-process-host-"));
     const shimPath = join(helperRoot, "linux-subreaper-shim.py");
     const helperPath = join(helperRoot, "linux-subreaper-process-tree-host.mjs");
+    const pidfdSignalerPath = join(helperRoot, "linux-pidfd-signal.py");
     await Promise.all([
       writeFile(shimPath, linuxSubreaperShimSource, { encoding: "utf8", flag: "wx" }),
+      writeFile(pidfdSignalerPath, linuxPidfdSignalSource, { encoding: "utf8", flag: "wx" }),
       writeFile(helperPath, linuxSubreaperProcessTreeHelperSource, {
         encoding: "utf8",
         flag: "wx",
       }),
     ]);
-    const child = spawn(python, [shimPath, process.execPath, helperPath], {
+    const child = spawn(python, [shimPath, process.execPath, helperPath, pidfdSignalerPath], {
       cwd: helperRoot,
       detached: true,
       env: infrastructureEnvironment(),

@@ -19,6 +19,7 @@ interface LeaseManager {
     readonly resources: readonly string[];
     readonly ttlMs: number;
   }): Promise<{
+    readonly application: "APPLIED" | "REPLAYED";
     readonly receipt: {
       readonly schemaVersion: "hpi-lease-receipt.v1";
       readonly action: "ACQUIRE";
@@ -372,6 +373,46 @@ describe("file-backed exclusive lease manager", () => {
     });
   });
 
+  it("treats an invalid owner-liveness adapter result as not proven", async () => {
+    const fixture = await createLeaseFixture();
+    const createManager = requireCreateLeaseManager();
+    let now = "2026-08-04T09:12:00.000Z";
+    const originalManager = await createManager({ leaseRoot: fixture.root, now: () => now });
+    await originalManager.acquire({
+      ...acquireRequest({
+        suffix: "lease-invalid-liveness-original",
+        leaseId: "lease_task7-invalid-liveness-original",
+        workspaceId: "workspace_task7-invalid-liveness",
+        owner: "invalid-liveness-original",
+        resources: ["resource_invalid_liveness"],
+      }),
+      ttlMs: 1_000,
+    });
+    now = "2026-08-04T09:12:02.000Z";
+    const invalidAdapterManager = await createManager({
+      leaseRoot: fixture.root,
+      now: () => now,
+      reconcileOwner: () => Promise.resolve("UNKNOWN" as never),
+    });
+
+    await expect(
+      invalidAdapterManager.acquire(
+        acquireRequest({
+          suffix: "lease-invalid-liveness-replacement",
+          leaseId: "lease_task7-invalid-liveness-replacement",
+          workspaceId: "workspace_task7-invalid-liveness",
+          owner: "invalid-liveness-replacement",
+          resources: ["resource_invalid_liveness_replacement"],
+        }),
+      ),
+    ).resolves.toMatchObject({
+      receipt: { outcome: "BLOCKED", reasonCodes: ["OWNER_LIVENESS_NOT_PROVEN"] },
+    });
+    await expect(
+      invalidAdapterManager.inspect("lease_task7-invalid-liveness-original"),
+    ).resolves.toMatchObject({ receipt: { state: "EXPIRED" } });
+  });
+
   it("renews monotonically, rejects a non-owner, and releases exactly once", async () => {
     const fixture = await createLeaseFixture();
     const createManager = requireCreateLeaseManager();
@@ -475,21 +516,25 @@ describe("file-backed exclusive lease manager", () => {
       }),
     );
     const bindingFingerprint = fingerprint("process-session-binding");
-    await expect(
-      manager.bind({
-        schemaVersion: "hpi-lease-bind.v1",
-        operationId: "op_lease-binding",
-        operationFingerprint: fingerprint("operation:lease-binding"),
-        bindingFingerprint,
-        leases: [{ leaseId: "lease_task7-binding", ownerFingerprint }],
-      }),
-    ).resolves.toMatchObject({
+    const bindRequest = {
+      schemaVersion: "hpi-lease-bind.v1" as const,
+      operationId: "op_lease-binding",
+      operationFingerprint: fingerprint("operation:lease-binding"),
+      bindingFingerprint,
+      leases: [{ leaseId: "lease_task7-binding", ownerFingerprint }],
+    };
+    await expect(manager.bind(bindRequest)).resolves.toMatchObject({
+      application: "APPLIED",
       receipt: {
         action: "BIND",
         outcome: "BOUND",
         bindingFingerprint,
         leaseCount: 1,
       },
+    });
+    await expect(manager.bind({ ...bindRequest })).resolves.toMatchObject({
+      application: "REPLAYED",
+      receipt: { outcome: "BOUND", bindingFingerprint },
     });
     await expect(manager.inspect("lease_task7-binding")).resolves.toMatchObject({
       receipt: { state: "ACTIVE", generation: 2, bindingFingerprint },

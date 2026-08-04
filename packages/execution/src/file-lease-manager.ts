@@ -38,8 +38,8 @@ import {
   leaseStatusReceiptSchema,
   type LeaseAcquireReceipt,
   type LeaseAcquireRequest,
-  type LeaseBindReceipt,
   type LeaseBindRequest,
+  type LeaseBindResult,
   type LeaseManager,
   type LeaseMutationReceipt,
   type LeaseReasonCode,
@@ -73,6 +73,7 @@ const leaseRecordSchema = leaseRecordPayloadSchema.safeExtend({
   recordFingerprint: fingerprintSchema,
 });
 type LeaseRecord = z.infer<typeof leaseRecordSchema>;
+const ownerLivenessSchema = z.enum(["ALIVE", "DEAD", "NOT_PROVEN"]);
 
 const transactionReceiptSchema = z.union([
   leaseAcquireReceiptSchema,
@@ -310,7 +311,10 @@ class FileLeaseManager implements LeaseManager {
       const deadConflicts: LeaseRecord[] = [];
       if (reasonCode === undefined) {
         for (const record of conflicts) {
-          const ownerState = await this.#reconcileOwner(record.ownerFingerprint);
+          const ownerStateResult = ownerLivenessSchema.safeParse(
+            await this.#reconcileOwner(record.ownerFingerprint),
+          );
+          const ownerState = ownerStateResult.success ? ownerStateResult.data : "NOT_PROVEN";
           if (ownerState === "ALIVE") {
             reasonCode = "OWNER_STILL_LIVE";
             break;
@@ -482,7 +486,7 @@ class FileLeaseManager implements LeaseManager {
     });
   }
 
-  public async bind(request: LeaseBindRequest): Promise<{ readonly receipt: LeaseBindReceipt }> {
+  public async bind(request: LeaseBindRequest): Promise<LeaseBindResult> {
     const parsed = leaseBindRequestSchema.parse(request);
     const leases = [...parsed.leases].sort((left, right) =>
       left.leaseId.localeCompare(right.leaseId),
@@ -504,7 +508,7 @@ class FileLeaseManager implements LeaseManager {
           requestFingerprint,
           "lease binding",
         );
-        return { receipt: leaseBindReceiptSchema.parse(replay.receipt) };
+        return { receipt: leaseBindReceiptSchema.parse(replay.receipt), application: "REPLAYED" };
       }
       const observedAt = this.#assertClock(state);
       const records = leases.map((lease) => {
@@ -545,7 +549,7 @@ class FileLeaseManager implements LeaseManager {
         receipt,
         mutations,
       });
-      return { receipt };
+      return { receipt, application: "APPLIED" };
     });
   }
 

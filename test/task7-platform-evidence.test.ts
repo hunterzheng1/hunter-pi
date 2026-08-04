@@ -5,7 +5,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { assertTask7WorktreeClean, runTask7ProbeCommand } from "../tools/task7-platform-probe.js";
+import {
+  assertTask7WorktreeClean,
+  parseTask7LinuxDistribution,
+  runTask7ProbeCommand,
+} from "../tools/task7-platform-probe.js";
 import {
   compareTask7PlatformEvidence,
   task7PlatformConsistencyV1Schema,
@@ -22,6 +26,7 @@ import {
   resolveTask7OutputPath,
   task7PlatformFailureReceiptSchema,
   task7PlatformFailureReceiptV1Schema,
+  task7PlatformFailureReceiptV2Schema,
   task7PlatformReceiptSchema,
   task7PlatformReceiptV1Schema,
 } from "../tools/task7-platform-evidence.js";
@@ -112,6 +117,49 @@ function receipt(platform: "win32" | "linux") {
 }
 
 describe("Task 7 platform Evidence", () => {
+  it("labels Linux as Ubuntu only when os-release proves Ubuntu", () => {
+    expect(parseTask7LinuxDistribution('NAME="Ubuntu"\nID=ubuntu\n')).toBe("UBUNTU");
+    expect(parseTask7LinuxDistribution('NAME="Debian GNU/Linux"\nID=debian\n')).toBe("UNSUPPORTED");
+    expect(parseTask7LinuxDistribution("NAME=Unknown\n")).toBe("UNSUPPORTED");
+  });
+
+  it("requires post-identity failure Evidence to bind the exact source and verifier", () => {
+    const failure = {
+      schemaVersion: "hpi-task7-platform-failure.v3",
+      kind: "hunter-pi/task7-platform-failure",
+      observedAt: "2026-08-04T10:00:00.000Z",
+      status: "NOT_PROVEN",
+      platform: "linux",
+      stage: "REPORT_PARSE",
+      code: "TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE",
+      source: null,
+      exitCode: 0,
+      stdoutDigest: digest("1"),
+      stderrDigest: digest("2"),
+      observedBytes: 42,
+      verifierVersion: "task7-verifier.v3",
+      fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
+      providerRequests: "NOT_RUN",
+      realRepositories: "NOT_RUN",
+      remoteCi: "PENDING",
+    };
+    expect(task7PlatformFailureReceiptSchema.safeParse(failure).success).toBe(false);
+    expect(
+      task7PlatformFailureReceiptSchema.safeParse({
+        ...failure,
+        source: {
+          repository: "hunter-pi",
+          commit: "a".repeat(40),
+          digest: digest("3"),
+          pathspec: TASK7_SOURCE_PATHSPEC,
+          verifierPathspec: TASK7_VERIFIER_PATHSPEC,
+          verifierFingerprint: digest("4"),
+          testFileFingerprint: digest("5"),
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("accepts exactly the platform-applicable matrix and rejects missing or wrongly skipped cases", () => {
     expect(parseTask7VitestReport(passingReport("linux"), "linux")).toEqual(
       TASK7_PLATFORM_CHECKS.map((check) => ({
@@ -343,6 +391,8 @@ describe("Task 7 platform Evidence", () => {
       if (schemaVersion === "hpi-task7-platform-failure.v1") {
         task7PlatformFailureReceiptV1Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-failure.v2") {
+        task7PlatformFailureReceiptV2Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-failure.v3") {
         task7PlatformFailureReceiptSchema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-receipt.v1") {
         task7PlatformReceiptV1Schema.parse(value);

@@ -52,8 +52,8 @@ export const managedProcessStartRequestSchema = z
     timeoutMs: z.number().int().positive().max(86_400_000),
     maxOutputBytes: z.number().int().positive().max(268_435_456),
     leases: z.array(leaseBindingSchema).max(128),
-    leaseBindOperationId: operationIdSchema.nullable(),
-    leaseBindOperationFingerprint: fingerprintSchema.nullable(),
+    leaseBindOperationId: operationIdSchema,
+    leaseBindOperationFingerprint: fingerprintSchema,
   })
   .superRefine((request, context) => {
     if (new Set(request.leases.map((binding) => binding.leaseId)).size !== request.leases.length) {
@@ -64,16 +64,6 @@ export const managedProcessStartRequestSchema = z
       request.leases.length
     ) {
       context.addIssue({ code: "custom", message: "lease release operations must be unique" });
-    }
-    const requiresBinding = request.leases.length > 0;
-    if (
-      requiresBinding !== (request.leaseBindOperationId !== null) ||
-      requiresBinding !== (request.leaseBindOperationFingerprint !== null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "lease binding operation identity must be present exactly when leases are bound",
-      });
     }
   });
 export type ManagedProcessStartRequest = z.infer<typeof managedProcessStartRequestSchema>;
@@ -191,6 +181,17 @@ export const managedProcessFinalReceiptSchema = z
     observedAt: timestampSchema,
   })
   .superRefine((receipt, context) => {
+    const reconciled =
+      receipt.executionObservation !== "UNRECONCILED" &&
+      receipt.processTreeState === "EMPTY" &&
+      receipt.outputState === "CLOSED" &&
+      (receipt.leaseState === "RELEASED" || receipt.leaseState === "NOT_REQUIRED");
+    if (receipt.terminalFinality === "FINAL" && !reconciled) {
+      context.addIssue({
+        code: "custom",
+        message: "process finality requires reconciled execution, tree, output, and leases",
+      });
+    }
     if ((receipt.terminalFinality === "FINAL") !== (receipt.reasonCodes.length === 0)) {
       context.addIssue({ code: "custom", message: "process finality reasons are inconsistent" });
     }

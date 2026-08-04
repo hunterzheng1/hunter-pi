@@ -200,6 +200,13 @@ async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIden
       readFile(resolve(repositoryRoot, "test/managed-process-platform.test.ts")),
     ]);
   if (!/^[a-f0-9]{40}$/u.test(commit)) throw new Error("Git commit identity is invalid");
+  const commitAfter = await requireSuccessfulTextCommand(
+    "git",
+    ["rev-parse", "HEAD"],
+    repositoryRoot,
+  );
+  await assertTask7WorktreeClean(repositoryRoot);
+  if (commitAfter !== commit) throw new Error("Git source identity changed while it was hashed");
   const gitVersion = gitVersionOutput.replace(/^git version\s+/u, "");
   return {
     commit,
@@ -210,11 +217,21 @@ async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIden
   };
 }
 
-function platformIdentity(): {
+export function parseTask7LinuxDistribution(osRelease: string): "UBUNTU" | "UNSUPPORTED" {
+  const idLine = osRelease.split(/\r?\n/u).find((line) => line.startsWith("ID="));
+  const id = idLine
+    ?.slice(3)
+    .trim()
+    .replace(/^['"]|['"]$/gu, "")
+    .toLowerCase();
+  return id === "ubuntu" ? "UBUNTU" : "UNSUPPORTED";
+}
+
+async function platformIdentity(): Promise<{
   readonly platform: "win32" | "linux";
   readonly platformLabel: "WINDOWS" | "UBUNTU";
   readonly containment: "WINDOWS_JOB_OBJECT" | "LINUX_SUBREAPER_PROCESS_TREE";
-} {
+}> {
   if (process.platform === "win32") {
     return {
       platform: "win32",
@@ -223,6 +240,9 @@ function platformIdentity(): {
     };
   }
   if (process.platform === "linux") {
+    if (parseTask7LinuxDistribution(await readFile("/etc/os-release", "utf8")) !== "UBUNTU") {
+      throw new Error("Task 7 Linux Evidence is qualified only on Ubuntu");
+    }
     return {
       platform: "linux",
       platformLabel: "UBUNTU",
@@ -236,22 +256,35 @@ function createFailureReceipt(
   stage: FailureStage,
   status: "FAIL" | "NOT_PROVEN",
   result?: Task7ProbeCommandResult,
+  source?: SourceIdentity,
 ): Task7PlatformFailureReceipt {
   const platform =
     process.platform === "win32" || process.platform === "linux" ? process.platform : "UNSUPPORTED";
   return task7PlatformFailureReceiptSchema.parse({
-    schemaVersion: "hpi-task7-platform-failure.v2",
+    schemaVersion: "hpi-task7-platform-failure.v3",
     kind: "hunter-pi/task7-platform-failure",
     observedAt: new Date().toISOString(),
     status,
     platform,
     stage,
     code: "TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE",
+    source:
+      source === undefined
+        ? null
+        : {
+            repository: "hunter-pi",
+            commit: source.commit,
+            digest: source.digest,
+            pathspec: TASK7_SOURCE_PATHSPEC,
+            verifierPathspec: TASK7_VERIFIER_PATHSPEC,
+            verifierFingerprint: source.verifierFingerprint,
+            testFileFingerprint: source.testFileFingerprint,
+          },
     exitCode: result?.exitCode ?? null,
     stdoutDigest: result?.stdoutDigest ?? digest(""),
     stderrDigest: result?.stderrDigest ?? digest(""),
     observedBytes: result?.observedBytes ?? 0,
-    verifierVersion: "task7-verifier.v2",
+    verifierVersion: "task7-verifier.v3",
     fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
     providerRequests: "NOT_RUN",
     realRepositories: "NOT_RUN",
@@ -264,10 +297,11 @@ export async function runTask7PlatformProbe(
 ): Promise<Task7PlatformReceipt | Task7PlatformFailureReceipt> {
   let stage: FailureStage = "SOURCE_IDENTITY";
   let result: Task7ProbeCommandResult | undefined;
+  let source: SourceIdentity | undefined;
   let reportRoot: string | undefined;
   try {
-    const platform = platformIdentity();
-    const source = await computeSourceIdentity(repositoryRoot);
+    const platform = await platformIdentity();
+    source = await computeSourceIdentity(repositoryRoot);
     stage = "TEST_EXECUTION";
     reportRoot = await mkdtemp(join(tmpdir(), "hpi-task7-platform-probe-"));
     const reportPath = join(reportRoot, "vitest-report.json");
@@ -297,10 +331,23 @@ export async function runTask7PlatformProbe(
       repositoryRoot,
     );
     const endedAt = new Date();
-    if (result.exitCode !== 0) return createFailureReceipt(stage, "FAIL", result);
+    if (result.exitCode !== 0) {
+      stage = "SOURCE_REVALIDATION";
+      const failedSourceAfter = await computeSourceIdentity(repositoryRoot);
+      if (JSON.stringify(failedSourceAfter) !== JSON.stringify(source)) {
+        throw new Error("Task 7 source or verifier identity changed during failed execution");
+      }
+      stage = "TEST_EXECUTION";
+      return createFailureReceipt(stage, "FAIL", result, source);
+    }
     stage = "REPORT_PARSE";
     const report = JSON.parse(await readFile(reportPath, "utf8")) as unknown;
     const checks = parseTask7VitestReport(report, platform.platform);
+    stage = "SOURCE_REVALIDATION";
+    const sourceAfter = await computeSourceIdentity(repositoryRoot);
+    if (JSON.stringify(sourceAfter) !== JSON.stringify(source)) {
+      throw new Error("Task 7 source or verifier identity changed during platform execution");
+    }
     const receipt = task7PlatformReceiptSchema.parse({
       schemaVersion: "hpi-task7-platform-receipt.v2",
       kind: "hunter-pi/task7-platform-receipt",
@@ -346,7 +393,7 @@ export async function runTask7PlatformProbe(
     assertTask7EvidencePrivacy(receipt);
     return receipt;
   } catch {
-    return createFailureReceipt(stage, "NOT_PROVEN", result);
+    return createFailureReceipt(stage, "NOT_PROVEN", result, source);
   } finally {
     if (reportRoot !== undefined) {
       await rm(reportRoot, { force: true, recursive: true });

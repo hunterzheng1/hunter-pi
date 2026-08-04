@@ -113,6 +113,7 @@ export const workspaceDisposeRequestSchema = z.strictObject({
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   workspaceId: workspaceIdSchema,
+  workspaceFingerprint: fingerprintSchema,
 });
 export type WorkspaceDisposeRequest = z.infer<typeof workspaceDisposeRequestSchema>;
 
@@ -121,6 +122,7 @@ export const workspaceDisposalReceiptSchema = z.strictObject({
   action: z.literal("DISPOSE"),
   outcome: z.enum(["APPLIED", "BLOCKED"]),
   workspaceId: workspaceIdSchema,
+  workspaceFingerprint: fingerprintSchema,
   hygieneFingerprint: fingerprintSchema,
   worktreeState: z.enum(["REMOVED", "PRESERVED"]),
   registrationState: z.enum(["REMOVED", "REGISTERED", "AMBIGUOUS"]),

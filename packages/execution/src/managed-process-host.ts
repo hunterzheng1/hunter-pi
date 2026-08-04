@@ -65,7 +65,7 @@ interface SessionRecord {
   readonly driver: ManagedProcessDriverSession;
   readonly output: OutputLedger;
   readonly leases: readonly ManagedProcessLeaseBinding[];
-  readonly leaseBindingFingerprint: Fingerprint | null;
+  readonly leaseBindingFingerprint: Fingerprint;
   readonly cancelOperations: Map<
     string,
     {
@@ -197,51 +197,54 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
       throw new ManagedProcessError("PROCESS_SESSION_CONFLICT", "process session already exists");
     }
     const observedAt = timestampSchema.parse(this.#now());
-    const leaseBindingFingerprint =
-      parsed.leases.length === 0
-        ? null
-        : sha256(
-            canonicalJson({
-              schemaVersion: "hpi-process-lease-binding.v1",
-              sessionId: parsed.sessionId,
-              operationId: parsed.operationId,
-              operationFingerprint: parsed.operationFingerprint,
-              requestFingerprint,
-            }),
-          );
-    if (
-      leaseBindingFingerprint !== null &&
-      parsed.leaseBindOperationId !== null &&
-      parsed.leaseBindOperationFingerprint !== null
-    ) {
-      try {
-        await this.#leaseManager.bind({
-          schemaVersion: "hpi-lease-bind.v1",
-          operationId: parsed.leaseBindOperationId,
-          operationFingerprint: parsed.leaseBindOperationFingerprint,
-          bindingFingerprint: leaseBindingFingerprint,
-          leases: parsed.leases.map((binding) => ({
-            leaseId: binding.leaseId,
-            ownerFingerprint: binding.ownerFingerprint,
-          })),
-        });
-        for (const binding of parsed.leases) {
-          const status = await this.#leaseManager.inspect(binding.leaseId);
-          if (
-            status.receipt.state !== "ACTIVE" ||
-            status.receipt.ownerFingerprint !== binding.ownerFingerprint ||
-            status.receipt.bindingFingerprint !== leaseBindingFingerprint
-          ) {
-            throw new Error("bound lease state did not match the process session");
-          }
-        }
-      } catch (error) {
+    const leaseBindingFingerprint = sha256(
+      canonicalJson({
+        schemaVersion: "hpi-process-operation-reservation.v1",
+        sessionId: parsed.sessionId,
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+      }),
+    );
+    try {
+      const binding = await this.#leaseManager.bind({
+        schemaVersion: "hpi-lease-bind.v1",
+        operationId: parsed.leaseBindOperationId,
+        operationFingerprint: parsed.leaseBindOperationFingerprint,
+        bindingFingerprint: leaseBindingFingerprint,
+        leases: parsed.leases.map((binding) => ({
+          leaseId: binding.leaseId,
+          ownerFingerprint: binding.ownerFingerprint,
+        })),
+      });
+      if (binding.application === "REPLAYED") {
         throw new ManagedProcessError(
-          "PROCESS_LEASE_INVALID",
-          "process leases could not be atomically bound to the declared session",
-          error,
+          "PROCESS_OPERATION_REPLAY_NOT_PROVEN",
+          "a durable process reservation already exists but this host cannot prove the original session",
         );
       }
+      for (const binding of parsed.leases) {
+        const status = await this.#leaseManager.inspect(binding.leaseId);
+        if (
+          status.receipt.state !== "ACTIVE" ||
+          status.receipt.ownerFingerprint !== binding.ownerFingerprint ||
+          status.receipt.bindingFingerprint !== leaseBindingFingerprint
+        ) {
+          throw new Error("bound lease state did not match the process session");
+        }
+      }
+    } catch (error) {
+      if (
+        error instanceof ManagedProcessError &&
+        error.code === "PROCESS_OPERATION_REPLAY_NOT_PROVEN"
+      ) {
+        throw error;
+      }
+      throw new ManagedProcessError(
+        "PROCESS_LEASE_INVALID",
+        "process operation and leases could not be atomically reserved",
+        error,
+      );
     }
 
     const output: OutputLedger = {
@@ -264,7 +267,7 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
         },
       });
     } catch (error) {
-      if (leaseBindingFingerprint !== null) {
+      if (parsed.leases.length > 0) {
         await Promise.all(
           parsed.leases.map((binding) =>
             this.#leaseManager.release({
@@ -559,7 +562,6 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
         return "RELEASED";
       }
       if (
-        session.leaseBindingFingerprint !== null &&
         states.every(
           (receipt) =>
             (receipt.state === "ACTIVE" || receipt.state === "EXPIRED") &&

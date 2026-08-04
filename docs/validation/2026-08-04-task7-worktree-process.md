@@ -7,7 +7,7 @@
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **TASK 7 COMPLETE / LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PASS / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -156,10 +156,12 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - Full `npm run verify` for source `75e4a17` exits 0 in 408.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
 - Strict Evidence passes 10/10. A separate count-only scan over all three attempt #7 receipts finds zero Windows absolute paths, UNC paths, private Windows or POSIX home paths, and credential-assignment shapes; all three file hashes match the selected values above.
-- Independent closure review confirms the release gate now observes `EXITED / ACTIVE / CLOSED / PENDING` plus a live detached PID before release, reports no Critical or Important finding, and independently recomputes the selected identities and 65/295 test counts. Remote CI attempt #2 remains `PENDING`; earlier CI results are not inferred.
+- Independent closure review confirms the release gate now observes `EXITED / ACTIVE / CLOSED / PENDING` plus a live detached PID before release, reports no Critical or Important finding, and independently recomputes the selected identities and 65/295 test counts.
 
 ## CI and remaining boundaries
 
-CI defines independent Windows/Ubuntu Task 7 platform jobs and a strict aggregate identity comparator. PR #16 run [`30918642613`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30918642613) preserved its exact mixed result: both Task 7 containment jobs and the Task 7 identity aggregate passed; the base Ubuntu job failed because the detached child had completed before a fixed-delay `pending` assertion, and the base Windows job failed because the Unicode/structured-argv real-process case exceeded Vitest's default five seconds under full-suite load. Downstream Pi Evidence did not run because both base jobs were required. No Task 7 product assertion failed. Remote status for the changed source remains `PENDING` until CI attempt #2 actually runs. Local WSL execution is useful platform evidence but is not GitHub-hosted Ubuntu CI.
+CI defines independent Windows/Ubuntu Task 7 platform jobs and a strict aggregate identity comparator. PR #16 run [`30918642613`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30918642613) preserved its exact mixed result: both Task 7 containment jobs and the Task 7 identity aggregate passed; the base Ubuntu job failed because the detached child had completed before a fixed-delay `pending` assertion, and the base Windows job failed because the Unicode/structured-argv real-process case exceeded Vitest's default five seconds under full-suite load. Downstream Pi Evidence did not run because both base jobs were required. No Task 7 product assertion failed, and that failure history remains retained.
+
+PR #16 CI run [`30923849375`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30923849375) completed `success` on head `c2079bec7fdb9beafee5afbf5314b98e8b50f115`: `windows-latest / Node 24`, `ubuntu-latest / Node 24`, both exact Task 7 containment jobs, `Task 7 Evidence / Windows + Ubuntu identity`, and `Pi Evidence / Windows + Ubuntu identity` all passed. This is the required GitHub-hosted confirmation for the selected source and Evidence; local WSL alone was not treated as remote Ubuntu CI.
 
 Even after exact CI passes, Task 7 proves these Hunter contracts only within disposable fixtures. It does not prove arbitrary user repositories, hostile kernel/process behavior outside the declared adapter assumptions, real Pi/Provider behavior, recovery after host crash, plugin isolation, a Windows installer, production readiness, or daily-use acceptance. Those claims remain `NOT_RUN` or `NOT_PROVEN` under their later tasks.

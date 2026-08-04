@@ -2,7 +2,7 @@
 
 ## Status
 
-Tasks 0–5 are complete within the bounded interactive developer-preview milestone. Task 6 now has a bounded local `GO` from exact clean product source `e36ee52764065cea02982962e2f84ff9ed3d0034`: after preserving the first run's resource-accounting gap, a separately authorized request ran only in an automatically created disposable Git fixture, retained the failed Attempt, kept Agent return observational, passed independent verification and deterministic review, reconciled 90506 captured bytes against the 262144-byte Run budget, and cleaned up. Windows/Ubuntu CI remains `PENDING`, broader Provider reliability is not proven, and real repositories stay prohibited until Task 7.
+Tasks 0–5 are complete within the bounded interactive developer-preview milestone. Task 6 has a bounded local `GO` from exact clean product source `e36ee52764065cea02982962e2f84ff9ed3d0034`: after preserving the first run's resource-accounting gap, a separately authorized request ran only in an automatically created disposable Git fixture, retained the failed Attempt, kept Agent return observational, passed independent verification and deterministic review, reconciled 90506 captured bytes against the 262144-byte Run budget, and cleaned up. Product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` passed PR #15 run `30884876277` on Windows, Ubuntu, and the aggregate identity gate. Merge/main CI is still pending, broader Provider reliability is not proven, and real repositories stay prohibited until Task 7.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

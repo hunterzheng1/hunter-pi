@@ -4,7 +4,7 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 6 当前为本地 `GO / 远端 CI PENDING`：精确干净代码 `e36ee52764065cea02982962e2f84ff9ed3d0034` 的单次授权真实请求只修改临时 fixture 的 `result.txt`；失败 Attempt 保留，Agent 返回后才运行独立命令检查与确定性审查，累计输出 90506 / 262144 字节并完成对账，清理通过。旧运行的资源证据缺口仍保留在 Git 历史中。Task 7 尚未开始，不得把该入口用于真实项目。**
+**Task 6 当前为有界 `GO / PR 双平台与聚合 Evidence 门禁 PASS`：精确干净代码 `e36ee52764065cea02982962e2f84ff9ed3d0034` 的单次授权真实请求只修改临时 fixture 的 `result.txt`；失败 Attempt 保留，Agent 返回后才运行独立命令检查与确定性审查，累计输出 90506 / 262144 字节并完成对账，清理通过。产品与 Evidence 提交 `502011b8a34e9773e415643b01a838c04d5582c5` 又通过 PR #15 的 Windows、Ubuntu 和跨平台身份门禁。旧运行的资源证据缺口仍保留在 Git 历史中。Task 7 尚未开始，不得把该入口用于真实项目。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。操作系统级进程树隔离、真实仓库 worktree/lease、恢复、第三方插件兼容和生产发布仍未被证明。
 

@@ -7,7 +7,7 @@
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Provider authentication metadata: **DETECTED**
 - Real Provider request: **DETECTED within the exact disposable fixture run**
-- Task result: **LOCAL GO / REMOTE CI PENDING**
+- Task result: **LOCAL GO / PR CI PASS / MERGE PENDING**
 
 ## Frozen outcome and non-goals
 
@@ -96,6 +96,6 @@ After explicit separate authorization, exactly one corrected request ran from th
 - resource accounting: `PASS` — Pi 90476 bytes, Attempt 1 verifier 17 bytes, Attempt 2 verifier 13 bytes, 90506 / 262144 bytes total;
 - scorecard: zero false `READY`, source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `488.2329 ms`;
 - full local `npm run verify`: `PASS` on the exact implementation source before the corrected request (31 test files / 230 tests plus every non-Provider gate);
-- Windows/Ubuntu remote CI: `PENDING` until this branch is pushed.
+- product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` remote CI: `PASS` in PR #15 run `30884876277` — Ubuntu 2m42s, Windows 15m13s, aggregate Windows/Ubuntu identity comparator 33s.
 
-The committed corrected Evidence artifact SHA-256 is `573800451fc04de3aa251b75be19e7d28b010cb27aae7abd1443ec3428527092`. Its strict schema, retained-content hashes, path privacy, prompt exclusion, credential-shaped-text scan, source identity, output partition, cumulative usage, zero-finding review, and cleanup all pass locally. Task 6 therefore has a bounded local `GO`; remote CI is still `PENDING`, and real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.
+The committed corrected Evidence artifact SHA-256 is `573800451fc04de3aa251b75be19e7d28b010cb27aae7abd1443ec3428527092`. Its strict schema, retained-content hashes, path privacy, prompt exclusion, credential-shaped-text scan, source identity, output partition, cumulative usage, zero-finding review, and cleanup all pass locally. The envelope retains `remoteCi=PENDING` as its immutable emission-time fact; PR #15 run `30884876277` later supplied the separate remote PASS disposition for exact product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5`. Task 6 therefore has a bounded local and PR-CI `GO`; merge/main CI remains pending, and real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.

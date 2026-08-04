@@ -1,10 +1,10 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 5 已实现首个 `hpi` npm 开发者预览、隔离配置、诚实 Doctor、Provider 披露、Safe Mode 和 Quick Session 启动边界；真实终端和真实 Provider 仍需分别验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 5 已实现首个 `hpi` npm 开发者预览、隔离配置、诚实 Doctor、Provider 披露、Safe Mode 和 Quick Session 启动边界，并完成精确制品的真实 Windows TUI 人工 smoke；真实 Provider 仍未验证。
 
 ## 当前状态
 
-**Task 5 开发者预览已完成本机自动化、单制品安装烟测及精确合并提交的 Windows/Ubuntu CI，并已从干净 `main` 安装到当前 Windows 用户；真实 Windows TUI 人工 smoke 仍为 `PENDING`，真实 Provider 登录/请求仍为 `NOT_PROVEN`。**
+**Task 5 开发者预览已完成本机自动化、单制品安装烟测及精确代码合并 `0e58f539b713edb35f46fcbb55a63063dbbfa328` 的 Windows/Ubuntu CI，并已从该干净源码安装到当前 Windows 用户；真实 Windows TUI 人工 smoke 在绑定产品壳/Core 双 SHA 的限定范围内为 `DETECTED`，Provider 登录仍为 `BLOCKED`，真实请求仍为 `NOT_PROVEN`。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 5 的单个 npm tarball 内含 Hunter 产品壳、Core Extension 与所需原创运行时代码，并把 Pi 0.83.0 作为精确依赖安装；打包身份分别绑定 `hpi.js` 产品壳与 Core 的 SHA-256，启动前会拒绝不匹配的字节；隔离全局安装 smoke 证明现有 raw `pi` 命令未被改写。操作系统网络隔离、真实 Provider、第三方插件兼容、Managed Change 和生产发布仍未被证明。
 
@@ -122,7 +122,7 @@ Hunter Pi 原创代码与文档采用 [MIT License](LICENSE)。第三方依赖�
 本仓库当前没有证明：
 
 - 真实模型 Provider 已登录、产生过成功响应或适合付费日常使用；
-- 交互 TUI 已在当前用户的真实 Windows 终端通过人工 smoke；在运行并确认 `hpi smoke tui` 前保持 `NOT_PROVEN`，确认结果也不构成正式 Human Receipt；
+- 除精确制品已完成的启动、Core 加载、`/hunter-status` 显示、干净退出及人工确认边界外，登录后的交互 TUI、真实模型响应和广泛日常可用性尚未验证；已记录的 smoke 也不构成正式 Human Receipt；
 - Pi Session 可以替代 Hunter durable Checkpoint，或 Pi 退出已经清理完整后代进程树；
 - 任一第三方 Pi 插件与 Hunter Pi 兼容；
 - Pi 上游升级可以无条件自动应用；

@@ -4,7 +4,7 @@ These requirements are target acceptance contracts. Thresholds may be revised on
 
 Task 3 implements provider-neutral local fixtures for append-only structural/semantic event replay, checksum/cursor validation, the HP-NFR-PERF-03 constants and retention projection, a physical emergency-reserve file, simulated disk-full behavior, noncritical metadata accounting, mutating-Run admission, and the adversarial Evidence corpus. Exact implementation and merge commits passed Windows/Ubuntu CI. This remains partial contract evidence only: real power loss, production filesystem behavior, cache pruning, real Pi/Plugin output, and daily-use thresholds remain `NOT_PROVEN`.
 
-Task 5 locally implements a single developer-preview artifact with an exact Pi 0.83.0 dependency, source identity, bundled-Core SHA-256 verification, clean install smoke, and tamper rejection. Remote Windows/Ubuntu CI, a real Windows TUI, real Provider use, stable promotion, signing, and updater behavior remain `PENDING`, `NOT_PROVEN`, or not implemented as stated in its validation record.
+Task 5 implements a single developer-preview artifact with an exact Pi 0.83.0 dependency, source identity, product-shell/Core SHA-256 verification, clean install smoke, and tamper rejection. Its exact code-bearing implementation and smoke-clarity commits passed Windows/Ubuntu CI, and a dual-SHA-bound real Windows TUI smoke is `DETECTED` within the recorded startup, Core, command-display, clean-exit, and manual-acknowledgement bounds. Real Provider use, stable promotion, signing, and updater behavior remain `NOT_PROVEN` or not implemented as stated in its validation record.
 
 ## Reliability
 

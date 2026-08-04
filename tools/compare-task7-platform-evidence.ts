@@ -73,6 +73,9 @@ export function compareTask7PlatformEvidence(
 ): Task7PlatformConsistency {
   const windows = requirePassingReceipt(windowsInput, "win32");
   const ubuntu = requirePassingReceipt(ubuntuInput, "linux");
+  if (windows.source.commit !== ubuntu.source.commit) {
+    throw new Error("Task 7 platform receipts did not bind the same source commit");
+  }
   if (windows.source.digest !== ubuntu.source.digest) {
     throw new Error("Task 7 platform receipts did not bind the same source digest");
   }

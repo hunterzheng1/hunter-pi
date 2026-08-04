@@ -212,7 +212,7 @@ const privacyPatterns = [
   /\\\\[^\\\s]+\\/u,
   /\/(?:home|Users|tmp|var\/tmp)\//u,
   /\bBearer\s+[A-Za-z0-9._~+/=-]+/iu,
-  /\b(?:sk|gh[pousr])-[A-Za-z0-9_-]{8,}\b/iu,
+  /\b(?:sk-|gh[pousr][_-])[A-Za-z0-9_-]{8,}\b/iu,
   /\bAKIA[A-Z0-9]{12,}\b/u,
   /-----BEGIN [A-Z ]+ PRIVATE KEY-----/u,
 ] as const;

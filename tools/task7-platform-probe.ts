@@ -20,13 +20,15 @@ import {
   type Task7PlatformReceipt,
 } from "./task7-platform-evidence.js";
 
-interface CommandResult {
+export interface Task7ProbeCommandResult {
   readonly exitCode: number | null;
   readonly stdout: Buffer;
   readonly stderr: Buffer;
   readonly stdoutDigest: `sha256:${string}`;
   readonly stderrDigest: `sha256:${string}`;
   readonly observedBytes: number;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
 }
 
 interface SourceIdentity {
@@ -38,16 +40,18 @@ interface SourceIdentity {
 
 type FailureStage = Task7PlatformFailureReceipt["stage"];
 
+const MAX_TASK7_PROBE_CAPTURE_BYTES = 1_048_576;
+
 function digest(value: string | Buffer): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-async function runCommand(
+export async function runTask7ProbeCommand(
   executable: string,
   arguments_: readonly string[],
   cwd: string,
-): Promise<CommandResult> {
-  return new Promise<CommandResult>((resolveResult, reject) => {
+): Promise<Task7ProbeCommandResult> {
+  return new Promise<Task7ProbeCommandResult>((resolveResult, reject) => {
     const child = spawn(executable, arguments_, {
       cwd,
       env: process.env,
@@ -57,14 +61,34 @@ async function runCommand(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const stdoutHash = createHash("sha256");
+    const stderrHash = createHash("sha256");
+    let observedStdoutBytes = 0;
+    let observedStderrBytes = 0;
+    let retainedStdoutBytes = 0;
+    let retainedStderrBytes = 0;
     let observedBytes = 0;
     child.stdout.on("data", (chunk: Buffer) => {
       observedBytes += chunk.length;
-      stdout.push(Buffer.from(chunk));
+      observedStdoutBytes += chunk.length;
+      stdoutHash.update(chunk);
+      const remaining = MAX_TASK7_PROBE_CAPTURE_BYTES - retainedStdoutBytes;
+      if (remaining > 0) {
+        const retained = Buffer.from(chunk.subarray(0, remaining));
+        stdout.push(retained);
+        retainedStdoutBytes += retained.length;
+      }
     });
     child.stderr.on("data", (chunk: Buffer) => {
       observedBytes += chunk.length;
-      stderr.push(Buffer.from(chunk));
+      observedStderrBytes += chunk.length;
+      stderrHash.update(chunk);
+      const remaining = MAX_TASK7_PROBE_CAPTURE_BYTES - retainedStderrBytes;
+      if (remaining > 0) {
+        const retained = Buffer.from(chunk.subarray(0, remaining));
+        stderr.push(retained);
+        retainedStderrBytes += retained.length;
+      }
     });
     child.once("error", reject);
     child.once("close", (exitCode) => {
@@ -74,9 +98,11 @@ async function runCommand(
         exitCode,
         stdout: stdoutBuffer,
         stderr: stderrBuffer,
-        stdoutDigest: digest(stdoutBuffer),
-        stderrDigest: digest(stderrBuffer),
+        stdoutDigest: `sha256:${stdoutHash.digest("hex")}`,
+        stderrDigest: `sha256:${stderrHash.digest("hex")}`,
         observedBytes,
+        stdoutTruncated: observedStdoutBytes > retainedStdoutBytes,
+        stderrTruncated: observedStderrBytes > retainedStderrBytes,
       });
     });
   });
@@ -87,8 +113,13 @@ async function requireSuccessfulTextCommand(
   arguments_: readonly string[],
   cwd: string,
 ): Promise<string> {
-  const result = await runCommand(executable, arguments_, cwd);
-  if (result.exitCode !== 0 || result.stderr.length > 0) {
+  const result = await runTask7ProbeCommand(executable, arguments_, cwd);
+  if (
+    result.exitCode !== 0 ||
+    result.stderr.length > 0 ||
+    result.stdoutTruncated ||
+    result.stderrTruncated
+  ) {
     throw new Error("source identity command did not complete cleanly");
   }
   return result.stdout.toString("utf8").trim();
@@ -186,7 +217,7 @@ function platformIdentity(): {
 function createFailureReceipt(
   stage: FailureStage,
   status: "FAIL" | "NOT_PROVEN",
-  result?: CommandResult,
+  result?: Task7ProbeCommandResult,
 ): Task7PlatformFailureReceipt {
   const platform =
     process.platform === "win32" || process.platform === "linux" ? process.platform : "UNSUPPORTED";
@@ -213,7 +244,7 @@ export async function runTask7PlatformProbe(
   repositoryRoot: string,
 ): Promise<Task7PlatformReceipt | Task7PlatformFailureReceipt> {
   let stage: FailureStage = "SOURCE_IDENTITY";
-  let result: CommandResult | undefined;
+  let result: Task7ProbeCommandResult | undefined;
   let reportRoot: string | undefined;
   try {
     const platform = platformIdentity();
@@ -235,7 +266,7 @@ export async function runTask7PlatformProbe(
       "--outputFile=<TEMP_REPORT>",
     ];
     const startedAt = new Date();
-    result = await runCommand(
+    result = await runTask7ProbeCommand(
       process.execPath,
       [
         vitestEntry,

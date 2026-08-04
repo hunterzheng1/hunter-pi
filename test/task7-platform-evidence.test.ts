@@ -1,10 +1,15 @@
-import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { compareTask7PlatformEvidence } from "../tools/compare-task7-platform-evidence.js";
+import { runTask7ProbeCommand } from "../tools/task7-platform-probe.js";
+import {
+  compareTask7PlatformEvidence,
+  task7PlatformConsistencySchema,
+} from "../tools/compare-task7-platform-evidence.js";
 import {
   TASK7_PLATFORM_CHECKS,
   assertTask7EvidencePrivacy,
@@ -12,6 +17,7 @@ import {
   prepareTask7Output,
   readTask7EvidenceInput,
   resolveTask7OutputPath,
+  task7PlatformFailureReceiptSchema,
   task7PlatformReceiptSchema,
 } from "../tools/task7-platform-evidence.js";
 
@@ -141,6 +147,12 @@ describe("Task 7 platform Evidence", () => {
         source: { ...ubuntu.source, digest: digest("9") },
       }),
     ).toThrow(/same source digest/u);
+    expect(() =>
+      compareTask7PlatformEvidence(windows, {
+        ...ubuntu,
+        source: { ...ubuntu.source, commit: "b".repeat(40) },
+      }),
+    ).toThrow(/same source commit/u);
   });
 
   it("rejects device-local paths and credential-shaped content even inside schema-valid text", () => {
@@ -154,6 +166,45 @@ describe("Task 7 platform Evidence", () => {
     expect(() => {
       assertTask7EvidencePrivacy({ ...safe, observedAt: "Bearer secret-value" });
     }).toThrow(/privacy scan/u);
+    expect(() => {
+      assertTask7EvidencePrivacy({ ...safe, observedAt: `ghp_${"x".repeat(36)}` });
+    }).toThrow(/privacy scan/u);
+  });
+
+  it("hashes full probe output while retaining only a bounded diagnostic prefix", async () => {
+    const stdoutBytes = 1_200_000;
+    const stderrBytes = 1_300_000;
+    const result = await runTask7ProbeCommand(
+      process.execPath,
+      [
+        "-e",
+        `process.stdout.write("x".repeat(${String(stdoutBytes)}));process.stderr.write("y".repeat(${String(stderrBytes)}));`,
+      ],
+      process.cwd(),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      observedBytes: stdoutBytes + stderrBytes,
+      stdoutTruncated: true,
+      stderrTruncated: true,
+    });
+    expect(result.stdout).toHaveLength(1_048_576);
+    expect(result.stderr).toHaveLength(1_048_576);
+    expect(result.stdoutDigest).toBe(
+      `sha256:${createHash("sha256").update("x".repeat(stdoutBytes)).digest("hex")}`,
+    );
+    expect(result.stderrDigest).toBe(
+      `sha256:${createHash("sha256").update("y".repeat(stderrBytes)).digest("hex")}`,
+    );
+
+    const exactBoundary = await runTask7ProbeCommand(
+      process.execPath,
+      ["-e", "process.stdout.write('z'.repeat(1048576))"],
+      process.cwd(),
+    );
+    expect(exactBoundary.stdout).toHaveLength(1_048_576);
+    expect(exactBoundary.stdoutTruncated).toBe(false);
   });
 
   it("writes only a new flat JSON file under an approved physical Evidence root", async () => {
@@ -202,5 +253,68 @@ describe("Task 7 platform Evidence", () => {
     await writeFile(source, "{}\n", "utf8");
     await link(source, linked);
     await expect(prepareTask7Output(root, linked)).rejects.toThrow(/single-link/u);
+  });
+
+  it("keeps the failed probe history and validates the exact local cross-platform receipts", async () => {
+    const evidenceRoot = join(process.cwd(), "docs", "validation", "evidence", "task7");
+    const readJson = async (name: string): Promise<unknown> =>
+      JSON.parse(await readFile(join(evidenceRoot, name), "utf8")) as unknown;
+    const [
+      failed,
+      preliminary,
+      windows,
+      hardenedWindows,
+      ubuntu,
+      consistency,
+      hardenedConsistency,
+    ] = await Promise.all([
+      readJson("windows-local.json"),
+      readJson("windows-local-attempt-2.json"),
+      readJson("windows-local-attempt-3.json"),
+      readJson("windows-local-attempt-4.json"),
+      readJson("ubuntu-wsl-attempt-1.json"),
+      readJson("local-consistency.json"),
+      readJson("local-consistency-attempt-2.json"),
+    ]);
+
+    expect(task7PlatformFailureReceiptSchema.parse(failed)).toMatchObject({
+      status: "NOT_PROVEN",
+      stage: "REPORT_PARSE",
+      exitCode: 0,
+    });
+    expect(task7PlatformReceiptSchema.parse(preliminary)).toMatchObject({
+      status: "PASS",
+      source: { commit: "bdf1b01a3ffb9c9b7a2bd6a6a485588071456841" },
+    });
+    const parsedWindows = task7PlatformReceiptSchema.parse(windows);
+    const parsedUbuntu = task7PlatformReceiptSchema.parse(ubuntu);
+    expect(parsedWindows.source.commit).toBe("760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10");
+    expect(parsedUbuntu.source.commit).toBe(parsedWindows.source.commit);
+    const parsedConsistency = task7PlatformConsistencySchema.parse(consistency);
+    expect(
+      compareTask7PlatformEvidence(parsedWindows, parsedUbuntu, parsedConsistency.observedAt),
+    ).toEqual(parsedConsistency);
+    const parsedHardenedWindows = task7PlatformReceiptSchema.parse(hardenedWindows);
+    const parsedHardenedConsistency = task7PlatformConsistencySchema.parse(hardenedConsistency);
+    expect(
+      compareTask7PlatformEvidence(
+        parsedHardenedWindows,
+        parsedUbuntu,
+        parsedHardenedConsistency.observedAt,
+      ),
+    ).toEqual(parsedHardenedConsistency);
+    for (const value of [
+      failed,
+      preliminary,
+      windows,
+      hardenedWindows,
+      ubuntu,
+      consistency,
+      hardenedConsistency,
+    ]) {
+      expect(() => {
+        assertTask7EvidencePrivacy(value);
+      }).not.toThrow();
+    }
   });
 });

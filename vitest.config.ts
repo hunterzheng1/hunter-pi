@@ -27,6 +27,9 @@ export default defineConfig({
       "@hunter-pi/verification": fileURLToPath(
         new URL("./packages/verification/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/workspace": fileURLToPath(
+        new URL("./packages/workspace/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/workflow-kernel": fileURLToPath(
         new URL("./packages/workflow-kernel/src/index.ts", import.meta.url),
       ),

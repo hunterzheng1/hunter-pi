@@ -11,6 +11,7 @@
     { "path": "./packages/workflow-kernel" },
     { "path": "./packages/testkit" },
     { "path": "./packages/managed-change" },
+    { "path": "./packages/workspace" },
     { "path": "./tools" }
   ]
 }

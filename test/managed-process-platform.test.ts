@@ -13,7 +13,8 @@ import {
   managedProcessStartRequestSchema,
   type ManagedProcessHost,
 } from "@hunter-pi/execution";
-import { PosixProcessGroupDriver } from "../packages/execution/src/posix-process-group-driver.js";
+import { LinuxSubreaperProcessTreeDriver } from "../packages/execution/src/posix-process-group-driver.js";
+import { windowsJobHelperSource } from "../packages/execution/src/windows-job-helper-source.js";
 import { WindowsJobObjectDriver } from "../packages/execution/src/windows-job-driver.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
@@ -66,6 +67,8 @@ function startRequest(
     timeoutMs: options.timeoutMs ?? 15_000,
     maxOutputBytes: options.maxOutputBytes ?? 1_048_576,
     leases: [],
+    leaseBindOperationId: null,
+    leaseBindOperationFingerprint: null,
   });
 }
 
@@ -165,7 +168,8 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       startRequest(fixture.cwd, ["-e", target, "--", ...argumentsToPreserve]),
     );
     expect(started.receipt).toMatchObject({
-      containment: process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "POSIX_PROCESS_GROUP",
+      containment:
+        process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
       terminalFinality: "PENDING",
     });
     expect(JSON.stringify(started.receipt)).not.toContain(fixture.cwd);
@@ -297,6 +301,85 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     });
   }, 12_000);
 
+  it("keeps a detached closed-stdio descendant inside the reconciled process tree", async () => {
+    const fixture = await createFixture();
+    const child = "setTimeout(() => process.exit(0), 1500);";
+    const root = [
+      "const { spawn } = require('node:child_process');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { detached: true, env: process.env, stdio: 'ignore' });`,
+      "child.once('error', () => { process.stderr.write('CHILD_SPAWN_FAILED'); process.exit(2); });",
+      "child.once('spawn', () => {",
+      "  child.unref();",
+      "  process.stdout.write(`DETACHED:${child.pid}\\n`, () => process.exit(0));",
+      "});",
+    ].join("\n");
+    const startedAt = Date.now();
+    await fixture.host.start(startRequest(fixture.cwd, ["-e", root]));
+    const detachedPid = await waitUntil(async () => {
+      const { stdout } = await readText(fixture.host);
+      const match = /DETACHED:(\d+)/u.exec(stdout);
+      return match?.[1] === undefined ? undefined : Number(match[1]);
+    });
+
+    try {
+      const finalPromise = fixture.host.awaitFinal(sessionId);
+      const early = await Promise.race([
+        finalPromise.then(() => "resolved" as const),
+        new Promise<"pending">((resolve) => {
+          const timer = setTimeout(() => {
+            resolve("pending");
+          }, 150);
+          timer.unref();
+        }),
+      ]);
+      expect(early).toBe("pending");
+      await expect(finalPromise).resolves.toMatchObject({
+        receipt: {
+          executionObservation: "EXITED",
+          exitCode: 0,
+          processTreeState: "EMPTY",
+          outputState: "CLOSED",
+          terminalFinality: "FINAL",
+        },
+      });
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_000);
+      expect(isProcessAlive(detachedPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
+    }
+  }, 12_000);
+
+  it.runIf(process.platform === "win32")(
+    "uses kernel signaled state instead of reserving exit code 259",
+    () => {
+      expect(windowsJobHelperSource).toContain("WaitForSingleObject");
+      expect(windowsJobHelperSource).not.toContain(
+        "return code == STILL_ACTIVE ? (int?)null : unchecked((int)code);",
+      );
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "preserves literal Windows exit code 259 after the process is signaled",
+    async () => {
+      const fixture = await createFixture();
+      await fixture.host.start(
+        startRequest(fixture.cwd, ["-e", "process.exit(259);"], { timeoutMs: 5_000 }),
+      );
+      await expect(fixture.host.awaitFinal(sessionId)).resolves.toMatchObject({
+        receipt: {
+          executionObservation: "EXITED",
+          exitCode: 259,
+          processTreeState: "EMPTY",
+          outputState: "CLOSED",
+          terminalFinality: "FINAL",
+          reasonCodes: [],
+        },
+      });
+    },
+    12_000,
+  );
+
   it("bounds retained output while hashing every observed byte", async () => {
     const fixture = await createFixture();
     await fixture.host.start(
@@ -319,7 +402,9 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
   it("does not signal a platform process tree when its identity fingerprint differs", async () => {
     const fixture = await createFixture();
     const driver =
-      process.platform === "win32" ? new WindowsJobObjectDriver() : new PosixProcessGroupDriver();
+      process.platform === "win32"
+        ? new WindowsJobObjectDriver()
+        : new LinuxSubreaperProcessTreeDriver();
     const session = await driver.start({
       executable: process.execPath,
       argv: ["-e", "setInterval(() => {}, 1000);"],

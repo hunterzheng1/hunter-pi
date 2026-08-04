@@ -3,7 +3,7 @@ import { createManagedProcessHost } from "./managed-process-host.js";
 import type { ManagedProcessHost } from "./process-contracts.js";
 import { ManagedProcessError } from "./process-errors.js";
 import type { ManagedProcessDriver } from "./process-platform.js";
-import { PosixProcessGroupDriver } from "./posix-process-group-driver.js";
+import { LinuxSubreaperProcessTreeDriver } from "./posix-process-group-driver.js";
 import { WindowsJobObjectDriver } from "./windows-job-driver.js";
 
 export interface LocalManagedProcessHostOptions {
@@ -13,7 +13,7 @@ export interface LocalManagedProcessHostOptions {
 
 function createPlatformDriver(): ManagedProcessDriver {
   if (process.platform === "win32") return new WindowsJobObjectDriver();
-  if (process.platform === "linux") return new PosixProcessGroupDriver();
+  if (process.platform === "linux") return new LinuxSubreaperProcessTreeDriver();
   throw new ManagedProcessError(
     "PROCESS_PLATFORM_UNAVAILABLE",
     "managed process containment is unavailable on this platform",

@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { open, link, lstat, mkdir, readFile, readdir, realpath, rm, rmdir } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rmdir,
+  unlink,
+} from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -19,6 +29,8 @@ import {
 import {
   leaseAcquireReceiptSchema,
   leaseAcquireRequestSchema,
+  leaseBindReceiptSchema,
+  leaseBindRequestSchema,
   leaseMutationReceiptSchema,
   leaseReleaseRequestSchema,
   leaseResourceSchema,
@@ -26,10 +38,12 @@ import {
   leaseStatusReceiptSchema,
   type LeaseAcquireReceipt,
   type LeaseAcquireRequest,
+  type LeaseBindReceipt,
+  type LeaseBindRequest,
   type LeaseManager,
   type LeaseMutationReceipt,
-  type LeaseReleaseRequest,
   type LeaseReasonCode,
+  type LeaseReleaseRequest,
   type LeaseResource,
   type LeaseRenewRequest,
   type LeaseStatusReceipt,
@@ -45,6 +59,7 @@ const leaseRecordPayloadSchema = z.strictObject({
   resourceSetFingerprint: fingerprintSchema,
   generation: z.number().int().positive(),
   state: z.enum(["ACTIVE", "REVOKED", "RELEASED"]),
+  bindingFingerprint: fingerprintSchema.nullable(),
   acquiredAt: timestampSchema,
   renewedAt: timestampSchema,
   expiresAt: timestampSchema,
@@ -59,15 +74,23 @@ const leaseRecordSchema = leaseRecordPayloadSchema.safeExtend({
 });
 type LeaseRecord = z.infer<typeof leaseRecordSchema>;
 
-const leaseOperationRecordSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-local-lease-operation.v1"),
+const transactionReceiptSchema = z.union([
+  leaseAcquireReceiptSchema,
+  leaseBindReceiptSchema,
+  leaseMutationReceiptSchema,
+]);
+const leaseTransactionPayloadSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-local-lease-transaction.v1"),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   requestFingerprint: fingerprintSchema,
-  receipt: z.union([leaseAcquireReceiptSchema, leaseMutationReceiptSchema]),
-  operationRecordFingerprint: fingerprintSchema,
+  receipt: transactionReceiptSchema,
+  mutations: z.array(leaseRecordSchema),
 });
-type LeaseOperationRecord = z.infer<typeof leaseOperationRecordSchema>;
+const leaseTransactionSchema = leaseTransactionPayloadSchema.safeExtend({
+  transactionFingerprint: fingerprintSchema,
+});
+type LeaseTransaction = z.infer<typeof leaseTransactionSchema>;
 
 export interface FileLeaseManagerOptions {
   readonly leaseRoot: string;
@@ -79,7 +102,7 @@ export interface FileLeaseManagerOptions {
 
 interface LeaseState {
   readonly histories: ReadonlyMap<WriterLeaseId, readonly LeaseRecord[]>;
-  readonly operations: ReadonlyMap<OperationId, LeaseOperationRecord>;
+  readonly operations: ReadonlyMap<OperationId, LeaseTransaction>;
   readonly latestObservedAt: string | undefined;
 }
 
@@ -102,12 +125,12 @@ function leaseRecordPayload(record: LeaseRecord): z.infer<typeof leaseRecordPayl
   return leaseRecordPayloadSchema.parse(payload);
 }
 
-function operationRecordPayload(
-  record: LeaseOperationRecord,
-): Omit<LeaseOperationRecord, "operationRecordFingerprint"> {
-  const payload: Record<string, unknown> = { ...record };
-  delete payload["operationRecordFingerprint"];
-  return leaseOperationRecordSchema.omit({ operationRecordFingerprint: true }).parse(payload);
+function transactionPayload(
+  transaction: LeaseTransaction,
+): z.infer<typeof leaseTransactionPayloadSchema> {
+  const payload: Record<string, unknown> = { ...transaction };
+  delete payload["transactionFingerprint"];
+  return leaseTransactionPayloadSchema.parse(payload);
 }
 
 function isErrno(error: unknown, code: string): boolean {
@@ -147,10 +170,19 @@ async function requireRegularSingleLinkFile(path: string): Promise<void> {
   }
 }
 
-async function writeImmutable(directory: string, filename: string, content: string): Promise<void> {
-  await mkdir(directory, { recursive: true });
+async function writeAtomicTransaction(
+  directory: string,
+  filename: string,
+  content: string,
+): Promise<void> {
   const pendingPath = join(directory, `.pending-${randomUUID()}`);
   const finalPath = join(directory, filename);
+  try {
+    await lstat(finalPath);
+    throw new LeaseError("LEASE_OPERATION_CONFLICT", "lease operation identity already exists");
+  } catch (error) {
+    if (!isErrno(error, "ENOENT")) throw error;
+  }
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(pendingPath, "wx", 0o600);
@@ -158,36 +190,20 @@ async function writeImmutable(directory: string, filename: string, content: stri
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await link(pendingPath, finalPath);
+    await rename(pendingPath, finalPath);
   } finally {
     await handle?.close().catch(() => undefined);
-    await rm(pendingPath, { force: true }).catch(() => undefined);
+    await unlink(pendingPath).catch((error: unknown) => {
+      if (!isErrno(error, "ENOENT")) throw error;
+    });
   }
 }
 
-function parseJson(text: string): unknown {
+function parseTransaction(text: string): LeaseTransaction {
   try {
-    return JSON.parse(text) as unknown;
+    return leaseTransactionSchema.parse(JSON.parse(text) as unknown);
   } catch {
-    throw new LeaseError("LEASE_STORE_CORRUPT", "lease state contains malformed JSON");
-  }
-}
-
-function parseLeaseRecord(text: string): LeaseRecord {
-  try {
-    return leaseRecordSchema.parse(parseJson(text));
-  } catch (error) {
-    if (error instanceof LeaseError) throw error;
-    throw new LeaseError("LEASE_STORE_CORRUPT", "lease record schema is invalid");
-  }
-}
-
-function parseOperationRecord(text: string): LeaseOperationRecord {
-  try {
-    return leaseOperationRecordSchema.parse(parseJson(text));
-  } catch (error) {
-    if (error instanceof LeaseError) throw error;
-    throw new LeaseError("LEASE_STORE_CORRUPT", "lease operation schema is invalid");
+    throw new LeaseError("LEASE_STORE_CORRUPT", "lease transaction schema is invalid");
   }
 }
 
@@ -197,8 +213,7 @@ function compareTimestamps(left: string, right: string): number {
 
 class FileLeaseManager implements LeaseManager {
   readonly #root: string;
-  readonly #leasesRoot: string;
-  readonly #operationsRoot: string;
+  readonly #transactionsRoot: string;
   readonly #lockPath: string;
   readonly #now: () => string;
   readonly #reconcileOwner: (
@@ -211,22 +226,27 @@ class FileLeaseManager implements LeaseManager {
     reconcileOwner: (ownerFingerprint: Fingerprint) => Promise<"ALIVE" | "DEAD" | "NOT_PROVEN">,
   ) {
     this.#root = root;
-    this.#leasesRoot = join(root, "leases");
-    this.#operationsRoot = join(root, "operations");
+    this.#transactionsRoot = join(root, "transactions");
     this.#lockPath = join(root, ".mutation-lock");
     this.#now = now;
     this.#reconcileOwner = reconcileOwner;
   }
 
   public async initialize(): Promise<void> {
-    await Promise.all([
-      mkdir(this.#leasesRoot, { recursive: true }),
-      mkdir(this.#operationsRoot, { recursive: true }),
-    ]);
-    await Promise.all([
-      requirePhysicalDirectory(this.#leasesRoot, "leases root"),
-      requirePhysicalDirectory(this.#operationsRoot, "operations root"),
-    ]);
+    await mkdir(this.#transactionsRoot, { recursive: true });
+    await requirePhysicalDirectory(this.#transactionsRoot, "transactions root");
+    await this.#withMutationLock(async () => {
+      for (const entry of await readdir(this.#transactionsRoot, { withFileTypes: true })) {
+        if (!entry.name.startsWith(".pending-")) continue;
+        const path = join(this.#transactionsRoot, entry.name);
+        if (!entry.isFile()) {
+          throw new LeaseError("LEASE_STORE_CORRUPT", "pending lease transaction is not a file");
+        }
+        await requireRegularSingleLinkFile(path);
+        await unlink(path);
+      }
+      await this.#readState();
+    });
   }
 
   public async acquire(
@@ -248,24 +268,15 @@ class FileLeaseManager implements LeaseManager {
       const state = await this.#readState();
       const replay = state.operations.get(parsed.operationId);
       if (replay !== undefined) {
-        if (
-          replay.operationFingerprint !== parsed.operationFingerprint ||
-          replay.requestFingerprint !== requestFingerprint
-        ) {
-          throw new LeaseError(
-            "LEASE_OPERATION_CONFLICT",
-            "lease operation replay changed its fingerprint or canonical request",
-          );
-        }
+        this.#assertReplay(
+          replay,
+          parsed.operationFingerprint,
+          requestFingerprint,
+          "lease acquisition",
+        );
         return { receipt: leaseAcquireReceiptSchema.parse(replay.receipt) };
       }
-      const observedAt = timestampSchema.parse(this.#now());
-      if (
-        state.latestObservedAt !== undefined &&
-        compareTimestamps(observedAt, state.latestObservedAt) < 0
-      ) {
-        throw new LeaseError("CLOCK_ROLLBACK", "lease clock moved behind committed state");
-      }
+      const observedAt = this.#assertClock(state);
       const resourceSetFingerprint = sha256(
         canonicalJson({ workspaceId: parsed.workspaceId, resources }),
       );
@@ -321,21 +332,20 @@ class FileLeaseManager implements LeaseManager {
           reasonCode,
         });
       }
-      for (const record of deadConflicts) {
-        await this.#appendLeaseRecord(
-          leaseRecordPayloadSchema.parse({
-            ...leaseRecordPayload(record),
-            generation: record.generation + 1,
-            state: "REVOKED",
-            observedAt,
-            previousRecordFingerprint: record.recordFingerprint,
-            operationId: parsed.operationId,
-            operationFingerprint: parsed.operationFingerprint,
-            requestFingerprint,
-          }),
-        );
-      }
 
+      const mutations: z.infer<typeof leaseRecordPayloadSchema>[] = deadConflicts.map((record) =>
+        leaseRecordPayloadSchema.parse({
+          ...leaseRecordPayload(record),
+          generation: record.generation + 1,
+          state: "REVOKED",
+          bindingFingerprint: null,
+          observedAt,
+          previousRecordFingerprint: record.recordFingerprint,
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          requestFingerprint,
+        }),
+      );
       const expiresAt = new Date(Date.parse(observedAt) + parsed.ttlMs).toISOString();
       const receipt = leaseAcquireReceiptSchema.parse({
         schemaVersion: "hpi-lease-receipt.v1",
@@ -352,31 +362,33 @@ class FileLeaseManager implements LeaseManager {
         reasonCodes: [],
         observedAt,
       });
-      const payload = leaseRecordPayloadSchema.parse({
-        schemaVersion: "hpi-local-lease-record.v1",
-        leaseId: parsed.leaseId,
-        workspaceId: parsed.workspaceId,
-        ownerFingerprint: parsed.ownerFingerprint,
-        resources,
-        resourceSetFingerprint,
-        generation: 1,
-        state: "ACTIVE",
-        acquiredAt: observedAt,
-        renewedAt: observedAt,
-        expiresAt,
-        observedAt,
-        previousRecordFingerprint: null,
-        operationId: parsed.operationId,
-        operationFingerprint: parsed.operationFingerprint,
-        requestFingerprint,
-      });
-      await mkdir(join(this.#leasesRoot, parsed.leaseId));
-      await this.#appendLeaseRecord(payload);
-      await this.#writeOperation({
+      mutations.push(
+        leaseRecordPayloadSchema.parse({
+          schemaVersion: "hpi-local-lease-record.v1",
+          leaseId: parsed.leaseId,
+          workspaceId: parsed.workspaceId,
+          ownerFingerprint: parsed.ownerFingerprint,
+          resources,
+          resourceSetFingerprint,
+          generation: 1,
+          state: "ACTIVE",
+          bindingFingerprint: null,
+          acquiredAt: observedAt,
+          renewedAt: observedAt,
+          expiresAt,
+          observedAt,
+          previousRecordFingerprint: null,
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          requestFingerprint,
+        }),
+      );
+      await this.#commitTransaction({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
         receipt,
+        mutations,
       });
       return { receipt };
     });
@@ -390,13 +402,7 @@ class FileLeaseManager implements LeaseManager {
       if (record === undefined) {
         throw new LeaseError("LEASE_NOT_FOUND", "lease identity is not committed");
       }
-      const observedAt = timestampSchema.parse(this.#now());
-      if (
-        state.latestObservedAt !== undefined &&
-        compareTimestamps(observedAt, state.latestObservedAt) < 0
-      ) {
-        throw new LeaseError("CLOCK_ROLLBACK", "lease clock moved behind committed state");
-      }
+      const observedAt = this.#assertClock(state);
       const stateAtObservation =
         record.state === "ACTIVE" && compareTimestamps(record.expiresAt, observedAt) <= 0
           ? "EXPIRED"
@@ -412,6 +418,7 @@ class FileLeaseManager implements LeaseManager {
           resourceCount: record.resources.length,
           state: stateAtObservation,
           expiresAt: record.expiresAt,
+          bindingFingerprint: record.bindingFingerprint,
           observedAt,
         }),
       };
@@ -463,13 +470,80 @@ class FileLeaseManager implements LeaseManager {
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
       });
-      await this.#appendLeaseRecord(payload);
       const receipt = this.#mutationReceipt("RENEW", payload);
-      await this.#writeOperation({
+      await this.#commitTransaction({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
         receipt,
+        mutations: [payload],
+      });
+      return { receipt };
+    });
+  }
+
+  public async bind(request: LeaseBindRequest): Promise<{ readonly receipt: LeaseBindReceipt }> {
+    const parsed = leaseBindRequestSchema.parse(request);
+    const leases = [...parsed.leases].sort((left, right) =>
+      left.leaseId.localeCompare(right.leaseId),
+    );
+    const requestFingerprint = sha256(
+      canonicalJson({
+        schemaVersion: parsed.schemaVersion,
+        bindingFingerprint: parsed.bindingFingerprint,
+        leases,
+      }),
+    );
+    return this.#withMutationLock(async () => {
+      const state = await this.#readState();
+      const replay = state.operations.get(parsed.operationId);
+      if (replay !== undefined) {
+        this.#assertReplay(
+          replay,
+          parsed.operationFingerprint,
+          requestFingerprint,
+          "lease binding",
+        );
+        return { receipt: leaseBindReceiptSchema.parse(replay.receipt) };
+      }
+      const observedAt = this.#assertClock(state);
+      const records = leases.map((lease) => {
+        const record = this.#requireOwnedActiveLease(state, lease.leaseId, lease.ownerFingerprint);
+        if (compareTimestamps(record.expiresAt, observedAt) <= 0) {
+          throw new LeaseError("LEASE_EXPIRED", "an expired lease cannot be bound");
+        }
+        if (record.bindingFingerprint !== null) {
+          throw new LeaseError("LEASE_ALREADY_BOUND", "lease is already bound to a session");
+        }
+        return record;
+      });
+      const mutations = records.map((record) =>
+        leaseRecordPayloadSchema.parse({
+          ...leaseRecordPayload(record),
+          generation: record.generation + 1,
+          bindingFingerprint: parsed.bindingFingerprint,
+          observedAt,
+          previousRecordFingerprint: record.recordFingerprint,
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          requestFingerprint,
+        }),
+      );
+      const receipt = leaseBindReceiptSchema.parse({
+        schemaVersion: "hpi-lease-bind-receipt.v1",
+        action: "BIND",
+        outcome: "BOUND",
+        bindingFingerprint: parsed.bindingFingerprint,
+        leaseSetFingerprint: sha256(canonicalJson(leases)),
+        leaseCount: leases.length,
+        observedAt,
+      });
+      await this.#commitTransaction({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        receipt,
+        mutations,
       });
       return { receipt };
     });
@@ -484,6 +558,7 @@ class FileLeaseManager implements LeaseManager {
         schemaVersion: parsed.schemaVersion,
         leaseId: parsed.leaseId,
         ownerFingerprint: parsed.ownerFingerprint,
+        bindingFingerprint: parsed.bindingFingerprint,
       }),
     );
     return this.#withMutationLock(async () => {
@@ -497,23 +572,30 @@ class FileLeaseManager implements LeaseManager {
       if (replay !== undefined) return replay;
       const observedAt = this.#assertClock(state);
       const record = this.#requireOwnedActiveLease(state, parsed.leaseId, parsed.ownerFingerprint);
+      if (record.bindingFingerprint !== parsed.bindingFingerprint) {
+        throw new LeaseError(
+          "LEASE_BINDING_MISMATCH",
+          "lease binding identity did not match the release request",
+        );
+      }
       const payload = leaseRecordPayloadSchema.parse({
         ...leaseRecordPayload(record),
         generation: record.generation + 1,
         state: "RELEASED",
+        bindingFingerprint: null,
         observedAt,
         previousRecordFingerprint: record.recordFingerprint,
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
       });
-      await this.#appendLeaseRecord(payload);
       const receipt = this.#mutationReceipt("RELEASE", payload);
-      await this.#writeOperation({
+      await this.#commitTransaction({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
         receipt,
+        mutations: [payload],
       });
       return { receipt };
     });
@@ -548,6 +630,23 @@ class FileLeaseManager implements LeaseManager {
     return record;
   }
 
+  #assertReplay(
+    replay: LeaseTransaction,
+    operationFingerprint: Fingerprint,
+    requestFingerprint: Fingerprint,
+    label: string,
+  ): void {
+    if (
+      replay.operationFingerprint !== operationFingerprint ||
+      replay.requestFingerprint !== requestFingerprint
+    ) {
+      throw new LeaseError(
+        "LEASE_OPERATION_CONFLICT",
+        `${label} replay changed its fingerprint or canonical request`,
+      );
+    }
+  }
+
   #replayMutation(
     state: LeaseState,
     operationId: OperationId,
@@ -556,15 +655,7 @@ class FileLeaseManager implements LeaseManager {
   ): { readonly receipt: LeaseMutationReceipt } | undefined {
     const replay = state.operations.get(operationId);
     if (replay === undefined) return undefined;
-    if (
-      replay.operationFingerprint !== operationFingerprint ||
-      replay.requestFingerprint !== requestFingerprint
-    ) {
-      throw new LeaseError(
-        "LEASE_OPERATION_CONFLICT",
-        "lease operation replay changed its fingerprint or canonical request",
-      );
-    }
+    this.#assertReplay(replay, operationFingerprint, requestFingerprint, "lease operation");
     return { receipt: leaseMutationReceiptSchema.parse(replay.receipt) };
   }
 
@@ -584,6 +675,7 @@ class FileLeaseManager implements LeaseManager {
       resourceCount: record.resources.length,
       state: action === "RENEW" ? "ACTIVE" : "RELEASED",
       expiresAt: record.expiresAt,
+      bindingFingerprint: record.bindingFingerprint,
       reasonCodes: [],
       observedAt: record.observedAt,
     });
@@ -612,149 +704,117 @@ class FileLeaseManager implements LeaseManager {
       reasonCodes: [options.reasonCode],
       observedAt: options.observedAt,
     });
-    await this.#writeOperation({
+    await this.#commitTransaction({
       operationId: options.parsed.operationId,
       operationFingerprint: options.parsed.operationFingerprint,
       requestFingerprint: options.requestFingerprint,
       receipt,
+      mutations: [],
     });
     return { receipt };
   }
 
-  async #appendLeaseRecord(payload: z.infer<typeof leaseRecordPayloadSchema>): Promise<void> {
-    const record = leaseRecordSchema.parse({
-      ...payload,
-      recordFingerprint: sha256(canonicalJson(payload)),
-    });
-    await writeImmutable(
-      join(this.#leasesRoot, payload.leaseId),
-      `${payload.generation.toString().padStart(8, "0")}.json`,
-      `${canonicalJson(record)}\n`,
+  async #commitTransaction(options: {
+    readonly operationId: OperationId;
+    readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint: Fingerprint;
+    readonly receipt: z.infer<typeof transactionReceiptSchema>;
+    readonly mutations: readonly z.infer<typeof leaseRecordPayloadSchema>[];
+  }): Promise<void> {
+    const mutations = options.mutations.map((payload) =>
+      leaseRecordSchema.parse({
+        ...payload,
+        recordFingerprint: sha256(canonicalJson(payload)),
+      }),
     );
-  }
-
-  async #writeOperation(
-    payload: Omit<LeaseOperationRecord, "schemaVersion" | "operationRecordFingerprint">,
-  ): Promise<void> {
-    const withoutFingerprint = {
-      schemaVersion: "hpi-local-lease-operation.v1" as const,
-      ...payload,
-    };
-    const record = leaseOperationRecordSchema.parse({
-      ...withoutFingerprint,
-      operationRecordFingerprint: sha256(canonicalJson(withoutFingerprint)),
+    const payload = leaseTransactionPayloadSchema.parse({
+      schemaVersion: "hpi-local-lease-transaction.v1",
+      operationId: options.operationId,
+      operationFingerprint: options.operationFingerprint,
+      requestFingerprint: options.requestFingerprint,
+      receipt: options.receipt,
+      mutations,
     });
-    await writeImmutable(
-      this.#operationsRoot,
-      `${payload.operationId}.json`,
-      `${canonicalJson(record)}\n`,
+    const transaction = leaseTransactionSchema.parse({
+      ...payload,
+      transactionFingerprint: sha256(canonicalJson(payload)),
+    });
+    await writeAtomicTransaction(
+      this.#transactionsRoot,
+      `${options.operationId}.json`,
+      `${canonicalJson(transaction)}\n`,
     );
   }
 
   async #readState(): Promise<LeaseState> {
-    const [root, leasesRoot, operationsRoot] = await Promise.all([
+    const [root, transactionsRoot] = await Promise.all([
       requirePhysicalDirectory(this.#root, "lease root"),
-      requirePhysicalDirectory(this.#leasesRoot, "leases root"),
-      requirePhysicalDirectory(this.#operationsRoot, "operations root"),
+      requirePhysicalDirectory(this.#transactionsRoot, "transactions root"),
     ]);
     if (
       root !== this.#root ||
-      leasesRoot !== this.#leasesRoot ||
-      operationsRoot !== this.#operationsRoot ||
-      !isStrictlyContained(root, leasesRoot) ||
-      !isStrictlyContained(root, operationsRoot)
+      transactionsRoot !== this.#transactionsRoot ||
+      !isStrictlyContained(root, transactionsRoot)
     ) {
       throw new LeaseError("LEASE_STORE_CORRUPT", "lease storage identity changed");
     }
     const rootEntries = await readdir(this.#root, { withFileTypes: true });
     if (
-      rootEntries.some(
-        (entry) =>
-          entry.name !== "leases" && entry.name !== "operations" && entry.name !== ".mutation-lock",
-      )
+      rootEntries.some((entry) => entry.name !== "transactions" && entry.name !== ".mutation-lock")
     ) {
       throw new LeaseError("LEASE_STORE_CORRUPT", "lease root contains an unknown entry");
     }
-    const histories = new Map<WriterLeaseId, readonly LeaseRecord[]>();
-    for (const entry of await readdir(this.#leasesRoot, { withFileTypes: true })) {
-      const parsedLeaseId = writerLeaseIdSchema.safeParse(entry.name);
-      if (!entry.isDirectory() || !parsedLeaseId.success) {
-        throw new LeaseError("LEASE_STORE_CORRUPT", "lease root contains an invalid lease entry");
+
+    const operations = new Map<OperationId, LeaseTransaction>();
+    const histories = new Map<WriterLeaseId, LeaseRecord[]>();
+    for (const entry of await readdir(this.#transactionsRoot, { withFileTypes: true })) {
+      const operationName = entry.name.endsWith(".json") ? entry.name.slice(0, -5) : "";
+      const parsedOperationId = operationIdSchema.safeParse(operationName);
+      if (!entry.isFile() || !parsedOperationId.success) {
+        throw new LeaseError("LEASE_STORE_CORRUPT", "transaction root contains a partial record");
       }
-      const directory = join(this.#leasesRoot, entry.name);
-      const canonical = await requirePhysicalDirectory(directory, "lease record directory");
-      if (!isStrictlyContained(this.#leasesRoot, canonical)) {
-        throw new LeaseError("LEASE_STORE_CORRUPT", "lease record directory escaped its root");
+      const path = join(this.#transactionsRoot, entry.name);
+      await requireRegularSingleLinkFile(path);
+      const transaction = parseTransaction(await readFile(path, "utf8"));
+      if (
+        transaction.operationId !== parsedOperationId.data ||
+        transaction.transactionFingerprint !==
+          sha256(canonicalJson(transactionPayload(transaction)))
+      ) {
+        throw new LeaseError("LEASE_STORE_CORRUPT", "lease transaction identity is invalid");
       }
-      const records: LeaseRecord[] = [];
-      for (const recordEntry of await readdir(directory, { withFileTypes: true })) {
-        if (!recordEntry.isFile() || !/^\d{8}\.json$/u.test(recordEntry.name)) {
-          throw new LeaseError("LEASE_STORE_CORRUPT", "lease history contains a partial record");
-        }
-        const path = join(directory, recordEntry.name);
-        await requireRegularSingleLinkFile(path);
-        const record = parseLeaseRecord(await readFile(path, "utf8"));
+      operations.set(parsedOperationId.data, transaction);
+      for (const record of transaction.mutations) {
         if (
-          record.leaseId !== parsedLeaseId.data ||
-          recordEntry.name !== `${record.generation.toString().padStart(8, "0")}.json` ||
+          record.operationId !== transaction.operationId ||
+          record.operationFingerprint !== transaction.operationFingerprint ||
+          record.requestFingerprint !== transaction.requestFingerprint ||
           record.recordFingerprint !== sha256(canonicalJson(leaseRecordPayload(record)))
         ) {
-          throw new LeaseError("LEASE_STORE_CORRUPT", "lease record identity is invalid");
+          throw new LeaseError("LEASE_STORE_CORRUPT", "lease mutation is not transaction-bound");
         }
-        records.push(record);
+        const history = histories.get(record.leaseId) ?? [];
+        history.push(record);
+        histories.set(record.leaseId, history);
       }
-      records.sort((left, right) => left.generation - right.generation);
+    }
+    for (const history of histories.values()) {
+      history.sort((left, right) => left.generation - right.generation);
       if (
-        records.length === 0 ||
-        records.some(
+        history.some(
           (record, index) =>
             record.generation !== index + 1 ||
             record.previousRecordFingerprint !==
-              (index === 0 ? null : (records[index - 1]?.recordFingerprint ?? null)),
+              (index === 0 ? null : (history[index - 1]?.recordFingerprint ?? null)),
         )
       ) {
         throw new LeaseError("LEASE_STORE_CORRUPT", "lease history is incomplete or forked");
       }
-      histories.set(parsedLeaseId.data, records);
     }
-
-    const operations = new Map<OperationId, LeaseOperationRecord>();
-    for (const entry of await readdir(this.#operationsRoot, { withFileTypes: true })) {
-      const operationName = entry.name.endsWith(".json") ? entry.name.slice(0, -5) : "";
-      const parsedOperationId = operationIdSchema.safeParse(operationName);
-      if (!entry.isFile() || !parsedOperationId.success) {
-        throw new LeaseError("LEASE_STORE_CORRUPT", "operation history contains a partial record");
-      }
-      const path = join(this.#operationsRoot, entry.name);
-      await requireRegularSingleLinkFile(path);
-      const record = parseOperationRecord(await readFile(path, "utf8"));
-      if (
-        record.operationId !== parsedOperationId.data ||
-        record.operationRecordFingerprint !== sha256(canonicalJson(operationRecordPayload(record)))
-      ) {
-        throw new LeaseError("LEASE_STORE_CORRUPT", "lease operation identity is invalid");
-      }
-      operations.set(parsedOperationId.data, record);
-    }
-
     const latestObservedAt = [...operations.values()]
-      .map((record) => record.receipt.observedAt)
+      .map((transaction) => transaction.receipt.observedAt)
       .sort(compareTimestamps)
       .at(-1);
-    for (const history of histories.values()) {
-      for (const record of history) {
-        const operation = operations.get(record.operationId);
-        if (
-          operation?.operationFingerprint !== record.operationFingerprint ||
-          operation.requestFingerprint !== record.requestFingerprint
-        ) {
-          throw new LeaseError(
-            "LEASE_STORE_CORRUPT",
-            "lease record is not bound to a committed operation",
-          );
-        }
-      }
-    }
     return { histories, operations, latestObservedAt };
   }
 

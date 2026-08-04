@@ -6,7 +6,7 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 **Task 6 已在有界范围内合并并通过精确 main 双平台与聚合 Evidence 门禁；Task 7 正在修复独立审查发现的 source-loss、租约竞态和进程逃逸硬阻断。较早的本地收据保留但不再作为完成依据，远端 CI 仍为 `PENDING`。Task 7 合并且后续入口明确授权前，仍不得把 Managed Change 用于真实项目。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。Task 7 新增隔离 worktree、进程边界租约、Windows Job Object 与 Ubuntu process-group 适配；这些目前只证明临时 fixture 中的 Hunter 契约，真实仓库入口、恢复、第三方插件兼容和生产发布仍未被证明。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。Task 7 新增隔离 worktree、进程边界租约、Windows Job Object 与 Linux subreaper 进程树适配；这些目前只证明临时 fixture 中的 Hunter 契约，真实仓库入口、恢复、第三方插件兼容和生产发布仍未被证明。
 
 ## 安装开发者预览
 

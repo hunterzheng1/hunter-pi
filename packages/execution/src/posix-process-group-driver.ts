@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -18,7 +19,10 @@ import {
   type ManagedProcessDriverSession,
   type ManagedProcessDriverStartRequest,
 } from "./process-platform.js";
-import { posixProcessGroupHelperSource } from "./posix-process-group-helper-source.js";
+import {
+  linuxSubreaperProcessTreeHelperSource,
+  linuxSubreaperShimSource,
+} from "./posix-process-group-helper-source.js";
 
 const protocolEventSchema = z.discriminatedUnion("type", [
   z.strictObject({
@@ -37,6 +41,14 @@ const protocolEventSchema = z.discriminatedUnion("type", [
     type: z.literal("terminal"),
     exitCode: z.number().int().nullable(),
     signal: z.string().nullable(),
+  }),
+  z.strictObject({
+    type: z.literal("terminationAcknowledged"),
+    cause: z.enum(["CANCEL", "TIMEOUT"]),
+  }),
+  z.strictObject({
+    type: z.literal("terminationNotApplied"),
+    cause: z.enum(["CANCEL", "TIMEOUT"]),
   }),
   z.strictObject({
     type: z.literal("error"),
@@ -65,6 +77,20 @@ function infrastructureEnvironment(): NodeJS.ProcessEnv {
     if (value !== undefined) result[key] = value;
   }
   return result;
+}
+
+async function resolvePython(): Promise<string> {
+  try {
+    const resolved = await realpath("/usr/bin/python3");
+    await access(resolved, constants.X_OK);
+    return resolved;
+  } catch (error) {
+    throw new ManagedProcessError(
+      "PROCESS_PLATFORM_UNAVAILABLE",
+      "Linux subreaper containment requires the system-owned /usr/bin/python3 runtime",
+      error,
+    );
+  }
 }
 
 async function readProcIdentity(pid: number): Promise<ProcIdentity> {
@@ -113,8 +139,8 @@ function requirePipe<T extends Readable | Writable>(value: T | null | undefined,
   return value;
 }
 
-class PosixProcessGroupSession implements ManagedProcessDriverSession {
-  public readonly containment = "POSIX_PROCESS_GROUP" as const;
+class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
+  public readonly containment = "LINUX_SUBREAPER_PROCESS_TREE" as const;
   readonly #child: ChildProcess;
   readonly #stdin: Writable;
   readonly #protocol: Readable;
@@ -122,6 +148,7 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
   readonly #timeoutMs: number;
   readonly #readyPromise: Promise<void>;
   readonly #settlementPromise: Promise<DriverSnapshot>;
+  readonly #ackWaiters: ((cause: "CANCEL" | "TIMEOUT" | undefined) => void)[] = [];
   readonly #decoder = new StringDecoder("utf8");
   #resolveReady: (() => void) | undefined;
   #rejectReady: ((error: Error) => void) | undefined;
@@ -198,31 +225,39 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
 
   public static async launch(
     request: ManagedProcessDriverStartRequest,
-  ): Promise<PosixProcessGroupSession> {
+  ): Promise<LinuxSubreaperProcessTreeSession> {
     if (process.platform !== "linux") {
       throw new ManagedProcessError(
         "PROCESS_PLATFORM_UNAVAILABLE",
-        "POSIX process-group containment currently requires Linux procfs",
+        "Linux subreaper process-tree containment requires Linux procfs",
       );
     }
+    const python = await resolvePython();
     const helperRoot = await mkdtemp(join(tmpdir(), "hpi-process-host-"));
-    const helperPath = join(helperRoot, "posix-process-group-host.mjs");
-    await writeFile(helperPath, posixProcessGroupHelperSource, { encoding: "utf8", flag: "wx" });
-    const child = spawn(process.execPath, [helperPath], {
+    const shimPath = join(helperRoot, "linux-subreaper-shim.py");
+    const helperPath = join(helperRoot, "linux-subreaper-process-tree-host.mjs");
+    await Promise.all([
+      writeFile(shimPath, linuxSubreaperShimSource, { encoding: "utf8", flag: "wx" }),
+      writeFile(helperPath, linuxSubreaperProcessTreeHelperSource, {
+        encoding: "utf8",
+        flag: "wx",
+      }),
+    ]);
+    const child = spawn(python, [shimPath, process.execPath, helperPath], {
       cwd: helperRoot,
       detached: true,
       env: infrastructureEnvironment(),
       shell: false,
       stdio: ["pipe", "pipe", "pipe", "pipe"],
     });
-    const session = new PosixProcessGroupSession(child, helperRoot, request);
+    const session = new LinuxSubreaperProcessTreeSession(child, helperRoot, request);
     let startTimer: NodeJS.Timeout | undefined;
     const startTimeout = new Promise<never>((_, reject) => {
       startTimer = setTimeout(() => {
         reject(
           new ManagedProcessError(
             "PROCESS_PLATFORM_START_FAILED",
-            "POSIX process-group helper did not establish containment",
+            "Linux subreaper helper did not establish containment",
           ),
         );
       }, 15_000);
@@ -244,7 +279,7 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
     if (this.#identityFingerprint === undefined) {
       throw new ManagedProcessError(
         "PROCESS_PLATFORM_START_FAILED",
-        "POSIX process-group identity was not established",
+        "Linux subreaper process-tree identity was not established",
       );
     }
     return this.#identityFingerprint;
@@ -290,19 +325,31 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       ) {
         return false;
       }
-      process.kill(-this.#child.pid, "SIGKILL");
-      this.#terminationCause = cause;
-      this.#terminationAcknowledged = true;
-      this.#snapshot = driverSnapshotSchema.parse({
-        phase: "TERMINATING",
-        exitCode: null,
-        terminationCause: cause,
-        identityState: "MATCH",
-        treeState: "ACTIVE",
-        stdoutState: this.#stdoutClosed ? "CLOSED" : "OPEN",
-        stderrState: this.#stderrClosed ? "CLOSED" : "OPEN",
-        observedAt: now(),
+      const acknowledgement = new Promise<"CANCEL" | "TIMEOUT" | undefined>((resolve) => {
+        this.#ackWaiters.push(resolve);
       });
+      const written = await new Promise<boolean>((resolve) => {
+        this.#stdin.write(`${JSON.stringify({ type: "terminate", cause })}\n`, "utf8", (error) => {
+          resolve(error === null || error === undefined);
+        });
+      });
+      if (!written) {
+        this.#failProtocol("TERMINATION_WRITE_FAILED");
+        return false;
+      }
+      const acknowledgementTimeout = new Promise<undefined>((resolve) => {
+        const timer = setTimeout(() => {
+          resolve(undefined);
+        }, 5_000);
+        timer.unref();
+      });
+      const acknowledgedCause = await Promise.race([acknowledgement, acknowledgementTimeout]);
+      if (acknowledgedCause !== cause) {
+        if (acknowledgedCause === undefined && !this.#protocolFailed) {
+          this.#failProtocol("TERMINATION_NOT_ACKNOWLEDGED");
+        }
+        return false;
+      }
       return true;
     } catch {
       return false;
@@ -342,7 +389,7 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       this.#snapshot = driverSnapshotSchema.parse({
         phase: event.phase,
         exitCode: event.exitCode,
-        terminationCause: "NONE",
+        terminationCause: this.#terminationCause,
         identityState: "MATCH",
         treeState: event.treeState,
         stdoutState: event.stdoutState,
@@ -356,6 +403,26 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       this.#targetExitCode = event.exitCode;
       return;
     }
+    if (event.type === "terminationAcknowledged") {
+      this.#terminationCause = event.cause;
+      this.#terminationAcknowledged = true;
+      this.#snapshot = driverSnapshotSchema.parse({
+        phase: "TERMINATING",
+        exitCode: null,
+        terminationCause: event.cause,
+        identityState: "MATCH",
+        treeState: "ACTIVE",
+        stdoutState: this.#stdoutClosed ? "CLOSED" : "OPEN",
+        stderrState: this.#stderrClosed ? "CLOSED" : "OPEN",
+        observedAt: now(),
+      });
+      for (const resolve of this.#ackWaiters.splice(0)) resolve(event.cause);
+      return;
+    }
+    if (event.type === "terminationNotApplied") {
+      for (const resolve of this.#ackWaiters.splice(0)) resolve(undefined);
+      return;
+    }
     this.#failProtocol(event.code);
   }
 
@@ -367,7 +434,7 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       }
       this.#identity = identity;
       this.#identityFingerprint = sha256(
-        `linux-process-group\0${String(pid)}\0${identity.startTime}`,
+        `linux-subreaper-process-tree\0${String(pid)}\0${identity.startTime}`,
       );
       this.#snapshot = driverSnapshotSchema.parse({
         phase: "RUNNING",
@@ -399,10 +466,11 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       this.#rejectReady?.(
         new ManagedProcessError(
           "PROCESS_PLATFORM_START_FAILED",
-          `POSIX process-group helper returned unreconciled code ${code}`,
+          `Linux subreaper helper returned unreconciled code ${code}`,
         ),
       );
     }
+    for (const resolve of this.#ackWaiters.splice(0)) resolve(undefined);
   }
 
   #groupIsEmpty(): boolean | undefined {
@@ -427,17 +495,17 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
       });
       empty = this.#groupIsEmpty();
     }
-    const terminated = this.#terminationAcknowledged && this.#terminationCause !== "NONE";
     if (
       !this.#protocolFailed &&
       empty === true &&
       this.#stdoutClosed &&
       this.#stderrClosed &&
-      ((this.#protocolTerminal && code === 0) || terminated)
+      this.#protocolTerminal &&
+      code === 0
     ) {
       this.#snapshot = driverSnapshotSchema.parse({
         phase: "TERMINAL",
-        exitCode: terminated ? null : this.#targetExitCode,
+        exitCode: this.#terminationAcknowledged ? null : this.#targetExitCode,
         terminationCause: this.#terminationCause,
         identityState: "MATCH",
         treeState: "EMPTY",
@@ -451,17 +519,18 @@ class PosixProcessGroupSession implements ManagedProcessDriverSession {
         this.#rejectReady?.(
           new ManagedProcessError(
             "PROCESS_PLATFORM_START_FAILED",
-            "POSIX process-group containment was not established",
+            "Linux subreaper process-tree containment was not established",
           ),
         );
       }
     }
+    for (const resolve of this.#ackWaiters.splice(0)) resolve(undefined);
     this.#resolveSettlement?.(driverSnapshotSchema.parse(this.#snapshot));
   }
 }
 
-export class PosixProcessGroupDriver implements ManagedProcessDriver {
+export class LinuxSubreaperProcessTreeDriver implements ManagedProcessDriver {
   public start(request: ManagedProcessDriverStartRequest): Promise<ManagedProcessDriverSession> {
-    return PosixProcessGroupSession.launch(request);
+    return LinuxSubreaperProcessTreeSession.launch(request);
   }
 }

@@ -37,7 +37,9 @@ namespace HunterPi
         private const uint FILE_SHARE_WRITE = 0x00000002;
         private const uint OPEN_EXISTING = 3;
         private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
-        private const uint STILL_ACTIVE = 259;
+        private const uint WAIT_OBJECT_0 = 0;
+        private const uint WAIT_TIMEOUT = 258;
+        private const uint WAIT_FAILED = 0xFFFFFFFF;
         private const uint RESUME_THREAD_FAILED = 0xFFFFFFFF;
 
         private static readonly object EventLock = new object();
@@ -234,6 +236,9 @@ namespace HunterPi
         private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetProcessTimes(
             IntPtr process,
@@ -343,9 +348,16 @@ namespace HunterPi
 
         private static int? ExitCode(IntPtr process)
         {
+            uint wait = WaitForSingleObject(process, 0);
+            Require(wait != WAIT_FAILED, "WAIT_PROCESS");
+            if (wait == WAIT_TIMEOUT)
+            {
+                return null;
+            }
+            Require(wait == WAIT_OBJECT_0, "WAIT_PROCESS_STATE");
             uint code;
             Require(GetExitCodeProcess(process, out code), "QUERY_EXIT");
-            return code == STILL_ACTIVE ? (int?)null : unchecked((int)code);
+            return unchecked((int)code);
         }
 
         private static ulong CreationTime(IntPtr process)

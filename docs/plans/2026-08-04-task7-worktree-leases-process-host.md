@@ -58,6 +58,7 @@ RED cases:
 - replay by the same operation identity is idempotent, while a changed payload is rejected;
 - expiry alone does not let an uncertain live owner get overwritten;
 - renewal is monotonic and release by a non-owner is rejected;
+- process startup binds the complete lease set atomically, and an external or second session cannot release or reuse a bound lease;
 - a lease file alias, malformed record, partial publication, or clock rollback fails closed.
 
 GREEN adds file-backed local leases suitable for process boundaries. REFACTOR keeps storage details and atomic publication internal.
@@ -77,9 +78,9 @@ GREEN implements a portable host and strict session receipts. REFACTOR separates
 
 ### Cluster 4 — Platform containment matrix
 
-Windows fixtures include spaces, non-ASCII names, nested child/grandchild processes, long output, timeout, explicit cancellation, open log handles, junction traps, and branch/worktree long paths. Windows Managed execution requires a proven process-tree containment adapter; absence or ambiguity is `BLOCKED`, never a portable-success inference.
+Windows fixtures include spaces, non-ASCII names, nested child/grandchild processes, long output, timeout, explicit cancellation, open log handles, literal exit code 259, junction traps, and branch/worktree long paths. Windows Managed execution requires a proven process-tree containment adapter; absence or ambiguity is `BLOCKED`, never a portable-success inference.
 
-Ubuntu runs the same provider-neutral contracts with process-group containment. CI identity receipts must bind the exact source, Node, Git, platform, schemas, and test matrix.
+Ubuntu runs the same provider-neutral contracts with a subreaper-owned process tree. A detached descendant that closes stdout/stderr remains active until `/proc` parentage is empty; missing canonical Python/subreaper support is `BLOCKED`, not a process-group fallback. CI identity receipts must bind the exact source, verifier, Node, Git, platform, schemas, tests, configuration, lockfile, and CI matrix.
 
 ### Cluster 5 — Evidence and closeout
 
@@ -101,4 +102,4 @@ The handoff records every RED and GREEN command, focused/full local result, exac
 
 ## Local disposition
 
-Clusters 1–5 produced an initial implementation and preserved local receipts, but independent review reproduced source-loss, lease-race, detached-process, and verifier-identity gaps. Those receipts are superseded for Task completion without being rewritten or deleted. Workspace remediation now disables repository executable integrations, fingerprints source content and index state, preserves ignored files, compensates post-create failures, and emits a blocked mismatch receipt. Lease, platform, and Evidence remediation remain active. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).
+Clusters 1–5 produced an initial implementation and preserved local receipts, but independent review reproduced source-loss, lease-race, detached-process, and verifier-identity gaps. Those receipts are superseded for Task completion without being rewritten or deleted. Workspace remediation disables repository executable integrations, fingerprints source content and index state, preserves ignored files, compensates post-create failures, and emits a blocked mismatch receipt. Lease publication/session binding and both platform adapters have local corrective implementations; replacement Evidence and remote CI remain active and `PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).

@@ -15,7 +15,7 @@ export type ManagedProcessSessionId = z.infer<typeof managedProcessSessionIdSche
 
 export const processContainmentSchema = z.enum([
   "WINDOWS_JOB_OBJECT",
-  "POSIX_PROCESS_GROUP",
+  "LINUX_SUBREAPER_PROCESS_TREE",
   "TEST_CONTAINED",
 ]);
 export type ProcessContainment = z.infer<typeof processContainmentSchema>;
@@ -33,6 +33,11 @@ const environmentNameSchema = z
   .min(1)
   .max(128)
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/u);
+const osStringSchema = (maximum: number) =>
+  z
+    .string()
+    .max(maximum)
+    .refine((value) => !value.includes("\0"), "OS-bound strings must not contain NUL");
 
 export const managedProcessStartRequestSchema = z
   .strictObject({
@@ -40,13 +45,15 @@ export const managedProcessStartRequestSchema = z
     operationId: operationIdSchema,
     operationFingerprint: fingerprintSchema,
     sessionId: managedProcessSessionIdSchema,
-    executable: z.string().min(1).max(32_768),
-    argv: z.array(z.string().max(32_768)).max(512),
-    cwd: z.string().min(1).max(32_768),
-    environment: z.record(environmentNameSchema, z.string().max(131_072)),
+    executable: osStringSchema(32_768).pipe(z.string().min(1)),
+    argv: z.array(osStringSchema(32_768)).max(512),
+    cwd: osStringSchema(32_768).pipe(z.string().min(1)),
+    environment: z.record(environmentNameSchema, osStringSchema(131_072)),
     timeoutMs: z.number().int().positive().max(86_400_000),
     maxOutputBytes: z.number().int().positive().max(268_435_456),
     leases: z.array(leaseBindingSchema).max(128),
+    leaseBindOperationId: operationIdSchema.nullable(),
+    leaseBindOperationFingerprint: fingerprintSchema.nullable(),
   })
   .superRefine((request, context) => {
     if (new Set(request.leases.map((binding) => binding.leaseId)).size !== request.leases.length) {
@@ -57,6 +64,16 @@ export const managedProcessStartRequestSchema = z
       request.leases.length
     ) {
       context.addIssue({ code: "custom", message: "lease release operations must be unique" });
+    }
+    const requiresBinding = request.leases.length > 0;
+    if (
+      requiresBinding !== (request.leaseBindOperationId !== null) ||
+      requiresBinding !== (request.leaseBindOperationFingerprint !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "lease binding operation identity must be present exactly when leases are bound",
+      });
     }
   });
 export type ManagedProcessStartRequest = z.infer<typeof managedProcessStartRequestSchema>;

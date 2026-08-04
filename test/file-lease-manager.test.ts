@@ -46,6 +46,7 @@ interface LeaseManager {
       readonly resourceCount: number;
       readonly state: "ACTIVE" | "EXPIRED" | "REVOKED" | "RELEASED";
       readonly expiresAt: string;
+      readonly bindingFingerprint: string | null;
       readonly observedAt: string;
     };
   }>;
@@ -57,12 +58,33 @@ interface LeaseManager {
     readonly ownerFingerprint: string;
     readonly ttlMs: number;
   }): Promise<{ readonly receipt: LeaseMutationReceipt }>;
+  bind(request: {
+    readonly schemaVersion: "hpi-lease-bind.v1";
+    readonly operationId: string;
+    readonly operationFingerprint: string;
+    readonly bindingFingerprint: string;
+    readonly leases: readonly {
+      readonly leaseId: string;
+      readonly ownerFingerprint: string;
+    }[];
+  }): Promise<{
+    readonly receipt: {
+      readonly schemaVersion: "hpi-lease-bind-receipt.v1";
+      readonly action: "BIND";
+      readonly outcome: "BOUND";
+      readonly bindingFingerprint: string;
+      readonly leaseSetFingerprint: string;
+      readonly leaseCount: number;
+      readonly observedAt: string;
+    };
+  }>;
   release(request: {
     readonly schemaVersion: "hpi-lease-release.v1";
     readonly operationId: string;
     readonly operationFingerprint: string;
     readonly leaseId: string;
     readonly ownerFingerprint: string;
+    readonly bindingFingerprint: string | null;
   }): Promise<{ readonly receipt: LeaseMutationReceipt }>;
 }
 
@@ -78,6 +100,7 @@ interface LeaseMutationReceipt {
   readonly resourceCount: number;
   readonly state: "ACTIVE" | "RELEASED";
   readonly expiresAt: string;
+  readonly bindingFingerprint: string | null;
   readonly reasonCodes: readonly [];
   readonly observedAt: string;
 }
@@ -402,6 +425,7 @@ describe("file-backed exclusive lease manager", () => {
         operationFingerprint: fingerprint("operation:lease-release-wrong-owner"),
         leaseId: "lease_task7-renew",
         ownerFingerprint: fingerprint("owner:wrong"),
+        bindingFingerprint: null,
       }),
     ).rejects.toMatchObject({ code: "LEASE_OWNER_MISMATCH" });
 
@@ -412,6 +436,7 @@ describe("file-backed exclusive lease manager", () => {
       operationFingerprint: fingerprint("operation:lease-release"),
       leaseId: "lease_task7-renew",
       ownerFingerprint,
+      bindingFingerprint: null,
     };
     const released = await manager.release(releaseRequest);
     expect(released.receipt).toMatchObject({
@@ -431,6 +456,75 @@ describe("file-backed exclusive lease manager", () => {
       now: () => "2026-08-04T09:16:00.000Z",
     });
     await expect(restartedManager.release({ ...releaseRequest })).resolves.toEqual(released);
+  });
+
+  it("binds a lease set atomically and rejects release or duplicate use without the binding", async () => {
+    const fixture = await createLeaseFixture();
+    const manager = await requireCreateLeaseManager()({
+      leaseRoot: fixture.root,
+      now: () => "2026-08-04T09:18:00.000Z",
+    });
+    const ownerFingerprint = fingerprint("owner:binding");
+    await manager.acquire(
+      acquireRequest({
+        suffix: "lease-binding-acquire",
+        leaseId: "lease_task7-binding",
+        workspaceId: "workspace_task7-binding",
+        owner: "binding",
+        resources: ["resource_binding"],
+      }),
+    );
+    const bindingFingerprint = fingerprint("process-session-binding");
+    await expect(
+      manager.bind({
+        schemaVersion: "hpi-lease-bind.v1",
+        operationId: "op_lease-binding",
+        operationFingerprint: fingerprint("operation:lease-binding"),
+        bindingFingerprint,
+        leases: [{ leaseId: "lease_task7-binding", ownerFingerprint }],
+      }),
+    ).resolves.toMatchObject({
+      receipt: {
+        action: "BIND",
+        outcome: "BOUND",
+        bindingFingerprint,
+        leaseCount: 1,
+      },
+    });
+    await expect(manager.inspect("lease_task7-binding")).resolves.toMatchObject({
+      receipt: { state: "ACTIVE", generation: 2, bindingFingerprint },
+    });
+    await expect(
+      manager.release({
+        schemaVersion: "hpi-lease-release.v1",
+        operationId: "op_lease-binding-release-unbound",
+        operationFingerprint: fingerprint("operation:lease-binding-release-unbound"),
+        leaseId: "lease_task7-binding",
+        ownerFingerprint,
+        bindingFingerprint: null,
+      }),
+    ).rejects.toMatchObject({ code: "LEASE_BINDING_MISMATCH" });
+    await expect(
+      manager.bind({
+        schemaVersion: "hpi-lease-bind.v1",
+        operationId: "op_lease-binding-duplicate",
+        operationFingerprint: fingerprint("operation:lease-binding-duplicate"),
+        bindingFingerprint: fingerprint("different-process-session"),
+        leases: [{ leaseId: "lease_task7-binding", ownerFingerprint }],
+      }),
+    ).rejects.toMatchObject({ code: "LEASE_ALREADY_BOUND" });
+    await expect(
+      manager.release({
+        schemaVersion: "hpi-lease-release.v1",
+        operationId: "op_lease-binding-release",
+        operationFingerprint: fingerprint("operation:lease-binding-release"),
+        leaseId: "lease_task7-binding",
+        ownerFingerprint,
+        bindingFingerprint,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { action: "RELEASE", state: "RELEASED", bindingFingerprint: null },
+    });
   });
 
   it("fails closed when the lease clock moves behind committed state", async () => {
@@ -484,7 +578,7 @@ describe("file-backed exclusive lease manager", () => {
       leaseRoot: fixture.root,
       now: () => "2026-08-04T09:23:00.000Z",
     });
-    const operationsRoot = join(fixture.root, "operations");
+    const operationsRoot = join(fixture.root, "transactions");
     const outside = join(fixture.parent, "outside operations");
     await rm(operationsRoot, { recursive: true });
     await mkdir(outside);
@@ -504,29 +598,27 @@ describe("file-backed exclusive lease manager", () => {
     await expect(readdir(outside)).resolves.toEqual([]);
   });
 
-  it("fails closed on malformed or partially published lease state", async () => {
+  it("fails closed on a malformed committed transaction and discards a pre-commit crash file", async () => {
     const malformedFixture = await createLeaseFixture();
     const createManager = requireCreateLeaseManager();
     await createManager({ leaseRoot: malformedFixture.root });
-    const malformedDirectory = join(malformedFixture.root, "leases", "lease_task7-malformed");
-    await mkdir(malformedDirectory);
-    await writeFile(join(malformedDirectory, "00000001.json"), "{}\n", "utf8");
-    const malformedManager = await createManager({ leaseRoot: malformedFixture.root });
-    await expect(
-      malformedManager.acquire(
-        acquireRequest({
-          suffix: "lease-after-malformed",
-          leaseId: "lease_task7-after-malformed",
-          workspaceId: "workspace_task7-after-malformed",
-          owner: "malformed",
-          resources: [],
-        }),
-      ),
-    ).rejects.toMatchObject({ name: "LeaseError", code: "LEASE_STORE_CORRUPT" });
+    await writeFile(
+      join(malformedFixture.root, "transactions", "op_lease-malformed.json"),
+      "{}\n",
+      "utf8",
+    );
+    await expect(createManager({ leaseRoot: malformedFixture.root })).rejects.toMatchObject({
+      name: "LeaseError",
+      code: "LEASE_STORE_CORRUPT",
+    });
 
     const partialFixture = await createLeaseFixture();
     await createManager({ leaseRoot: partialFixture.root });
-    await writeFile(join(partialFixture.root, "operations", ".pending-fixture"), "partial", "utf8");
+    await writeFile(
+      join(partialFixture.root, "transactions", ".pending-fixture"),
+      "partial",
+      "utf8",
+    );
     const partialManager = await createManager({ leaseRoot: partialFixture.root });
     await expect(
       partialManager.acquire(
@@ -538,7 +630,10 @@ describe("file-backed exclusive lease manager", () => {
           resources: [],
         }),
       ),
-    ).rejects.toMatchObject({ name: "LeaseError", code: "LEASE_STORE_CORRUPT" });
+    ).resolves.toMatchObject({ receipt: { outcome: "ACQUIRED" } });
+    await expect(readdir(join(partialFixture.root, "transactions"))).resolves.not.toContain(
+      ".pending-fixture",
+    );
   });
 
   it("rejects a hard-linked committed lease record", async () => {
@@ -558,20 +653,12 @@ describe("file-backed exclusive lease manager", () => {
       }),
     );
     await link(
-      join(fixture.root, "leases", "lease_task7-hardlink", "00000001.json"),
+      join(fixture.root, "transactions", "op_lease-hardlink-acquire.json"),
       join(fixture.parent, "aliased-lease-record.json"),
     );
-    const restartedManager = await createManager({ leaseRoot: fixture.root });
-    await expect(
-      restartedManager.acquire(
-        acquireRequest({
-          suffix: "lease-after-hardlink",
-          leaseId: "lease_task7-after-hardlink",
-          workspaceId: "workspace_task7-after-hardlink",
-          owner: "hardlink-two",
-          resources: [],
-        }),
-      ),
-    ).rejects.toMatchObject({ name: "LeaseError", code: "LEASE_STORE_CORRUPT" });
+    await expect(createManager({ leaseRoot: fixture.root })).rejects.toMatchObject({
+      name: "LeaseError",
+      code: "LEASE_STORE_CORRUPT",
+    });
   });
 });

@@ -65,6 +65,7 @@ interface SessionRecord {
   readonly driver: ManagedProcessDriverSession;
   readonly output: OutputLedger;
   readonly leases: readonly ManagedProcessLeaseBinding[];
+  readonly leaseBindingFingerprint: Fingerprint | null;
   readonly cancelOperations: Map<
     string,
     {
@@ -195,15 +196,50 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
     if (this.#sessions.has(parsed.sessionId)) {
       throw new ManagedProcessError("PROCESS_SESSION_CONFLICT", "process session already exists");
     }
-    for (const binding of parsed.leases) {
-      const status = await this.#leaseManager.inspect(binding.leaseId);
-      if (
-        status.receipt.state !== "ACTIVE" ||
-        status.receipt.ownerFingerprint !== binding.ownerFingerprint
-      ) {
+    const observedAt = timestampSchema.parse(this.#now());
+    const leaseBindingFingerprint =
+      parsed.leases.length === 0
+        ? null
+        : sha256(
+            canonicalJson({
+              schemaVersion: "hpi-process-lease-binding.v1",
+              sessionId: parsed.sessionId,
+              operationId: parsed.operationId,
+              operationFingerprint: parsed.operationFingerprint,
+              requestFingerprint,
+            }),
+          );
+    if (
+      leaseBindingFingerprint !== null &&
+      parsed.leaseBindOperationId !== null &&
+      parsed.leaseBindOperationFingerprint !== null
+    ) {
+      try {
+        await this.#leaseManager.bind({
+          schemaVersion: "hpi-lease-bind.v1",
+          operationId: parsed.leaseBindOperationId,
+          operationFingerprint: parsed.leaseBindOperationFingerprint,
+          bindingFingerprint: leaseBindingFingerprint,
+          leases: parsed.leases.map((binding) => ({
+            leaseId: binding.leaseId,
+            ownerFingerprint: binding.ownerFingerprint,
+          })),
+        });
+        for (const binding of parsed.leases) {
+          const status = await this.#leaseManager.inspect(binding.leaseId);
+          if (
+            status.receipt.state !== "ACTIVE" ||
+            status.receipt.ownerFingerprint !== binding.ownerFingerprint ||
+            status.receipt.bindingFingerprint !== leaseBindingFingerprint
+          ) {
+            throw new Error("bound lease state did not match the process session");
+          }
+        }
+      } catch (error) {
         throw new ManagedProcessError(
           "PROCESS_LEASE_INVALID",
-          "process lease is not active for the declared owner",
+          "process leases could not be atomically bound to the declared session",
+          error,
         );
       }
     }
@@ -215,16 +251,35 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
       retainedBytes: 0,
       maxOutputBytes: parsed.maxOutputBytes,
     };
-    const driver = await this.#driver.start({
-      executable: parsed.executable,
-      argv: parsed.argv,
-      cwd,
-      environment: parsed.environment,
-      timeoutMs: parsed.timeoutMs,
-      onOutput: (stream, chunk) => {
-        captureOutput(output, stream, chunk);
-      },
-    });
+    let driver: ManagedProcessDriverSession;
+    try {
+      driver = await this.#driver.start({
+        executable: parsed.executable,
+        argv: parsed.argv,
+        cwd,
+        environment: parsed.environment,
+        timeoutMs: parsed.timeoutMs,
+        onOutput: (stream, chunk) => {
+          captureOutput(output, stream, chunk);
+        },
+      });
+    } catch (error) {
+      if (leaseBindingFingerprint !== null) {
+        await Promise.all(
+          parsed.leases.map((binding) =>
+            this.#leaseManager.release({
+              schemaVersion: "hpi-lease-release.v1",
+              operationId: binding.releaseOperationId,
+              operationFingerprint: binding.releaseOperationFingerprint,
+              leaseId: binding.leaseId,
+              ownerFingerprint: binding.ownerFingerprint,
+              bindingFingerprint: leaseBindingFingerprint,
+            }),
+          ),
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
     const identityFingerprint = parseDriverIdentity(driver.identityFingerprint);
     const containment = parseProcessContainment(driver.containment);
     const receipt = managedProcessStartReceiptSchema.parse({
@@ -240,7 +295,7 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
       containment,
       leaseCount: parsed.leases.length,
       terminalFinality: "PENDING",
-      observedAt: timestampSchema.parse(this.#now()),
+      observedAt,
     });
     const session: SessionRecord = {
       request: parsed,
@@ -249,6 +304,7 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
       driver,
       output,
       leases: parsed.leases,
+      leaseBindingFingerprint,
       cancelOperations: new Map(),
     };
     this.#sessions.set(parsed.sessionId, session);
@@ -455,6 +511,7 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
             operationFingerprint: binding.releaseOperationFingerprint,
             leaseId: binding.leaseId,
             ownerFingerprint: binding.ownerFingerprint,
+            bindingFingerprint: session.leaseBindingFingerprint,
           });
         }
         leaseState = "RELEASED";
@@ -491,11 +548,26 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
     try {
       const states = await Promise.all(
         session.leases.map(
-          async (binding) => (await this.#leaseManager.inspect(binding.leaseId)).receipt.state,
+          async (binding) => (await this.#leaseManager.inspect(binding.leaseId)).receipt,
         ),
       );
-      if (states.every((state) => state === "RELEASED")) return "RELEASED";
-      if (states.every((state) => state === "ACTIVE" || state === "EXPIRED")) return "HELD";
+      if (
+        states.every(
+          (receipt) => receipt.state === "RELEASED" && receipt.bindingFingerprint === null,
+        )
+      ) {
+        return "RELEASED";
+      }
+      if (
+        session.leaseBindingFingerprint !== null &&
+        states.every(
+          (receipt) =>
+            (receipt.state === "ACTIVE" || receipt.state === "EXPIRED") &&
+            receipt.bindingFingerprint === session.leaseBindingFingerprint,
+        )
+      ) {
+        return "HELD";
+      }
       return "NOT_PROVEN";
     } catch {
       return "NOT_PROVEN";

@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { writerLeaseIdSchema } from "@hunter-pi/domain";
-import { createFileLeaseManager, leaseAcquireRequestSchema } from "@hunter-pi/execution";
+import {
+  createFileLeaseManager,
+  leaseAcquireRequestSchema,
+  leaseReleaseRequestSchema,
+  managedProcessStartRequestSchema,
+} from "@hunter-pi/execution";
 import * as processHostModule from "../packages/execution/src/managed-process-host.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
@@ -173,6 +178,9 @@ function startRequest(cwd: string, leases: readonly Record<string, unknown>[] = 
     timeoutMs: 60_000,
     maxOutputBytes: 8,
     leases,
+    leaseBindOperationId: leases.length > 0 ? "op_process-lease-bind" : null,
+    leaseBindOperationFingerprint:
+      leases.length > 0 ? fingerprint("operation:process-lease-bind") : null,
   };
 }
 
@@ -334,6 +342,109 @@ describe("managed process host", () => {
     expect(driver.startCalls).toBe(1);
     driver.settle(terminalSnapshot());
     await host.awaitFinal("process_task7-session");
+  });
+
+  it("rejects NUL in every OS-bound process input before calling the platform driver", async () => {
+    const fixture = await createFixture();
+    const driver = new ControllableDriver();
+    const host = requireCreateHost()({ driver, leaseManager: fixture.leaseManager });
+    const request = startRequest(fixture.cwd);
+    const invalid = [
+      { ...request, executable: `${process.execPath}\0suffix` },
+      { ...request, argv: ["safe", "unsafe\0argument"] },
+      { ...request, cwd: `${fixture.cwd}\0suffix` },
+      { ...request, environment: { HPI_FIXTURE: "unsafe\0value" } },
+      { ...request, environment: { "HPI\0FIXTURE": "unsafe" } },
+    ];
+
+    for (const candidate of invalid) {
+      expect(managedProcessStartRequestSchema.safeParse(candidate).success).toBe(false);
+      await expect(host.start(candidate)).rejects.toThrow();
+    }
+    expect(driver.startCalls).toBe(0);
+  });
+
+  it("atomically reserves a lease for one session until that session reaches finality", async () => {
+    const fixture = await createFixture();
+    const ownerFingerprint = fingerprint("process-race-owner");
+    await fixture.leaseManager.acquire(
+      leaseAcquireRequestSchema.parse({
+        schemaVersion: "hpi-lease-acquire.v1",
+        operationId: "op_process-race-lease-acquire",
+        operationFingerprint: fingerprint("operation:process-race-lease-acquire"),
+        leaseId: "lease_task7-process-race",
+        workspaceId: "workspace_task7-process-race",
+        ownerFingerprint,
+        resources: ["process_race_slot"],
+        ttlMs: 60_000,
+      }),
+    );
+    const firstDriver = new ControllableDriver();
+    const secondDriver = new ControllableDriver();
+    const firstHost = requireCreateHost()({
+      driver: firstDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const secondHost = requireCreateHost()({
+      driver: secondDriver,
+      leaseManager: fixture.leaseManager,
+    });
+    const lease = {
+      leaseId: "lease_task7-process-race",
+      ownerFingerprint,
+      releaseOperationId: "op_process-race-release-first",
+      releaseOperationFingerprint: fingerprint("operation:process-race-release-first"),
+    };
+    await firstHost.start(startRequest(fixture.cwd, [lease]));
+
+    await expect(
+      secondHost.start({
+        ...startRequest(fixture.cwd, [
+          {
+            ...lease,
+            releaseOperationId: "op_process-race-release-second",
+            releaseOperationFingerprint: fingerprint("operation:process-race-release-second"),
+          },
+        ]),
+        operationId: "op_process-start-second",
+        operationFingerprint: fingerprint("operation:process-start-second"),
+        sessionId: "process_task7-session-second",
+        leaseBindOperationId: "op_process-lease-bind-second",
+        leaseBindOperationFingerprint: fingerprint("operation:process-lease-bind-second"),
+      }),
+    ).rejects.toMatchObject({ code: "PROCESS_LEASE_INVALID" });
+    expect(secondDriver.startCalls).toBe(0);
+    await expect(
+      fixture.leaseManager.release(
+        leaseReleaseRequestSchema.parse({
+          schemaVersion: "hpi-lease-release.v1",
+          operationId: "op_process-race-external-release",
+          operationFingerprint: fingerprint("operation:process-race-external-release"),
+          leaseId: "lease_task7-process-race",
+          ownerFingerprint,
+          bindingFingerprint: null,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "LEASE_BINDING_MISMATCH" });
+
+    firstDriver.settle(terminalSnapshot());
+    await expect(firstHost.awaitFinal("process_task7-session")).resolves.toMatchObject({
+      receipt: { leaseState: "RELEASED", terminalFinality: "FINAL" },
+    });
+    await expect(
+      fixture.leaseManager.acquire(
+        leaseAcquireRequestSchema.parse({
+          schemaVersion: "hpi-lease-acquire.v1",
+          operationId: "op_process-race-lease-replacement",
+          operationFingerprint: fingerprint("operation:process-race-lease-replacement"),
+          leaseId: "lease_task7-process-race-replacement",
+          workspaceId: "workspace_task7-process-race",
+          ownerFingerprint: fingerprint("process-race-replacement-owner"),
+          resources: ["process_race_slot"],
+          ttlMs: 60_000,
+        }),
+      ),
+    ).resolves.toMatchObject({ receipt: { outcome: "ACQUIRED" } });
   });
 
   it("refuses cancellation when the platform identity no longer matches", async () => {

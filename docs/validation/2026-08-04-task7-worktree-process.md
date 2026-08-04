@@ -35,7 +35,7 @@ The public workspace module exposes prepare, inspect, and dispose operations whi
 
 ### Writer and resource leases
 
-The file-backed lease module publishes immutable generation and operation records under an exact physical state root. It proves one active writer per workspace, atomic resource-set exclusion, monotonic renewal, non-owner release rejection, idempotent replay, and fail-closed handling of clock rollback, malformed/partial records, aliases, and hard links. Expiry alone never authorizes takeover: owner liveness must be independently `DEAD`; `NOT_PROVEN` preserves the lease.
+The file-backed lease module publishes each operation receipt and all resulting generations as one immutable transaction under an exact physical state root. Managed-process startup atomically binds its complete lease set to one session fingerprint before launch, and only that binding may release it. The focused suite proves one active writer per workspace, atomic resource-set exclusion, monotonic renewal, non-owner/binding release rejection, idempotent replay, pre-commit crash cleanup, and fail-closed handling of clock rollback, malformed committed transactions, aliases, and hard links. Expiry alone never authorizes takeover: owner liveness must be independently `DEAD`; `NOT_PROVEN` preserves the lease.
 
 ### Managed process host
 
@@ -43,8 +43,8 @@ The public host accepts an explicit executable, argument array, physical cwd, ex
 
 The production factory has no shell or PID-only fallback:
 
-- Windows creates a Job Object with `KILL_ON_JOB_CLOSE`, restricts inherited handles, creates the target suspended with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, verifies membership, and only then resumes it. The helper owns termination and reports finality only after the Job is empty and both output pipes reach EOF.
-- Ubuntu creates a dedicated Node helper as the exact process-group and session leader, verifies its `/proc` start time/group/session identity, and signals only the verified group. A private protocol descriptor is separate from target stdout/stderr.
+- Windows creates a Job Object with `KILL_ON_JOB_CLOSE`, restricts inherited handles, creates the target suspended with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, verifies membership, and only then resumes it. The helper checks `WaitForSingleObject` before reading the exit code, so literal code 259 is not confused with `STILL_ACTIVE`; finality still waits for an empty Job and both output pipes at EOF.
+- Ubuntu uses canonical `/usr/bin/python3` to establish `PR_SET_CHILD_SUBREAPER` before executing a dedicated Node helper as the exact process-group and session leader. The helper follows `/proc` parentage and repeatedly identity-checks/terminates all live descendants, including a `setsid` child with closed stdio. Its private control protocol is separate from target stdout/stderr; missing subreaper prerequisites fail closed without a weaker fallback.
 - A mismatched or unproven identity is not terminated. Adapter or reconciliation ambiguity produces `NOT_PROVEN` and keeps resource ownership conservative.
 
 The Windows sequencing was independently implemented against Microsoft Win32 documentation; the exact external research cross-check and license review are recorded in [Task 7 Windows Job Object provenance](../provenance/2026-08-04-task7-windows-job-object-reference.md).
@@ -73,6 +73,8 @@ The exact platform matrix proves:
 4. terminal finality remaining pending while a descendant holds inherited output handles;
 5. bounded retained output with a digest over every observed byte;
 6. identity mismatch causing no platform termination call.
+7. a detached closed-stdio descendant remaining non-final until the owned tree is empty.
+8. on Windows, kernel signaled-state disambiguation preserving literal exit code 259.
 
 ## Test-first history
 
@@ -104,4 +106,4 @@ The final documentation-only diff still requires a fresh format check, `git diff
 
 CI now defines independent Windows/Ubuntu Task 7 platform jobs and a strict aggregate identity comparator. They have not yet run for this branch, so remote status remains `PENDING`. Local WSL execution is useful platform evidence but is not GitHub-hosted Ubuntu CI.
 
-Even after exact CI passes, Task 7 proves these Hunter contracts only within disposable fixtures. It does not prove arbitrary user repositories, malicious code that deliberately escapes a POSIX process group, real Pi/Provider behavior, recovery after host crash, plugin isolation, a Windows installer, production readiness, or daily-use acceptance. Those claims remain `NOT_RUN` or `NOT_PROVEN` under their later tasks.
+Even after exact CI passes, Task 7 proves these Hunter contracts only within disposable fixtures. It does not prove arbitrary user repositories, hostile kernel/process behavior outside the declared adapter assumptions, real Pi/Provider behavior, recovery after host crash, plugin isolation, a Windows installer, production readiness, or daily-use acceptance. Those claims remain `NOT_RUN` or `NOT_PROVEN` under their later tasks.

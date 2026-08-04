@@ -12,8 +12,8 @@ export class ManagedProcessError extends Error {
   public override readonly name = "ManagedProcessError";
   public readonly code: ManagedProcessErrorCode;
 
-  public constructor(code: ManagedProcessErrorCode, message: string) {
-    super(message);
+  public constructor(code: ManagedProcessErrorCode, message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
     this.code = code;
   }
 }

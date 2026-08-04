@@ -4,13 +4,13 @@
 - Product artifact: `@hunter-pi/cli@0.1.0-dev.0`
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Local platform: Windows / Node.js 24
-- Implementation commit: `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b`
-- Merge commit: `8573b1f62d154275bb81c3c07b432a3db40632bb`
-- Pull request: [#9](https://github.com/hunterzheng1/hunter-pi/pull/9)
+- Implementation commit: `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b`; smoke-clarity commit: `2a357795a2ae61c9db935ff11a922bbfe05ec892`
+- Merge commits: `8573b1f62d154275bb81c3c07b432a3db40632bb`, `0e58f539b713edb35f46fcbb55a63063dbbfa328`
+- Pull requests: [#9](https://github.com/hunterzheng1/hunter-pi/pull/9), [#13](https://github.com/hunterzheng1/hunter-pi/pull/13)
 - Remote Windows/Ubuntu CI: **PASS for the implementation and exact merge commits**
 - Automated product result: **PASS within the scope below**
 - Clean-main Windows user installation: **PASS**
-- Real Windows interactive TUI: **DETECTED within startup/Core/command-display bounds; complete manual smoke NOT_PROVEN**
+- Real Windows interactive TUI: **DETECTED within startup/Core/command-display/clean-exit/manual-acknowledgement bounds**
 - Bundled Core compatibility in the real TUI: **UNVERIFIED**
 - Real Provider login/request: **NOT_PROVEN**
 - Managed Change: **NOT_IMPLEMENTED**
@@ -31,7 +31,7 @@ The Task 5 automated suite proves that the developer preview can:
 - make Doctor freshly resolve that current destination offline and block stale disclosure readiness before launch;
 - ask Pi's public `ModelRuntime.getProviderAuthStatus()` for readiness metadata while discarding labels; Pi Engine parses its credential storage, while the Hunter host receives and persists no credential value;
 - run every mutating Git Doctor probe in an automatically created temporary Git fixture and redact portable Doctor output;
-- plan a Safe Mode launch with only the bundled Core Extension path and no skills, prompt templates, themes, or context files, even when a configured user extension would throw on import; the 2026-08-04 real TUI rendered the exact bundled Core and its command payload, while the complete manual smoke remains `NOT_PROVEN`;
+- plan a Safe Mode launch with only the bundled Core Extension path and no skills, prompt templates, themes, or context files, even when a configured user extension would throw on import; the 2026-08-04 exact-artifact real TUI rendered the bundled Core and its explicit command receipt before a clean exit and affirmative acknowledgement;
 - reject all enabled user plugins in Task 5 before execution; plugin source/version/ref/scope approval remains a later plugin-manager task;
 - execute fixed Pi against a recording loopback fake endpoint and prove cancellation-before-send, exact-origin preflight, Provider-managed override rejection, Provider/model/origin pinning, one expected request, exact payload-category accounting, and credential-free Evidence surfaces;
 - execute fixed Pi RPC in a temporary Git fixture and prove Safe Mode intercepts a direct user bash command without creating its marker file; prove a context-file sentinel is absent from the real request payload;
@@ -59,6 +59,8 @@ The default disclosure references current OpenAI documentation that says privacy
 | `npm run verify` | PASS | lint, typecheck, 212 tests, strict fixture, build, format, package smoke, clean install, and Pi probe |
 | `hpi version --json` from the installed artifact | PASS | product, Engine, source stamp state, update channel |
 | installed `hpi doctor --json` without setup/login | expected exit 2 / `BLOCKED` | missing setup/login is not reported as success; Engine is actually detected |
+| focused smoke-clarity tests | PASS — 2 files / 35 tests | explicit `/hunter-status` receipt marker, strict model pinning without unauthenticated model-cycle scoping, and exact operator instruction |
+| installed `hpi doctor --json` after the acknowledged TUI smoke | expected exit 2 / `BLOCKED` | `interactive_tui=DETECTED`; Provider authentication alone remains `BLOCKED` |
 
 The final private-path scan and `git diff --check` passed. The pre-commit path review found only Task 5 product-shell, validation, build, dependency, and contributor-status files. Focused commit `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` was created from a clean worktree, pushed, and merged without rewriting its failure history.
 
@@ -71,8 +73,12 @@ The final private-path scan and `git diff --check` passed. The pre-commit path r
 | clean-main tarball `@hunter-pi/cli@0.1.0-dev.0` | PASS — 112076 bytes; SHA-256 `962c4b25cb97911cdc727721b96ed91c0afc8a646d44f30ff4a06cf96ec8ade6` | built after the merge CI passed; installed for the current Windows user without creating or replacing a raw `pi` command |
 | installed `hpi version --json` | PASS — source `8573b1f62d154275bb81c3c07b432a3db40632bb`, `sourceState=CLEAN`, Pi `0.83.0` | product shell `sha256:fc7230b9388c715eca3a37b5bd4f70e8583f50cba54c6c35145534620a2d42a3`; Core `sha256:60555863b914f53945eb0889044a594a65f161d67a6eb0b587132b3f8a6e15c7` |
 | installed `hpi doctor --json` before setup/login/TUI smoke | expected exit 2 / `BLOCKED` | Node, temporary Git fixture, Pi Engine, and Core were `DETECTED`; configuration/disclosure/auth remained `BLOCKED`, interactive TUI remained `NOT_PROVEN` |
+| smoke-clarity PR commit `2a357795a2ae61c9db935ff11a922bbfe05ec892` | PASS — Ubuntu 2m10s; Windows 13m50s; cross-platform Evidence 38s | [GitHub Actions run 30870673783](https://github.com/hunterzheng1/hunter-pi/actions/runs/30870673783) |
+| exact code-bearing merge `0e58f539b713edb35f46fcbb55a63063dbbfa328` | PASS — Ubuntu 2m23s; Windows 21m39s; cross-platform Evidence 35s | [GitHub Actions run 30871449955](https://github.com/hunterzheng1/hunter-pi/actions/runs/30871449955) |
+| exact installed tarball `@hunter-pi/cli@0.1.0-dev.0` | PASS — 112119 bytes; SHA-256 `570d3eaf660f353717e0ab6b1f3da8b14ed6dc24cd99a22fe71850dc5ac3f3f8` | built from clean source `0e58f539b713edb35f46fcbb55a63063dbbfa328`; product shell `sha256:83880409f7e568c40438a7d162b65de94ecf4064e49d7ef59c250e445bc4fccf`; Core `sha256:e431d4bd026984737a3e23b560f67a3f80076da5b1e4f403481b8850ab54858c` |
+| installed `hpi doctor --json` after the acknowledged smoke | expected exit 2 / `BLOCKED` at `2026-08-04T02:56:49.585Z` | Node, temporary Git fixture, Pi Engine, configuration, disclosure, Core, and interactive TUI were `DETECTED`; Provider authentication remained `BLOCKED` |
 
-The global command resolves for the current user, but its absolute installation path is intentionally not committed. This installation result is not an npm publication, installer, signature, real TUI, authentication, or Provider proof.
+The global command resolves for the current user, but its absolute installation path is intentionally not committed. The installation and manual-smoke results are not an npm publication, installer, signature, authentication, Provider, Compatibility, containment, or Managed Change proof. A later documentation-only commit does not become a new executable artifact and does not invalidate or replace the exact `0e58f539b713edb35f46fcbb55a63063dbbfa328` receipt.
 
 ## Preserved RED and failure history
 
@@ -104,16 +110,15 @@ The payload began directly with `Core=hunter-pi/core@0.1.0-dev.0` and visually r
 
 This attempt remains `NOT_PROVEN`: the user-observed ambiguity is a real usability failure, and no clean-exit acknowledgement was recorded. The corrective cluster adds the explicit prefix `HunterStatus=DETECTED Command=/hunter-status`, keeps strict `--model` pinning, omits unauthenticated model-cycle scoping, and requires a new exact-artifact Windows rerun after merge and installation. It does not prove Provider authentication or a Provider request.
 
-The corrective cluster preserved its RED history: the first focused run failed because the unauthenticated Safe plan still contained `--models` and the command payload still began directly with `Core=`; the CLI-instruction test then failed because it did not tell the user which receipt marker to find. After the minimal changes, the two focused files passed 35 tests. The complete local `npm run verify` passed 26 files / 212 tests plus lint, typecheck, strict ESM compilation, build, formatting, external package smoke, single-artifact smoke, clean npm install, and the fixed-Pi public-interface probe. That probe still reported `ProviderIndependentProbe=SUPPORTED; RealProvider=NOT_PROVEN`. Remote CI and the replacement exact-artifact Windows smoke remain pending.
+The corrective cluster preserved its RED history: the first focused run failed because the unauthenticated Safe plan still contained `--models` and the command payload still began directly with `Core=`; the CLI-instruction test then failed because it did not tell the user which receipt marker to find. After the minimal changes, the two focused files passed 35 tests. The complete local `npm run verify` passed 26 files / 212 tests plus lint, typecheck, strict ESM compilation, build, formatting, external package smoke, single-artifact smoke, clean npm install, and the fixed-Pi public-interface probe. That probe still reported `ProviderIndependentProbe=SUPPORTED; RealProvider=NOT_PROVEN`. At that point remote CI and the replacement exact-artifact Windows smoke remained pending; both were subsequently completed as recorded below.
 
-After installing the exact tarball in a real Windows terminal and running `hpi setup`, execute:
+### 2026-08-04 exact-artifact replacement attempt
 
-```powershell
-cd D:\path\to\a\git-repository
-hpi smoke tui
-```
+After PR #13 and its exact merge passed all remote gates, the owner installed the 112119-byte tarball bound to clean source `0e58f539b713edb35f46fcbb55a63063dbbfa328` and reran `hpi smoke tui` from an external Windows PowerShell in a Git repository. No model request was sent. Pi rendered, loaded the bundled Core, showed the Hunter header, and `/hunter-status` began with `HunterStatus=DETECTED Command=/hunter-status`; the prior unauthenticated model-cycle warning was absent. The missing-`fd` offline notice remained visible but did not block any required observation.
 
-Do not send a model request. Confirm that the Pi prompt renders, the Hunter header is visible, `/hunter-status` begins with `HunterStatus=DETECTED Command=/hunter-status` and reports Core identity, `Compatibility=UNVERIFIED`, and `Isolation=PROCESS_AUTHORITY`, and exit returns to the terminal. Process exit alone records nothing. Only the final explicit confirmation writes mutable local manual-acknowledgement state tied to Pi 0.83.0, product/source/platform/configuration, and the exact packaged `hpi.js` plus Core SHA-256 values; declining, using an unstamped workspace build, observing an error, or changing either executable surface keeps or returns `NOT_PROVEN`.
+The owner exited cleanly and answered the final acknowledgement `y`. The CLI returned `TuiSmoke=DETECTED Acknowledgement=MANUAL Provider=NOT_PROVEN CoreCompatibility=UNVERIFIED`. A subsequent `hpi doctor --json` at `2026-08-04T02:56:49.585Z` reported Node, the automatic temporary Git fixture, Pi Engine, configuration, disclosure, bundled Core, and interactive TUI as `DETECTED`; `provider_auth` remained `BLOCKED`, so Doctor honestly remained overall `BLOCKED`. No credential, environment dump, private prompt, model request, or absolute user path was captured.
+
+This closes Task 5's real Windows TUI gate for the exact installed artifact. Process exit by itself still proves nothing: the result depends on the explicit acknowledgement and both executable SHA-256 identities. It does not prove Provider authentication, a Provider request, Core Compatibility, global mediation, OS containment, a Managed Change, or production readiness.
 
 Real `hpi login`, OAuth/browser authorization, API-key entry, and any paid Provider request are deliberately outside this automated receipt. Hunter does not need the user to paste credentials into its CLI or Evidence.
 

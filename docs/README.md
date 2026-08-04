@@ -4,10 +4,10 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 
 ## Status
 
-- Baseline date: 2026-08-03
-- Product status: **IMPLEMENTED_AND_INSTALLED / TASK_5_AUTOMATED_GATES_PASS / REMOTE_CI_PASS / WINDOWS_TUI_MANUAL_SMOKE_PENDING**
+- Baseline date: 2026-08-04
+- Product status: **IMPLEMENTED_AND_INSTALLED / TASK_5_AUTOMATED_GATES_PASS / REMOTE_CI_PASS / WINDOWS_TUI_EXECUTED / MANUAL_SMOKE_NOT_PROVEN**
 - Current implementation: Tasks 1–5 are merged through the automated boundary; Task 5 adds the single-artifact `hpi` npm developer preview, isolated configuration, versioned Provider disclosure with current-origin Doctor revalidation, metadata-only auth readiness, honest Doctor, integrity-bound product shell/Core Extension, Safe Mode, Quick Session boundaries, plugin doctor/disable recovery, and an explicit dual-SHA-bound manual TUI smoke acknowledgement
-- Next gate: review and acknowledge `hpi setup`, complete `hpi smoke tui` in a real Windows terminal, and separately choose whether to perform a real Provider login; Task 6 does not start from a process-exit observation
+- Next gate: merge and install the Task 5 smoke-clarity fix, rerun `hpi smoke tui` in a real Windows terminal, and explicitly confirm the complete smoke; real Provider login remains a separate owner decision, and Task 6 does not start from a process-exit observation
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
@@ -16,8 +16,9 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Task 4 local Windows Evidence: **SUPPORTED within recorded bounds** — fixed Pi artifact Extension/JSON/RPC/SDK probe
 - Task 5 local automated gates: **PASS** — single tarball local/global isolated install, fixed Pi resolution/shrinkwrap, product-shell/Core tamper rejection, Doctor privacy/current-origin freshness, raw Pi coexistence sentinel, recording fake-endpoint disclosure/cancellation, Safe Mode planning, Quick Session process observation, and dual-SHA-bound manual-smoke acknowledgement semantics
 - Task 5 remote Windows/Ubuntu CI: **PASS** — implementation `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` passed [PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30852408933), product merge `8573b1f62d154275bb81c3c07b432a3db40632bb` passed [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30853360439), and the exact current `main` `160080eddde80d98ada58c8c78f3ccbe6754cc1a` passed [Windows, Ubuntu, and aggregate Evidence gates](https://github.com/hunterzheng1/hunter-pi/actions/runs/30858230199). The intervening Windows timeout remains recorded as a real cancelled run rather than being overwritten.
-- Task 5 real Windows TUI smoke: **PENDING** — only `hpi smoke tui` plus explicit human confirmation may change the local Doctor projection
-- Real Provider and interactive Pi TUI: **NOT_PROVEN**
+- Task 5 real Windows TUI smoke: **NOT_PROVEN** — the 2026-08-04 run rendered Pi, the bundled Core, the Hunter header, and the `/hunter-status` payload, but the response was not recognizable to the user and no clean-exit acknowledgement was recorded
+- Real interactive Pi TUI: **DETECTED within the recorded startup and command-display bounds; complete smoke NOT_PROVEN**
+- Real Provider: **NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**
 

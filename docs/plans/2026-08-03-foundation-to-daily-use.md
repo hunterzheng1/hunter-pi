@@ -2,8 +2,8 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_5_PRODUCT_SHELL / REMOTE_AUTOMATION_COMPLETE / USABLE_STATUS_PENDING_REAL_TUI`
-- Active task: `TASK_5` (`IN_PROGRESS`; local and remote product-shell gates plus clean-main installation passed, real Windows TUI smoke pending; real Provider remains `NOT_PROVEN`)
+- Current repository phase: `TASK_5_PRODUCT_SHELL / REMOTE_AUTOMATION_COMPLETE / REAL_TUI_PARTIAL / USABLE_STATUS_NOT_PROVEN`
+- Active task: `TASK_5` (`IN_PROGRESS`; local and remote product-shell gates plus clean-main installation passed; a real Windows TUI startup and Hunter command payload were observed on 2026-08-04, but response clarity and the complete manual receipt remain pending; real Provider remains `NOT_PROVEN`)
 - First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; REAL_PROVIDER_NOT_PROVEN**
 - Delivery style: one task, one focused branch/PR, explicit local and remote results
 
@@ -166,7 +166,7 @@ Deliverables:
 
 Gates include a clean external package install, fake-endpoint disclosure/cancel/privacy tests, and real interactive Windows smoke. Any real login or paid call requires explicit owner action and is reported separately. This task does not claim Managed Change.
 
-Automation snapshot: implementation `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` passed the PR Windows/Ubuntu and cross-platform Evidence gates, then merge `8573b1f62d154275bb81c3c07b432a3db40632bb` passed the same gates on `main`. A tarball built from that clean merge installed successfully for the current Windows user and reported the expected product, Engine, source, product-shell, and Core identities. After preserving a real 20-minute Windows job cancellation and raising the measured scheduling ceiling, current `main` `160080eddde80d98ada58c8c78f3ccbe6754cc1a` passed Windows, Ubuntu, and aggregate Evidence CI, and its exact clean artifact replaced the earlier local installation. Real interactive TUI rendering and any real Provider login/request remain separately `PENDING` or `NOT_PROVEN`.
+Automation snapshot: implementation `a5bbd4d5ef7536377f573aebf76c1d3364da1e8b` passed the PR Windows/Ubuntu and cross-platform Evidence gates, then merge `8573b1f62d154275bb81c3c07b432a3db40632bb` passed the same gates on `main`. A tarball built from that clean merge installed successfully for the current Windows user and reported the expected product, Engine, source, product-shell, and Core identities. After preserving a real 20-minute Windows job cancellation and raising the measured scheduling ceiling, code-bearing `main` `160080eddde80d98ada58c8c78f3ccbe6754cc1a` passed Windows, Ubuntu, and aggregate Evidence CI, and its exact clean artifact replaced the earlier local installation; current documentation baseline `99935827419d55834284da016b39bfcc80c180d7` also passed those gates. The 2026-08-04 real Windows run detected TUI rendering, the exact bundled Core, Hunter header, and command payload, but response clarity and the complete manual acknowledgement remain `NOT_PROVEN`. Any real Provider login/request remains separately `NOT_PROVEN`.
 
 ## Task 6 — Managed Change vertical slice
 

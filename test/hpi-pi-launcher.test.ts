@@ -118,10 +118,11 @@ describe("Hunter Pi launch planning", () => {
         "--no-context-files",
         "--extension",
         fixture.coreExtensionPath,
-        "--models",
+        "--model",
         "openai-codex/gpt-5.6-sol",
       ]),
     );
+    expect(plan.arguments).not.toContain("--models");
     expect(extensionArguments(plan.arguments)).toEqual([fixture.coreExtensionPath]);
     expect(plan.arguments).not.toContain(fixture.throwingPluginPath);
     expect(plan.environment).toEqual({
@@ -594,6 +595,9 @@ describe("bundled Core Extension policy", () => {
     await commands.get("hunter-status")?.("", context);
 
     expect(statuses.get("hunter-pi/core")).toContain("QUICK/BALANCED");
+    expect(notifications[0]).toMatch(
+      /^HunterStatus=DETECTED Command=\/hunter-status \| Core=hunter-pi\/core@/u,
+    );
     expect(notifications.join("\n")).toContain("Isolation=PROCESS_AUTHORITY");
     expect(notifications.join("\n")).toContain(
       "CredentialGuard=NAMED_PATHS_ONLY ContentDetection=NOT_PROVEN",

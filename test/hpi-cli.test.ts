@@ -551,6 +551,7 @@ describe("hpi command", () => {
     await writeReadyConfiguration(dependencies);
 
     expect(await runHpiCli(["smoke", "tui"], dependencies)).toBe(0);
+    expect(io.stdout.join("\n")).toContain("HunterStatus=DETECTED Command=/hunter-status");
     expect(capturedPlan?.environment["HUNTER_PI_SAFE_MODE"]).toBe("1");
     expect(capturedPlan?.environment["HUNTER_PI_BLOCK_PROMPT_INPUT"]).toBe("1");
     const paths = resolveHpiPaths({

@@ -747,7 +747,7 @@ async function tuiSmokeCommand(dependencies: HpiCliDependencies, paths: HpiPaths
   line(dependencies.io, header);
   line(
     dependencies.io,
-    "TUI smoke: do not send a model request. Run `/hunter-status`, inspect the header, then exit Pi.",
+    "TUI smoke: do not send a model request. Run `/hunter-status`, confirm `HunterStatus=DETECTED Command=/hunter-status`, inspect the header, then exit Pi.",
   );
   const exitCode = await dependencies.launch(plan);
   if (exitCode !== 0) {

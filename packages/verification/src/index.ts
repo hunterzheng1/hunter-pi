@@ -1,1 +1,1 @@
-export {};
+export * from "./command-verifier.js";

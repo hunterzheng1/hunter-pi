@@ -53,7 +53,7 @@ Frozen loop limits:
 
 | Check | Exact definition | Required |
 |---|---|---|
-| `check_task6_result` v1 | `node verify.mjs`, fixture repository working directory | yes |
+| `check_task6-result` v1 | `node verify.mjs`, fixture repository working directory | yes |
 
 The verifier captures bounded stdout/stderr digests and exit metadata. `sourceFingerprint` binds the promoted baseline and `inputFingerprint` binds the exact worktree snapshot evaluated by that Receipt. A later source/config/check change cannot reuse the Receipt.
 

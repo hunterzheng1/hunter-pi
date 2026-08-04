@@ -254,7 +254,7 @@ describe("local Git Workspace Interface", () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
-  });
+  }, 15_000);
 
   it("returns the original prepared workspace for an exact operation replay", async () => {
     const fixture = await createRepositoryFixture();

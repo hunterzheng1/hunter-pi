@@ -1,6 +1,6 @@
 # Task 5 — `hpi` product-shell validation
 
-- Validation date: 2026-08-03
+- Validation date: 2026-08-03; real-terminal update: 2026-08-04
 - Product artifact: `@hunter-pi/cli@0.1.0-dev.0`
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Local platform: Windows / Node.js 24
@@ -10,7 +10,7 @@
 - Remote Windows/Ubuntu CI: **PASS for the implementation and exact merge commits**
 - Automated product result: **PASS within the scope below**
 - Clean-main Windows user installation: **PASS**
-- Real Windows interactive TUI: **PENDING manual smoke acknowledgement**
+- Real Windows interactive TUI: **DETECTED within startup/Core/command-display bounds; complete manual smoke NOT_PROVEN**
 - Bundled Core compatibility in the real TUI: **UNVERIFIED**
 - Real Provider login/request: **NOT_PROVEN**
 - Managed Change: **NOT_IMPLEMENTED**
@@ -31,7 +31,7 @@ The Task 5 automated suite proves that the developer preview can:
 - make Doctor freshly resolve that current destination offline and block stale disclosure readiness before launch;
 - ask Pi's public `ModelRuntime.getProviderAuthStatus()` for readiness metadata while discarding labels; Pi Engine parses its credential storage, while the Hunter host receives and persists no credential value;
 - run every mutating Git Doctor probe in an automatically created temporary Git fixture and redact portable Doctor output;
-- plan a Safe Mode launch with only the bundled Core Extension path and no skills, prompt templates, themes, or context files, even when a configured user extension would throw on import; exact bundled-Core execution in a real TUI remains pending;
+- plan a Safe Mode launch with only the bundled Core Extension path and no skills, prompt templates, themes, or context files, even when a configured user extension would throw on import; the 2026-08-04 real TUI rendered the exact bundled Core and its command payload, while the complete manual smoke remains `NOT_PROVEN`;
 - reject all enabled user plugins in Task 5 before execution; plugin source/version/ref/scope approval remains a later plugin-manager task;
 - execute fixed Pi against a recording loopback fake endpoint and prove cancellation-before-send, exact-origin preflight, Provider-managed override rejection, Provider/model/origin pinning, one expected request, exact payload-category accounting, and credential-free Evidence surfaces;
 - execute fixed Pi RPC in a temporary Git fixture and prove Safe Mode intercepts a direct user bash command without creating its marker file; prove a context-file sentinel is absent from the real request payload;
@@ -96,6 +96,16 @@ Task 5 did not erase the following real failures:
 
 ## Manual Windows TUI gate
 
+### 2026-08-04 real-terminal attempt
+
+The owner ran the installed product from an external Windows PowerShell after accepting disclosure `2026-08-03.2`. Pi `0.83.0` rendered, listed the exact bundled `core-extension.js`, displayed the Hunter header, and printed the Core identity and claim-boundary payload registered by `/hunter-status`. No credential, environment dump, private prompt, or absolute user path was captured in this Evidence.
+
+The payload began directly with `Core=hunter-pi/core@0.1.0-dev.0` and visually resembled startup diagnostics, so the owner reported that `/hunter-status` had no response. Source-path tracing confirmed that this exact payload can only be emitted by the registered command handler; the command executed, but its result was not recognizable. Pi also printed `No models match pattern` because the smoke plan passed the selected model through `--models`, whose scope resolver considers only authenticated models, even though the separate strict `--model` selection succeeded and the footer displayed the intended model. The unrelated missing-`fd` offline warning did not prevent Core or command execution.
+
+This attempt remains `NOT_PROVEN`: the user-observed ambiguity is a real usability failure, and no clean-exit acknowledgement was recorded. The corrective cluster adds the explicit prefix `HunterStatus=DETECTED Command=/hunter-status`, keeps strict `--model` pinning, omits unauthenticated model-cycle scoping, and requires a new exact-artifact Windows rerun after merge and installation. It does not prove Provider authentication or a Provider request.
+
+The corrective cluster preserved its RED history: the first focused run failed because the unauthenticated Safe plan still contained `--models` and the command payload still began directly with `Core=`; the CLI-instruction test then failed because it did not tell the user which receipt marker to find. After the minimal changes, the two focused files passed 35 tests. The complete local `npm run verify` passed 26 files / 212 tests plus lint, typecheck, strict ESM compilation, build, formatting, external package smoke, single-artifact smoke, clean npm install, and the fixed-Pi public-interface probe. That probe still reported `ProviderIndependentProbe=SUPPORTED; RealProvider=NOT_PROVEN`. Remote CI and the replacement exact-artifact Windows smoke remain pending.
+
 After installing the exact tarball in a real Windows terminal and running `hpi setup`, execute:
 
 ```powershell
@@ -103,7 +113,7 @@ cd D:\path\to\a\git-repository
 hpi smoke tui
 ```
 
-Do not send a model request. Confirm that the Pi prompt renders, the Hunter header is visible, `/hunter-status` reports Core identity, `Compatibility=UNVERIFIED`, and `Isolation=PROCESS_AUTHORITY`, and exit returns to the terminal. Process exit alone records nothing. Only the final explicit confirmation writes mutable local manual-acknowledgement state tied to Pi 0.83.0, product/source/platform/configuration, and the exact packaged `hpi.js` plus Core SHA-256 values; declining, using an unstamped workspace build, observing an error, or changing either executable surface keeps or returns `NOT_PROVEN`.
+Do not send a model request. Confirm that the Pi prompt renders, the Hunter header is visible, `/hunter-status` begins with `HunterStatus=DETECTED Command=/hunter-status` and reports Core identity, `Compatibility=UNVERIFIED`, and `Isolation=PROCESS_AUTHORITY`, and exit returns to the terminal. Process exit alone records nothing. Only the final explicit confirmation writes mutable local manual-acknowledgement state tied to Pi 0.83.0, product/source/platform/configuration, and the exact packaged `hpi.js` plus Core SHA-256 values; declining, using an unstamped workspace build, observing an error, or changing either executable surface keeps or returns `NOT_PROVEN`.
 
 Real `hpi login`, OAuth/browser authorization, API-key entry, and any paid Provider request are deliberately outside this automated receipt. Hunter does not need the user to paste credentials into its CLI or Evidence.
 

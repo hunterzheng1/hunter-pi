@@ -230,7 +230,10 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
     configuration.provider.id,
   ];
   const qualifiedModel = `${configuration.provider.id}/${configuration.provider.selectedModel}`;
-  arguments_.push("--model", qualifiedModel, "--models", qualifiedModel);
+  arguments_.push("--model", qualifiedModel);
+  if (options.providerAuthConfigured) {
+    arguments_.push("--models", qualifiedModel);
+  }
   if (options.safeMode) {
     arguments_.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files");
   }

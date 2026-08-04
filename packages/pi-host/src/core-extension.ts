@@ -406,6 +406,7 @@ export function createHunterCoreExtension(
         const context = rawContext as CoreExtensionContext;
         context.ui.notify(
           [
+            "HunterStatus=DETECTED Command=/hunter-status",
             `Core=${HPI_CORE_EXTENSION_ID}@${HPI_CORE_EXTENSION_VERSION}`,
             `Mode=${mode} Permission=${profile} SafeMode=${safeMode ? "ON" : "OFF"}`,
             `PromptInput=${blockPromptInput ? "BLOCKED" : "ENABLED"} ProviderRequests=NOT_PROVEN`,

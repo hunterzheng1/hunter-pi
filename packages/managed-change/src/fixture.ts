@@ -23,6 +23,19 @@ export interface Task6QuickSessionPromotion {
   readonly excludedContentFingerprint: string;
 }
 
+export interface Task6FixtureReview {
+  readonly dirtyPaths: readonly string[];
+  readonly resultReady: boolean;
+  readonly excludedContentUnchanged: boolean;
+  readonly baseCommitUnchanged: boolean;
+  readonly sourceLoss: boolean;
+  readonly findings: readonly {
+    readonly severity: "P1";
+    readonly scope: string;
+    readonly rationale: string;
+  }[];
+}
+
 interface OwnedFixture {
   readonly parent: string;
   readonly repository: string;
@@ -328,4 +341,64 @@ export async function removeTask6DisposableFixture(fixture: Task6DisposableFixtu
   const owned = requireOwnedFixture(fixture);
   await removeVerifiedFixtureRoot(resolve(fixture.root), owned);
   ownedFixtures.delete(resolve(fixture.root));
+}
+
+export async function inspectTask6FixtureForReview(
+  fixture: Task6DisposableFixture,
+  promotion: Task6QuickSessionPromotion,
+): Promise<Task6FixtureReview> {
+  requireOwnedFixture(fixture);
+  if (promotion.baseCommit !== fixture.baseCommit) {
+    throw new Error("review promotion does not bind the owned Task 6 fixture");
+  }
+  const dirtyPaths = parseDirtyPaths(
+    runGit(fixture, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+  );
+  const resultReady =
+    (await inspectSelectedPath(fixture.repository, "result.txt")).toString("utf8") === "READY\n";
+  const excludedContentUnchanged =
+    (await contentFingerprint(fixture.repository, promotion.excludePaths)) ===
+    promotion.excludedContentFingerprint;
+  const baseCommitUnchanged = runGit(fixture, ["rev-parse", "HEAD"]).trim() === fixture.baseCommit;
+  const findings: {
+    severity: "P1";
+    scope: string;
+    rationale: string;
+  }[] = [];
+  if (JSON.stringify(dirtyPaths) !== JSON.stringify(promotion.dirtyPaths)) {
+    findings.push({
+      severity: "P1",
+      scope: "workspace-dirty-paths",
+      rationale: "The final dirty-path set differs from the explicitly promoted fixture paths.",
+    });
+  }
+  if (!resultReady) {
+    findings.push({
+      severity: "P1",
+      scope: "included-result",
+      rationale: "The included result does not contain the exact accepted value.",
+    });
+  }
+  if (!excludedContentUnchanged) {
+    findings.push({
+      severity: "P1",
+      scope: "excluded-content",
+      rationale: "An explicitly excluded Quick Session path changed during the Managed Change.",
+    });
+  }
+  if (!baseCommitUnchanged) {
+    findings.push({
+      severity: "P1",
+      scope: "base-commit",
+      rationale: "The disposable fixture base commit changed during the Managed Change.",
+    });
+  }
+  return {
+    dirtyPaths,
+    resultReady,
+    excludedContentUnchanged,
+    baseCommitUnchanged,
+    sourceLoss: !excludedContentUnchanged || !baseCommitUnchanged,
+    findings,
+  };
 }

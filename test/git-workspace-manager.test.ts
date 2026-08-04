@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -57,6 +58,7 @@ interface GitWorkspaceManager {
         readonly stagedEntries: number;
         readonly unstagedEntries: number;
         readonly untrackedEntries: number;
+        readonly ignoredEntries: number;
       };
       readonly commits: {
         readonly uniqueCommitCount: number;
@@ -169,8 +171,17 @@ async function createRepositoryFixture(): Promise<{
   await Promise.all([
     writeFile(join(repository, "tracked.txt"), "BASE\n", "utf8"),
     writeFile(join(repository, "staged.txt"), "BASE\n", "utf8"),
+    writeFile(join(repository, "filtered.txt"), "FILTER_BASE\n", "utf8"),
+    writeFile(join(repository, ".gitattributes"), "filtered.txt filter=hpiunsafe\n", "utf8"),
   ]);
-  runGit(repository, parent, ["add", "--", "tracked.txt", "staged.txt"]);
+  runGit(repository, parent, [
+    "add",
+    "--",
+    "tracked.txt",
+    "staged.txt",
+    "filtered.txt",
+    ".gitattributes",
+  ]);
   runGit(repository, parent, ["commit", "--quiet", "-m", "fixture base"]);
   const baseCommit = runGit(repository, parent, ["rev-parse", "HEAD"]).trim();
   await Promise.all([
@@ -269,6 +280,161 @@ describe("local Git Workspace Interface", () => {
       "--porcelain",
     ]);
     expect(registered.match(/^worktree /gmu)).toHaveLength(2);
+  });
+
+  it("disables repository hooks while preparing an owned worktree", async () => {
+    const fixture = await createRepositoryFixture();
+    const hookPath = join(fixture.repository, ".git", "hooks", "post-checkout");
+    const hookSentinel = join(fixture.ownedRoot, "hook-was-run.txt");
+    await writeFile(hookPath, "#!/bin/sh\nprintf 'HOOK_RAN' > ../hook-was-run.txt\n", "utf8");
+    await chmod(hookPath, 0o755);
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+
+    await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-hook-neutralization",
+      operationFingerprint: fingerprint("task7-hook-neutralization"),
+      workspaceId: "workspace_task7-hook-neutralization",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+
+    await expect(access(hookSentinel)).rejects.toThrow();
+  });
+
+  it("neutralizes repository-configured checkout filters", async () => {
+    const fixture = await createRepositoryFixture();
+    const filterPath = join(fixture.parent, "unsafe-filter.sh");
+    const filterSentinel = join(fixture.ownedRoot, "filter-was-run.txt");
+    await writeFile(
+      filterPath,
+      "#!/bin/sh\nprintf 'FILTER_RAN' > ../owned\\ worktrees/filter-was-run.txt\ncat\n",
+      "utf8",
+    );
+    await chmod(filterPath, 0o755);
+    runGit(fixture.repository, fixture.parent, [
+      "config",
+      "filter.hpiunsafe.smudge",
+      `"${filterPath.replaceAll("\\", "/")}"`,
+    ]);
+    runGit(fixture.repository, fixture.parent, ["config", "filter.hpiunsafe.required", "true"]);
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepared = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-filter-neutralization",
+      operationFingerprint: fingerprint("task7-filter-neutralization"),
+      workspaceId: "workspace_task7-filter-neutralization",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+
+    await expect(access(filterSentinel)).rejects.toThrow();
+    await expect(readFile(join(prepared.handle.directory, "filtered.txt"), "utf8")).resolves.toBe(
+      "FILTER_BASE\n",
+    );
+  });
+
+  it("preserves ignored files instead of deleting them with an otherwise clean worktree", async () => {
+    const fixture = await createRepositoryFixture();
+    await writeFile(join(fixture.repository, ".git", "info", "exclude"), "ignored.log\n", "utf8");
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepared = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-ignored-prepare",
+      operationFingerprint: fingerprint("task7-ignored-prepare"),
+      workspaceId: "workspace_task7-ignored",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    const ignoredFile = join(prepared.handle.directory, "ignored.log");
+    await writeFile(ignoredFile, "PRESERVE\n", "utf8");
+
+    await expect(manager.inspect(prepared.handle.workspaceId)).resolves.toMatchObject({
+      receipt: {
+        decision: "PRESERVE",
+        workingTree: { clean: false, ignoredEntries: 1 },
+        reasonCodes: ["IGNORED_CONTENT"],
+      },
+    });
+    await expect(
+      manager.dispose({
+        schemaVersion: "hpi-workspace-dispose.v1",
+        operationId: "op_task7-ignored-dispose",
+        operationFingerprint: fingerprint("task7-ignored-dispose"),
+        workspaceId: prepared.handle.workspaceId,
+      }),
+    ).resolves.toMatchObject({ receipt: { outcome: "BLOCKED", reasonCodes: ["IGNORED_CONTENT"] } });
+    await expect(readFile(ignoredFile, "utf8")).resolves.toBe("PRESERVE\n");
+  });
+
+  it("detects same-shape source content drift and compensates the created worktree", async () => {
+    const fixture = await createRepositoryFixture();
+    const workspaceId = "workspace_task7-source-race";
+    const destination = join(fixture.ownedRoot, workspaceId);
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepare = manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-source-race",
+      operationFingerprint: fingerprint("task7-source-race"),
+      workspaceId,
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    const mutateSource = (async () => {
+      for (let attempt = 0; attempt < 5_000; attempt += 1) {
+        try {
+          await access(destination);
+          await writeFile(join(fixture.repository, "tracked.txt"), "RACE_CHANGED\n", "utf8");
+          return;
+        } catch {
+          await delay(1);
+        }
+      }
+      throw new Error("fixture did not observe the created worktree");
+    })();
+
+    await expect(prepare).rejects.toThrow(/source checkout changed/u);
+    await mutateSource;
+    await expect(access(destination)).rejects.toThrow();
+    expect(
+      runGit(fixture.repository, fixture.parent, ["branch", "--list", `hpi/${workspaceId}`]),
+    ).toBe("");
+    expect(
+      runGit(fixture.repository, fixture.parent, ["worktree", "list", "--porcelain"]).match(
+        /^worktree /gmu,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("returns a blocked receipt when the physical worktree disappears but registration remains", async () => {
+    const fixture = await createRepositoryFixture();
+    const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
+    const prepared = await manager.prepare({
+      schemaVersion: "hpi-workspace-prepare.v1",
+      operationId: "op_task7-missing-physical-prepare",
+      operationFingerprint: fingerprint("task7-missing-physical-prepare"),
+      workspaceId: "workspace_task7-missing-physical",
+      repository: fixture.repository,
+      baseCommit: fixture.baseCommit,
+    });
+    await rm(prepared.handle.directory, { force: true, recursive: true });
+
+    await expect(
+      manager.dispose({
+        schemaVersion: "hpi-workspace-dispose.v1",
+        operationId: "op_task7-missing-physical-dispose",
+        operationFingerprint: fingerprint("task7-missing-physical-dispose"),
+        workspaceId: prepared.handle.workspaceId,
+      }),
+    ).resolves.toMatchObject({
+      receipt: {
+        outcome: "BLOCKED",
+        worktreeState: "REMOVED",
+        registrationState: "AMBIGUOUS",
+        branchState: "PRESERVED",
+        reasonCodes: ["CLEANUP_AMBIGUOUS"],
+      },
+    });
   });
 
   it("rejects an operation replay whose fingerprint or canonical request changed", async () => {
@@ -580,7 +746,7 @@ describe("local Git Workspace Interface", () => {
         `refs/remotes/origin/${prepared.handle.branchName}`,
       ]).trim(),
     ).toMatch(/^[a-f0-9]{40}$/u);
-  });
+  }, 15_000);
 
   it.skipIf(process.platform !== "win32")(
     "returns an ambiguous cleanup receipt while another process owns the worktree cwd",

@@ -164,6 +164,8 @@ Runs Pi and verification commands with explicit argv, bounded output, timeouts, 
 
 Task 7 implements this behind one provider-neutral host. Windows atomically creates the target inside a kill-on-close Job Object with a restricted inherited-handle list; Ubuntu uses a dedicated, identity-checked process-group/session leader. Both adapters keep process exit, timeout, and cancellation separate from terminal finality and from Verification. The Task 7 result is limited to disposable fixtures until exact remote CI and later real-repository acceptance run.
 
+The Workspace adapter runs Git with an owned empty hooks directory, disables configured checkout filters and filesystem monitors, fingerprints the source checkout bytes plus index identity before and after mutation, treats ignored files as unique content, and compensates only an exact clean provisional worktree. A physical/registration mismatch returns a blocked cleanup receipt instead of inferring deletion.
+
 ## Event and decision flow
 
 ```text

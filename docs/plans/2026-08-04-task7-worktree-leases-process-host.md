@@ -3,7 +3,7 @@
 - Created: 2026-08-04
 - Source baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
 - Branch: `codex/task7-worktree-process`
-- Status: `ACTIVE / LOCAL WINDOWS+UBUNTU PASS / REMOTE CI PENDING`
+- Status: `ACTIVE / INDEPENDENT-REVIEW REMEDIATION / PRIOR EVIDENCE SUPERSEDED / REMOTE CI PENDING`
 - Scope: provider-neutral, automatically created Git and process fixtures only
 
 ## Outcome
@@ -101,4 +101,4 @@ The handoff records every RED and GREEN command, focused/full local result, exac
 
 ## Local disposition
 
-Clusters 1–5 are implemented on the isolated Task 7 branch. Strict local receipts bind Windows Job Object and Ubuntu WSL process-group runs to source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`; all six platform cases pass on both platforms. The first Windows Evidence parse remains preserved as `NOT_PROVEN`, and the selected local aggregate retains `remoteCi=PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).
+Clusters 1–5 produced an initial implementation and preserved local receipts, but independent review reproduced source-loss, lease-race, detached-process, and verifier-identity gaps. Those receipts are superseded for Task completion without being rewritten or deleted. Workspace remediation now disables repository executable integrations, fingerprints source content and index state, preserves ignored files, compensates post-create failures, and emits a blocked mismatch receipt. Lease, platform, and Evidence remediation remain active. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).

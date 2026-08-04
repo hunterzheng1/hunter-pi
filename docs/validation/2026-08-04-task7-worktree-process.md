@@ -7,7 +7,13 @@
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **LOCAL PASS / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **REMEDIATION ACTIVE / PRIOR LOCAL EVIDENCE SUPERSEDED / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+
+## Independent-review disposition
+
+The pre-push independent review found reproducible hard-stop gaps: repository hooks and filters could execute; ignored files could be deleted; same-shape source content drift and post-create failures could orphan a worktree; physical/registration mismatch emitted no receipt; lease inspection could race launch and lease generations could be stranded between two publications; a detached Linux descendant could escape the process group; Windows exit code 259 was ambiguous; OS-bound strings admitted NUL; and Evidence did not bind its verifier/CI definition.
+
+The seven receipts below remain immutable historical observations, but none is selected as Task 7 completion Evidence after that review. New Windows and Ubuntu receipts must be generated from a clean fixed commit using a verifier-bound schema, pass the expanded adversarial matrix, pass review again, and then pass actual PR/main CI.
 
 ## Frozen outcome and limits
 
@@ -51,13 +57,13 @@ The Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-task7-platf
 |---|---|---|
 | [`windows-local.json`](evidence/task7/windows-local.json) | `NOT_PROVEN / REPORT_PARSE`, test exit 0 | preserved first probe; Vitest reported two suites for one file/describe, while the preregistered parser expected one |
 | [`windows-local-attempt-2.json`](evidence/task7/windows-local-attempt-2.json) | `PASS`, 6/6 checks | preliminary proof after parser correction but before that correction was committed; not selected for final aggregation |
-| [`windows-local-attempt-3.json`](evidence/task7/windows-local-attempt-3.json) | `PASS`, 6/6 checks, 11094 ms | selected Windows receipt; Node 24.14.0, Git 2.50.1.windows.1 |
+| [`windows-local-attempt-3.json`](evidence/task7/windows-local-attempt-3.json) | `PASS`, 6/6 checks, 11094 ms | formerly selected Windows receipt; superseded after review |
 | [`windows-local-attempt-4.json`](evidence/task7/windows-local-attempt-4.json) | `PASS`, 6/6 checks, 10612 ms | post-hardening verification after bounding the probe's own retained diagnostic output; same frozen source identity |
-| [`ubuntu-wsl-attempt-1.json`](evidence/task7/ubuntu-wsl-attempt-1.json) | `PASS`, 6/6 checks, 3773 ms | selected Ubuntu receipt; Node 24.15.0, Git 2.34.1 |
+| [`ubuntu-wsl-attempt-1.json`](evidence/task7/ubuntu-wsl-attempt-1.json) | `PASS`, 6/6 checks, 3773 ms | formerly selected Ubuntu receipt; superseded after review |
 | [`local-consistency.json`](evidence/task7/local-consistency.json) | `PASS / remoteCi=PENDING` | exact source, command, test file, and six-check identities match |
 | [`local-consistency-attempt-2.json`](evidence/task7/local-consistency-attempt-2.json) | `PASS / remoteCi=PENDING` | post-hardening comparator also requires exact source-commit equality; remote status is unchanged |
 
-The selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their source pathspec covers the root manifest/lockfile, domain/workspace/execution sources, and the four Task 7 contract/integration test files. Documentation and generated Evidence are deliberately outside that source digest.
+The formerly selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their incomplete source pathspec excluded the verifier and CI definition, which is why they are preserved but superseded. The replacement schema must bind all implementation, verifier, schema, test, build, and CI inputs from a clean commit.
 
 The exact platform matrix proves:
 

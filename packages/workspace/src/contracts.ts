@@ -64,6 +64,7 @@ export interface PreparedWorkspace {
 export const branchHygieneReasonCodeSchema = z.enum([
   "DIRTY_WORKTREE",
   "UNPUSHED_COMMITS",
+  "IGNORED_CONTENT",
   "UNSAFE_LINKS",
   "WORKSPACE_IDENTITY_DRIFT",
   "CLEANUP_AMBIGUOUS",
@@ -84,6 +85,7 @@ export const branchHygieneReceiptSchema = z.strictObject({
     stagedEntries: z.number().int().nonnegative(),
     unstagedEntries: z.number().int().nonnegative(),
     untrackedEntries: z.number().int().nonnegative(),
+    ignoredEntries: z.number().int().nonnegative(),
   }),
   commits: z.strictObject({
     uniqueCommitCount: z.number().int().nonnegative(),

@@ -1,6 +1,7 @@
+import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { lstat, readdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, readlink, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
@@ -45,6 +46,7 @@ function gitEnvironment(root: string): NodeJS.ProcessEnv {
   return {
     ...environment,
     GCM_INTERACTIVE: "never",
+    GIT_CONFIG_GLOBAL: join(root, ".hpi-empty-gitconfig"),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     HOME: root,
@@ -57,7 +59,62 @@ function runGit(
   environmentRoot: string,
   arguments_: readonly string[],
 ): Buffer {
-  const result = spawnSync("git", ["-c", "core.longpaths=true", "-C", repository, ...arguments_], {
+  const hooksRoot = join(environmentRoot, ".hpi-disabled-hooks");
+  const filterProbe = spawnSync(
+    "git",
+    [
+      "-C",
+      repository,
+      "config",
+      "--local",
+      "--name-only",
+      "--get-regexp",
+      "^filter\\..*\\.(clean|smudge|process|required)$",
+    ],
+    {
+      env: gitEnvironment(environmentRoot),
+      maxBuffer: 1024 * 1024,
+      shell: false,
+      windowsHide: true,
+    },
+  );
+  if (
+    filterProbe.error !== undefined ||
+    (filterProbe.status !== 0 && filterProbe.status !== 1) ||
+    filterProbe.stderr.length > 0
+  ) {
+    throw new Error("owned Git filter configuration could not be inspected safely");
+  }
+  const filterDrivers = new Set(
+    filterProbe.stdout
+      .toString("utf8")
+      .split(/\r?\n/u)
+      .map((key) => /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu.exec(key)?.[1])
+      .filter((driver): driver is string => driver !== undefined),
+  );
+  const safeConfiguration = [
+    "-c",
+    "core.longpaths=true",
+    "-c",
+    `core.hooksPath=${hooksRoot}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "-c",
+    "submodule.recurse=false",
+    ...[...filterDrivers].flatMap((driver) => [
+      "-c",
+      `filter.${driver}.clean=`,
+      "-c",
+      `filter.${driver}.smudge=`,
+      "-c",
+      `filter.${driver}.process=`,
+      "-c",
+      `filter.${driver}.required=false`,
+    ]),
+  ];
+  const result = spawnSync("git", [...safeConfiguration, "-C", repository, ...arguments_], {
     env: gitEnvironment(environmentRoot),
     maxBuffer: 4 * 1024 * 1024,
     shell: false,
@@ -89,11 +146,13 @@ function parseWorkingTreeCounts(statusOutput: Buffer): {
   readonly stagedEntries: number;
   readonly unstagedEntries: number;
   readonly untrackedEntries: number;
+  readonly ignoredEntries: number;
 } {
   const records = statusOutput.toString("utf8").split("\0");
   let stagedEntries = 0;
   let unstagedEntries = 0;
   let untrackedEntries = 0;
+  let ignoredEntries = 0;
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
     if (record === undefined || record.length === 0) continue;
@@ -105,11 +164,101 @@ function parseWorkingTreeCounts(statusOutput: Buffer): {
       untrackedEntries += 1;
       continue;
     }
+    if (status === "!!") {
+      ignoredEntries += 1;
+      continue;
+    }
     if (!status.startsWith(" ")) stagedEntries += 1;
     if (!status.endsWith(" ")) unstagedEntries += 1;
     if (status.includes("R") || status.includes("C")) index += 1;
   }
-  return { stagedEntries, unstagedEntries, untrackedEntries };
+  return { stagedEntries, unstagedEntries, untrackedEntries, ignoredEntries };
+}
+
+async function hashFile(path: string): Promise<string> {
+  const before = await lstat(path, { bigint: true });
+  if (!before.isFile()) throw new Error("source snapshot expected a regular file");
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  const after = await lstat(path, { bigint: true });
+  if (
+    !after.isFile() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs
+  ) {
+    throw new Error("source checkout changed while it was being fingerprinted");
+  }
+  return hash.digest("hex");
+}
+
+async function fingerprintCheckout(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const pending: { readonly directory: string; readonly relativePath: string }[] = [
+    { directory: root, relativePath: "" },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    const entries = (await readdir(current.directory)).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    for (const entry of entries) {
+      if (current.relativePath.length === 0 && entry === ".git") continue;
+      const path = join(current.directory, entry);
+      const relativePath =
+        current.relativePath.length === 0 ? entry : `${current.relativePath}/${entry}`;
+      const status = await lstat(path, { bigint: true });
+      if (status.isDirectory()) {
+        hash.update(`D\0${relativePath}\0${String(status.mode)}\0`);
+        pending.push({ directory: path, relativePath });
+      } else if (status.isFile()) {
+        hash.update(
+          `F\0${relativePath}\0${String(status.mode)}\0${String(status.nlink)}\0${String(status.size)}\0`,
+        );
+        hash.update(await hashFile(path));
+      } else if (status.isSymbolicLink()) {
+        hash.update(`L\0${relativePath}\0${await readlink(path)}\0`);
+      } else {
+        throw new Error("source checkout contains an unsupported filesystem entry");
+      }
+    }
+  }
+  return hash.digest("hex");
+}
+
+async function sourceCheckoutSnapshot(
+  repository: string,
+  environmentRoot: string,
+): Promise<string> {
+  const [checkoutFingerprint, status, head, indexPathOutput] = await Promise.all([
+    fingerprintCheckout(repository),
+    Promise.resolve(
+      runGit(repository, environmentRoot, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+      ]),
+    ),
+    Promise.resolve(runGit(repository, environmentRoot, ["rev-parse", "HEAD"])),
+    Promise.resolve(runGit(repository, environmentRoot, ["rev-parse", "--git-path", "index"])),
+  ]);
+  const rawIndexPath = indexPathOutput.toString("utf8").trim();
+  const indexPath = isAbsolute(rawIndexPath) ? rawIndexPath : resolve(repository, rawIndexPath);
+  const indexFingerprint = await hashFile(indexPath);
+  return createHash("sha256")
+    .update("hpi-source-checkout-snapshot.v1\0")
+    .update(checkoutFingerprint)
+    .update("\0")
+    .update(status)
+    .update("\0")
+    .update(head)
+    .update("\0")
+    .update(indexFingerprint)
+    .digest("hex");
 }
 
 async function inspectLinkedEntries(root: string): Promise<{
@@ -264,6 +413,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       "-z",
       "--untracked-files=all",
     ]);
+    const sourceSnapshotBefore = await sourceCheckoutSnapshot(repository, this.#ownedRoot);
     const branchName = `hpi/${parsed.workspaceId}`;
     const destination = resolve(join(this.#ownedRoot, parsed.workspaceId));
     assertContained(this.#ownedRoot, destination);
@@ -273,49 +423,6 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         "owned workspace destination already exists",
         "EXISTING_TARGET_UNCHANGED",
       );
-    }
-
-    runGit(repository, this.#ownedRoot, [
-      "worktree",
-      "add",
-      "--quiet",
-      "-b",
-      branchName,
-      destination,
-      parsed.baseCommit,
-    ]);
-
-    const canonicalDestination = await requirePhysicalRoot(destination, "created worktree");
-    assertContained(this.#ownedRoot, canonicalDestination);
-    const worktreeTopLevel = resolve(
-      runGit(canonicalDestination, this.#ownedRoot, ["rev-parse", "--show-toplevel"])
-        .toString("utf8")
-        .trim(),
-    );
-    const worktreeHead = runGit(canonicalDestination, this.#ownedRoot, ["rev-parse", "HEAD"])
-      .toString("utf8")
-      .trim();
-    const worktreeStatus = runGit(canonicalDestination, this.#ownedRoot, [
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=all",
-    ]);
-    const sourceStatusAfter = runGit(repository, this.#ownedRoot, [
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=all",
-    ]);
-    if (
-      worktreeTopLevel !== canonicalDestination ||
-      worktreeHead !== parsed.baseCommit ||
-      worktreeStatus.length !== 0
-    ) {
-      throw new Error("created worktree did not match its declared clean identity");
-    }
-    if (!sourceStatusAfter.equals(sourceStatusBefore)) {
-      throw new Error("source checkout changed while preparing the owned worktree");
     }
 
     const sourceFingerprint = sha256(`hpi-git-source.v1\0${parsed.baseCommit}\0${baseTree}`);
@@ -329,6 +436,86 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         sourceFingerprint,
       }),
     );
+    const provisional: OwnedWorkspaceRecord = {
+      repository,
+      handle: {
+        workspaceId: parsed.workspaceId,
+        directory: destination,
+        branchName,
+        baseCommit: parsed.baseCommit,
+      },
+      workspaceFingerprint,
+      sourceFingerprint,
+    };
+    let worktreeAdded = false;
+    let canonicalDestination: string;
+    try {
+      runGit(repository, this.#ownedRoot, [
+        "worktree",
+        "add",
+        "--quiet",
+        "-b",
+        branchName,
+        destination,
+        parsed.baseCommit,
+      ]);
+      worktreeAdded = true;
+      this.#workspaces.set(parsed.workspaceId, provisional);
+
+      canonicalDestination = await requirePhysicalRoot(destination, "created worktree");
+      assertContained(this.#ownedRoot, canonicalDestination);
+      const worktreeTopLevel = resolve(
+        runGit(canonicalDestination, this.#ownedRoot, ["rev-parse", "--show-toplevel"])
+          .toString("utf8")
+          .trim(),
+      );
+      const worktreeHead = runGit(canonicalDestination, this.#ownedRoot, ["rev-parse", "HEAD"])
+        .toString("utf8")
+        .trim();
+      const worktreeStatus = runGit(canonicalDestination, this.#ownedRoot, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+      ]);
+      const [sourceStatusAfter, sourceSnapshotAfter] = await Promise.all([
+        Promise.resolve(
+          runGit(repository, this.#ownedRoot, [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+          ]),
+        ),
+        sourceCheckoutSnapshot(repository, this.#ownedRoot),
+      ]);
+      if (
+        worktreeTopLevel !== canonicalDestination ||
+        worktreeHead !== parsed.baseCommit ||
+        worktreeStatus.length !== 0
+      ) {
+        throw new Error("created worktree did not match its declared clean identity");
+      }
+      if (
+        !sourceStatusAfter.equals(sourceStatusBefore) ||
+        sourceSnapshotAfter !== sourceSnapshotBefore
+      ) {
+        throw new Error("source checkout changed while preparing the owned worktree");
+      }
+    } catch (error) {
+      if (worktreeAdded) {
+        const compensated = await this.#compensateFailedPrepare(provisional);
+        if (compensated) this.#workspaces.delete(parsed.workspaceId);
+        else {
+          throw new Error(
+            `${error instanceof Error ? error.message : "workspace preparation failed"}; created worktree reconciliation was not proven`,
+            { cause: error },
+          );
+        }
+      }
+      throw error;
+    }
     const receipt = workspaceReceiptSchema.parse({
       schemaVersion: "hpi-workspace-receipt.v1",
       action: "PREPARE",
@@ -359,12 +546,96 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       result,
     });
     this.#workspaces.set(parsed.workspaceId, {
-      repository,
+      ...provisional,
       handle: result.handle,
-      workspaceFingerprint,
-      sourceFingerprint,
     });
     return result;
+  }
+
+  async #compensateFailedPrepare(workspace: OwnedWorkspaceRecord): Promise<boolean> {
+    try {
+      const [physicalPathExists, registrationOutput] = await Promise.all([
+        pathExists(workspace.handle.directory),
+        Promise.resolve(
+          runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+        ),
+      ]);
+      if (
+        !physicalPathExists ||
+        !worktreeIsRegistered(registrationOutput, workspace.handle.directory)
+      ) {
+        return false;
+      }
+      const directory = await requirePhysicalRoot(
+        workspace.handle.directory,
+        "failed created worktree",
+      );
+      assertContained(this.#ownedRoot, directory);
+      const [head, branch, status, links] = await Promise.all([
+        Promise.resolve(
+          runGit(directory, this.#ownedRoot, ["rev-parse", "HEAD"]).toString("utf8").trim(),
+        ),
+        Promise.resolve(
+          runGit(directory, this.#ownedRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
+            .toString("utf8")
+            .trim(),
+        ),
+        Promise.resolve(
+          runGit(directory, this.#ownedRoot, [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+          ]),
+        ),
+        inspectLinkedEntries(directory),
+      ]);
+      if (
+        head !== workspace.handle.baseCommit ||
+        branch !== workspace.handle.branchName ||
+        status.length !== 0 ||
+        links.total !== 0
+      ) {
+        return false;
+      }
+      runGit(workspace.repository, this.#ownedRoot, [
+        "worktree",
+        "remove",
+        workspace.handle.directory,
+      ]);
+      if (
+        (await pathExists(workspace.handle.directory)) ||
+        worktreeIsRegistered(
+          runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+          workspace.handle.directory,
+        )
+      ) {
+        return false;
+      }
+      const branchHead = runGit(workspace.repository, this.#ownedRoot, [
+        "rev-parse",
+        `refs/heads/${workspace.handle.branchName}`,
+      ])
+        .toString("utf8")
+        .trim();
+      if (branchHead !== workspace.handle.baseCommit) return false;
+      runGit(workspace.repository, this.#ownedRoot, [
+        "branch",
+        "-d",
+        "--",
+        workspace.handle.branchName,
+      ]);
+      return (
+        runGit(workspace.repository, this.#ownedRoot, [
+          "branch",
+          "--list",
+          workspace.handle.branchName,
+        ]).length === 0
+      );
+    } catch {
+      return false;
+    }
   }
 
   public async inspect(
@@ -397,6 +668,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
             "--porcelain=v1",
             "-z",
             "--untracked-files=all",
+            "--ignored=matching",
           ]),
         ),
         Promise.resolve(
@@ -442,6 +714,7 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
     ) {
       reasonCodes.push("DIRTY_WORKTREE");
     }
+    if (workingTree.ignoredEntries > 0) reasonCodes.push("IGNORED_CONTENT");
     if (unpushedCommitCount > 0) reasonCodes.push("UNPUSHED_COMMITS");
     if (links.total > 0) reasonCodes.push("UNSAFE_LINKS");
     if (
@@ -503,7 +776,8 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
         baseCommit: workspace.handle.baseCommit,
         headCommit,
         workingTree: {
-          clean: !reasonCodes.includes("DIRTY_WORKTREE"),
+          clean:
+            !reasonCodes.includes("DIRTY_WORKTREE") && !reasonCodes.includes("IGNORED_CONTENT"),
           ...workingTree,
         },
         commits: {
@@ -544,16 +818,64 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       }
       return existing.result;
     }
+    const workspace = this.#workspaces.get(parsed.workspaceId);
+    if (workspace === undefined) throw new Error("workspace is not owned by this manager");
+    const [physicalPathExists, registrationOutput] = await Promise.all([
+      pathExists(workspace.handle.directory),
+      Promise.resolve(
+        runGit(workspace.repository, this.#ownedRoot, ["worktree", "list", "--porcelain"]),
+      ),
+    ]);
+    const registrationExists = worktreeIsRegistered(registrationOutput, workspace.handle.directory);
+    if (!physicalPathExists || !registrationExists) {
+      const branchRemains =
+        runGit(workspace.repository, this.#ownedRoot, [
+          "for-each-ref",
+          "--format=%(refname)",
+          `refs/heads/${workspace.handle.branchName}`,
+        ])
+          .toString("utf8")
+          .trim().length > 0;
+      const result = {
+        receipt: workspaceDisposalReceiptSchema.parse({
+          schemaVersion: "hpi-workspace-disposal-receipt.v1",
+          action: "DISPOSE",
+          outcome: "BLOCKED",
+          workspaceId: parsed.workspaceId,
+          hygieneFingerprint: sha256(
+            JSON.stringify({
+              schemaVersion: "hpi-workspace-mismatch.v1",
+              workspaceFingerprint: workspace.workspaceFingerprint,
+              physicalPathExists,
+              registrationExists,
+              branchRemains,
+            }),
+          ),
+          worktreeState: physicalPathExists ? "PRESERVED" : "REMOVED",
+          registrationState:
+            physicalPathExists === registrationExists
+              ? registrationExists
+                ? "REGISTERED"
+                : "REMOVED"
+              : "AMBIGUOUS",
+          branchState: branchRemains ? "PRESERVED" : "REMOVED",
+          reasonCodes: ["CLEANUP_AMBIGUOUS"],
+          observedAt: this.#now(),
+        }),
+      };
+      this.#disposalOperations.set(parsed.operationId, {
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        result,
+      });
+      return result;
+    }
     const hygiene = await this.inspect(parsed.workspaceId);
     if (hygiene.receipt.decision === "REMOVABLE") {
-      const workspace = this.#workspaces.get(parsed.workspaceId);
-      if (workspace === undefined) throw new Error("workspace is not owned by this manager");
-      const sourceStatusBefore = runGit(workspace.repository, this.#ownedRoot, [
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-      ]);
+      const sourceSnapshotBefore = await sourceCheckoutSnapshot(
+        workspace.repository,
+        this.#ownedRoot,
+      );
       try {
         runGit(workspace.repository, this.#ownedRoot, [
           "worktree",
@@ -574,13 +896,11 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
           ])
             .toString("utf8")
             .trim().length > 0;
-        const sourceStatusAfterFailure = runGit(workspace.repository, this.#ownedRoot, [
-          "status",
-          "--porcelain=v1",
-          "-z",
-          "--untracked-files=all",
-        ]);
-        if (!sourceStatusAfterFailure.equals(sourceStatusBefore)) {
+        const sourceSnapshotAfterFailure = await sourceCheckoutSnapshot(
+          workspace.repository,
+          this.#ownedRoot,
+        );
+        if (sourceSnapshotAfterFailure !== sourceSnapshotBefore) {
           throw new Error("source checkout changed during an ambiguous worktree cleanup");
         }
         const result = {
@@ -636,17 +956,15 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
       ])
         .toString("utf8")
         .trim();
-      const sourceStatusAfter = runGit(workspace.repository, this.#ownedRoot, [
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-      ]);
+      const sourceSnapshotAfter = await sourceCheckoutSnapshot(
+        workspace.repository,
+        this.#ownedRoot,
+      );
       const branchStateMatches =
         hygiene.receipt.branchDisposition.localBranch === "REMOVE"
           ? remainingBranch.length === 0
           : remainingBranch.length > 0;
-      if (!branchStateMatches || !sourceStatusAfter.equals(sourceStatusBefore)) {
+      if (!branchStateMatches || sourceSnapshotAfter !== sourceSnapshotBefore) {
         throw new Error("workspace disposal did not preserve its exact source identity");
       }
       this.#workspaces.delete(parsed.workspaceId);
@@ -699,5 +1017,33 @@ export async function createLocalGitWorkspaceManager(
   options: LocalGitWorkspaceManagerOptions,
 ): Promise<GitWorkspaceManager> {
   const ownedRoot = await requirePhysicalRoot(options.ownedRoot, "ownedRoot");
+  const hooksRoot = join(ownedRoot, ".hpi-disabled-hooks");
+  await mkdir(hooksRoot, { recursive: true });
+  await requirePhysicalRoot(hooksRoot, "disabled hooks root");
+  const globalConfig = join(ownedRoot, ".hpi-empty-gitconfig");
+  try {
+    await writeFile(globalConfig, "", { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      (error as NodeJS.ErrnoException).code !== "EEXIST"
+    ) {
+      throw error;
+    }
+  }
+  const [configStatus, canonicalConfig] = await Promise.all([
+    lstat(globalConfig),
+    realpath(globalConfig),
+  ]);
+  if (
+    !configStatus.isFile() ||
+    configStatus.isSymbolicLink() ||
+    configStatus.nlink !== 1 ||
+    canonicalConfig !== globalConfig ||
+    (await readFile(globalConfig, "utf8")).length !== 0
+  ) {
+    throw new Error("owned Git global configuration must be an empty physical file");
+  }
   return new LocalGitWorkspaceManager(ownedRoot, options.now ?? (() => new Date().toISOString()));
 }

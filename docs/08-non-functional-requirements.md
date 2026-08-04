@@ -6,7 +6,7 @@ Task 3 implements provider-neutral local fixtures for append-only structural/sem
 
 Task 5 implements a single developer-preview artifact with an exact Pi 0.83.0 dependency, source identity, product-shell/Core SHA-256 verification, clean install smoke, and tamper rejection. Its exact code-bearing implementation and smoke-clarity commits passed Windows/Ubuntu CI, and a dual-SHA-bound real Windows TUI smoke is `DETECTED` within the recorded startup, Core, command-display, clean-exit, and manual-acknowledgement bounds. Real Provider use, stable promotion, signing, and updater behavior remain `NOT_PROVEN` or not implemented as stated in its validation record.
 
-Task 7 locally implements and exercises disposable-fixture worktree preservation, exclusive leases, bounded process output, Windows Job Object containment, and Ubuntu process-group containment. The selected Windows/WSL receipts bind the same source digest and six-case matrix. Remote CI, crash recovery, real user repositories, hostile process escape, and daily-use reliability remain `PENDING`, `NOT_RUN`, or `NOT_PROVEN` as recorded in the Task 7 validation report.
+Task 7's earlier local receipts are preserved but superseded after independent review reproduced source-loss, lease-race, process-escape, and verifier-binding gaps. Workspace remediation now covers executable Git integrations, ignored files, byte-level source snapshots, post-create compensation, and mismatch receipts; replacement lease/platform/Evidence proof and remote CI remain `PENDING` as recorded in the Task 7 validation report.
 
 ## Reliability
 

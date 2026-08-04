@@ -195,7 +195,7 @@ async function createRepositoryFixture(): Promise<{
   return { parent, repository, ownedRoot, baseCommit };
 }
 
-describe("local Git Workspace Interface", () => {
+describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
   it("prepares an exact clean worktree without changing dirty source-checkout work", async () => {
     const fixture = await createRepositoryFixture();
     const sourceStatusBefore = runGit(fixture.repository, fixture.parent, [

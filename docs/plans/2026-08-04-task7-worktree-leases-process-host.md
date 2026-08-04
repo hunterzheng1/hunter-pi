@@ -3,7 +3,7 @@
 - Created: 2026-08-04
 - Source baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
 - Branch: `codex/task7-worktree-process`
-- Status: `ACTIVE / LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PENDING`
+- Status: `ACTIVE / LOCAL V2 PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING`
 - Scope: provider-neutral, automatically created Git and process fixtures only
 
 ## Outcome
@@ -110,4 +110,6 @@ Windows and Ubuntu attempt #3 receipts bind that exact clean source and pass the
 
 A further independent rereview reproduced two remaining hard stops: a caller could select another durable process-reservation key across Hosts, and two workspace generations could collide when distinct prepare operations reused one payload fingerprint. Commit `d47c4decfb6c857160004aa602f93d99b9943538` removes the caller-selected reservation identity, derives it from the canonical start operation, and binds each workspace fingerprint to its unique prepare operation. The new RED cases failed on the old implementation; the minimum GREEN cases pass 4/4, the complete Workspace/Host files pass 34/34, and attempt #5 Windows/Ubuntu receipts pass their applicable matrices.
 
-The v2 Ubuntu parser failure, attempts #3/#4, the full-suite timeout, both reproduced rereview failures, and every earlier result remain retained. The current failure envelope is v3 because failures after source identification now require the exact source and verifier identities; successful platform and consistency envelopes remain v2. Attempt #5 is the selected local pair; its exact five-file suite passes 65/65 and full `npm run verify` passes 295/295 tests plus every build/package/install/interface smoke. Final independent rereview confirms both reproduced hard stops are closed and reports no new Critical or Important finding. Remote CI remains `PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).
+The v2 Ubuntu parser failure, attempts #3/#4, the full-suite timeout, both reproduced rereview failures, and every earlier result remain retained. The current failure envelope is v3 because failures after source identification now require the exact source and verifier identities; successful platform and consistency envelopes remain v2. Attempt #5 passed its exact five-file and full local gates, and final independent rereview confirmed both reproduced hard stops were closed with no new Critical or Important finding.
+
+PR #16 CI run `30918642613` then preserved two fixture-timing failures in the otherwise passing base matrix: Windows' structured-argv process fixture exceeded Vitest's default five seconds, while Ubuntu reached the detached-child assertion after its fixed 1.5-second lifetime had already elapsed. Both standalone Task 7 containment jobs and their identity aggregate passed in that run. Commit `135febd20e0b317ea9b631269530c3ec341bb3c9` gives the Windows real-process case an explicit 15-second bound and replaces the Ubuntu wall-clock assumption with an explicit release-file gate. Windows and Ubuntu exact platform files pass locally, attempt #6 is the selected local pair, the exact five-file suite passes 65/65, and full `npm run verify` passes 295/295 plus every smoke. Independent rereview of this timing-only change and remote CI attempt #2 remain `PENDING`. See [Task 7 validation](../validation/2026-08-04-task7-worktree-process.md).

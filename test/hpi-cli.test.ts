@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,8 @@ import {
   resolveHpiPaths,
   saveHpiConfiguration,
   type PiLaunchPlan,
+  type Task6PiProcessRequest,
+  type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
@@ -500,6 +502,105 @@ describe("hpi command", () => {
       homeDirectory: dependencies.homeDirectory,
     });
     expect((await loadHpiConfiguration(paths))?.providerReadiness.status).toBe("NOT_CHECKED");
+  });
+
+  it("blocks the disposable Managed Change before creating a fixture when Provider auth is absent", async () => {
+    const { dependencies, io, root } = await createDependencies({ authConfigured: false });
+    await writeReadyConfiguration(dependencies);
+
+    expect(await runHpiCli(["managed", "fixture", "--json"], dependencies)).toBe(2);
+    expect(io.stderr.join("\n")).toContain(
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_AUTH_REQUIRED",
+    );
+    expect(io.stderr.join("\n")).not.toContain("InvalidArguments=BLOCKED");
+    expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
+  });
+
+  it("runs the exact disposable Managed Change through a bounded Pi JSON process and emits portable Evidence", async () => {
+    const sourceCommit = "d".repeat(40);
+    const { dependencies, io, root } = await createDependencies({
+      authConfigured: true,
+      getVersionInfo: () =>
+        Promise.resolve({
+          product: "Hunter Pi",
+          productVersion: "0.1.0-dev.0",
+          engine: {
+            packageName: "@earendil-works/pi-coding-agent",
+            version: "0.83.0",
+          },
+          sourceCommit,
+          sourceState: "CLEAN",
+          coreExtensionIntegrity: coreFixtureIntegrity,
+          productShellIntegrity: productShellFixtureIntegrity,
+          updateChannel: "developer-preview",
+        }),
+    });
+    await writeReadyConfiguration(dependencies);
+    let processRequests = 0;
+    const runTask6Process = async (
+      request: Task6PiProcessRequest,
+    ): Promise<Task6PiProcessResult> => {
+      processRequests += 1;
+      expect(request.plan.cwd).not.toBe(dependencies.cwd);
+      expect(request.plan.environment).toMatchObject({
+        HUNTER_PI_MODE: "QUICK",
+        HUNTER_PI_PERMISSION_PROFILE: "FULL_ACCESS",
+        HUNTER_PI_SAFE_MODE: "0",
+      });
+      expect(request.plan.arguments).toContain("--no-approve");
+      await writeFile(join(request.plan.cwd, "result.txt"), "READY\n", "utf8");
+      return {
+        exitCode: 0,
+        timedOut: false,
+        framingValid: true,
+        eventTypes: ["agent_start", "tool_execution_start", "agent_end"],
+        recordCount: 3,
+        stdoutDigest: `sha256:${"a".repeat(64)}`,
+        stderrDigest: `sha256:${"b".repeat(64)}`,
+        capturedBytes: 128,
+        outputTruncated: false,
+      };
+    };
+    const managedDependencies: HpiCliDependencies = {
+      ...dependencies,
+      runTask6Process,
+    };
+
+    expect(await runHpiCli(["managed", "fixture", "--json"], managedDependencies)).toBe(0);
+    expect(processRequests).toBe(1);
+    const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    expect(artifact).toMatchObject({
+      schemaVersion: "hpi-task6-managed-change.v1",
+      taskResult: "GO",
+      productSource: { commit: sourceCommit, state: "CLEAN" },
+      provider: { id: "openai-codex", authStatus: "DETECTED", requestStatus: "DETECTED" },
+      lifecycleAfterAgentReturn: "VERIFYING",
+      cleanup: { status: "PASS" },
+      remoteCi: "PENDING",
+    });
+    expect(JSON.stringify(artifact)).not.toContain(root);
+    expect(
+      (await readdir(root)).some((entry) => entry.startsWith("hunter-pi-managed-change-")),
+    ).toBe(false);
+  });
+
+  it("refuses a Managed Change from an unstamped or dirty product artifact", async () => {
+    let processRan = false;
+    const { dependencies, io } = await createDependencies({ authConfigured: true });
+    await writeReadyConfiguration(dependencies);
+    const managedDependencies: HpiCliDependencies = {
+      ...dependencies,
+      runTask6Process: () => {
+        processRan = true;
+        throw new Error("an untrusted product artifact must not reach Pi");
+      },
+    };
+
+    expect(await runHpiCli(["managed", "fixture", "--json"], managedDependencies)).toBe(2);
+    expect(processRan).toBe(false);
+    expect(io.stderr.join("\n")).toContain(
+      "ManagedChangeStatus=BLOCKED Reason=UNSTAMPED_OR_DIRTY_PRODUCT",
+    );
   });
 
   it("doctors and disables plugins as metadata without deleting their entrypoint", async () => {

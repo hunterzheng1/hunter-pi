@@ -643,8 +643,7 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           const previousExecutionStatus = observations
             .filter((observation) => observation.attemptId === previous.attemptId)
             .reduce<Attempt["executionStatus"]>(
-              (status, observation) =>
-                executionStatusAfterObservation(status, observation.kind),
+              (status, observation) => executionStatusAfterObservation(status, observation.kind),
               previous.executionStatus,
             );
           const projectedPrevious = attemptSchema.parse({

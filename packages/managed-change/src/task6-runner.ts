@@ -26,10 +26,7 @@ import {
   supportsEngineCapability,
   type EngineHost,
 } from "@hunter-pi/engine-contracts";
-import {
-  createPortableEvidenceEnvelope,
-  createRunSummaryEvidence,
-} from "@hunter-pi/evidence";
+import { createPortableEvidenceEnvelope, createRunSummaryEvidence } from "@hunter-pi/evidence";
 import { runDeclaredCommandVerification } from "@hunter-pi/verification";
 import { InMemoryWorkflowKernel, type RunProjection } from "@hunter-pi/workflow-kernel";
 import {
@@ -462,9 +459,7 @@ export async function runTask6ManagedChange(
         type: "RECORD_OBSERVATION",
         observation: {
           schemaVersion: "1.0.0",
-          observationId: observationIdSchema.parse(
-            `obs_task6-agent-${String(observation.cursor)}`,
-          ),
+          observationId: observationIdSchema.parse(`obs_task6-agent-${String(observation.cursor)}`),
           runId: run.runId,
           attemptId: task6Attempt2Id,
           stepId: task6AgentStepId,
@@ -476,8 +471,7 @@ export async function runTask6ManagedChange(
       });
       if (observation.kind === "AGENT_RETURNED") {
         lifecycleAfterAgentReturn = (await kernel.project(run.runId)).change.lifecycle as
-          | "VERIFYING"
-          | "NOT_OBSERVED";
+          "VERIFYING" | "NOT_OBSERVED";
       }
     }
 
@@ -625,11 +619,7 @@ export async function runTask6ManagedChange(
     const summaryComplete =
       summary.attempts.length === projection.attempts.length &&
       summary.checks.length === projection.checks.length;
-    const operationReceipts = [
-      startReceipt.operationReceipt,
-      sendReceipt,
-      closeReceipt,
-    ];
+    const operationReceipts = [startReceipt.operationReceipt, sendReceipt, closeReceipt];
     const portableBeforeScore = {
       schemaVersion: "hpi-task6-managed-change.v1" as const,
       observedAt: now(),

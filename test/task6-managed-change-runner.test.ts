@@ -230,9 +230,7 @@ describe("Task 6 Managed Change runner", () => {
     expect(artifact.projection.reviewReceipts[0]?.findings).toMatchObject([
       { severity: "P1", scope: "workspace-dirty-paths" },
     ]);
-    expect(artifact.finalSummary.blockingFindings).toEqual([
-      "P1:workspace-dirty-paths",
-    ]);
+    expect(artifact.finalSummary.blockingFindings).toEqual(["P1:workspace-dirty-paths"]);
     expect(artifact.scorecard.zeroFalseReady).toBe(true);
     expect(artifact.scorecard.fixbackPass).toBe(false);
     expect(JSON.stringify(artifact)).not.toContain(parent);

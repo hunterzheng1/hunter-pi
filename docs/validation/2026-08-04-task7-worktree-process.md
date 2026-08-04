@@ -7,7 +7,7 @@
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **LOCAL V2 PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **LOCAL V2 PASS / INDEPENDENT REREVIEW PASS / REMOTE CI PENDING / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -17,7 +17,9 @@ The seven v1 receipts below remain immutable historical observations, but none i
 
 Commit `869e456c9d5feaa86dd4b359908bb3e2f7884812` remediates those findings. Attempt #3 Windows and Ubuntu receipts bind that exact clean commit and pass the expanded local matrix. The subsequent full-suite run retained one non-assertion failure: the first real-Git Workspace case took 5720 ms under parallel load and exceeded Vitest's default 5000 ms, while the same case passed alone in 3312 ms. Commit `ea38a6b5f397bdc1ddb6d16b4e7dbe1ca3d2d7cd` applies the explicit 15-second case bound already used by comparable real-Git fixtures; the Workspace file rerun passes 22/22 and attempt #4 binds that source.
 
-The next independent rereview still reproduced two Critical gaps on `c188695`: changing a caller-supplied bind operation identity let the same start operation launch once in each Host, and distinct prepare operations with the same payload fingerprint produced the same workspace-generation fingerprint, letting stale disposal delete the replacement generation. Commit `d47c4decfb6c857160004aa602f93d99b9943538` derives the only durable process-reservation key from the canonical start operation, rejects caller-selected bind identities, and includes the unique prepare operation in workspace fingerprint v2. Attempt #5 is the selected local pair. Independent final rereview and actual PR/main CI are still required.
+The next independent rereview still reproduced two Critical gaps on `c188695`: changing a caller-supplied bind operation identity let the same start operation launch once in each Host, and distinct prepare operations with the same payload fingerprint produced the same workspace-generation fingerprint, letting stale disposal delete the replacement generation. Commit `d47c4decfb6c857160004aa602f93d99b9943538` derives the only durable process-reservation key from the canonical start operation, rejects caller-selected bind identities, and includes the unique prepare operation in workspace fingerprint v2. Attempt #5 is the selected local pair.
+
+Final independent rereview of `eda8274` confirms both Critical findings are closed: old-generation disposal is blocked while the replacement directory remains, and exact or changed-payload start reuse in another Host stops before a second driver call. It found no new Critical or Important correctness issue, independently reconciled the 65 focused and 295 full test counts, and recomputed the attempt #5 source/verifier/receipt identities. Actual PR/main CI are still required.
 
 ## Frozen outcome and limits
 
@@ -148,7 +150,7 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - Final full `npm run verify` for source `d47c4de` exits 0 in 489.5 seconds: lint and typecheck pass; 36 test files / 295 tests pass; strict compiler, build, format, external-package, single-artifact, clean-install, and fixed Pi public-interface smokes then pass.
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
 - The strict Evidence test passes 10/10. A separate count-only scan over all three attempt #5 receipts finds zero Windows absolute paths, UNC paths, private home paths, or credential-assignment shapes; `git diff --check` also passes.
-- Independent rereview and remote PR/main CI remain to be completed; neither is claimed early.
+- Independent rereview reports `READY` with no new Critical or Important finding. Remote PR/main CI remain to be completed and are not claimed early.
 
 ## CI and remaining boundaries
 

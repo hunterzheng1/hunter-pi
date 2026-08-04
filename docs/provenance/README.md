@@ -26,4 +26,4 @@ The body explains what was copied or adapted, material modifications, retained n
 
 ## Current state
 
-Task 5 bundles the exact Zod dependency into the generated CLI artifact; its accepted dependency provenance is recorded in [2026-08-03-task5-zod-bundle.md](2026-08-03-task5-zod-bundle.md). Other upstream projects used only for research are listed in the root [`NOTICE.md`](../../NOTICE.md).
+Task 5 bundles the exact Zod dependency into the generated CLI artifact; its accepted dependency provenance is recorded in [2026-08-03-task5-zod-bundle.md](2026-08-03-task5-zod-bundle.md). Task 7's independently written Windows Job Object adapter records the exact external sequencing reference in [2026-08-04-task7-windows-job-object-reference.md](2026-08-04-task7-windows-job-object-reference.md). Other upstream projects used only for research are listed in the root [`NOTICE.md`](../../NOTICE.md).

@@ -17,6 +17,7 @@ The initial documentation baseline studies these projects without incorporating 
 | Pi | [`v0.83.0`](https://github.com/earendil-works/pi/tree/v0.83.0), npm integrity frozen in `package-lock.json` | [MIT](https://github.com/earendil-works/pi/blob/v0.83.0/LICENSE) | exact Engine dependency used by the Task 4 probe and Task 5 developer-preview product; real Provider remains `NOT_PROVEN` |
 | Oh My Pi | [`v17.2.4`](https://github.com/can1357/oh-my-pi/tree/v17.2.4) | [MIT](https://github.com/can1357/oh-my-pi/blob/v17.2.4/LICENSE) | research/implementation reference only |
 | Hunter-Harness | [`b73db2a`](https://github.com/hunterzheng1/Hunter-Harness/commit/b73db2a23d0ed671c228640a37386b5c0dbef1e7) | no license conclusion recorded here | mechanism and engineering reference only; no runtime or copied-code dependency |
+| pi-silent-gui | [`8edf709`](https://github.com/IIwate/pi-silent-gui/commit/8edf70993d41c2fd62e8278fce7ad82f151955b1) | [MIT](https://github.com/IIwate/pi-silent-gui/blob/8edf70993d41c2fd62e8278fce7ad82f151955b1/LICENSE) | Task 7 Windows Job Object sequencing cross-check only; no runtime dependency or copied Python source |
 
 This table records provenance, not compatibility, security, or production verification.
 

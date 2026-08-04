@@ -138,3 +138,86 @@ jobs:
           path: .artifacts/pi-probe-aggregate/consistency.json
           if-no-files-found: error
           retention-days: 14
+
+  task7-platform:
+    name: Task 7 containment / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version: 24
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run exact Task 7 platform matrix
+        run: npm run probe:task7 -- --output .artifacts/task7-platform/${{ runner.os }}.json
+
+      - name: Upload Task 7 platform receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task7-platform-${{ runner.os }}
+          path: .artifacts/task7-platform/${{ runner.os }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  task7-evidence-consistency:
+    name: Task 7 Evidence / Windows + Ubuntu identity
+    needs: task7-platform
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version: 24
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Download Windows Task 7 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task7-platform-Windows
+          path: .artifacts/task7-platform-aggregate/windows
+
+      - name: Download Ubuntu Task 7 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task7-platform-Linux
+          path: .artifacts/task7-platform-aggregate/ubuntu
+
+      - name: Compare exact Task 7 platform identities
+        run: >-
+          npm run compare:task7-evidence --
+          --windows .artifacts/task7-platform-aggregate/windows/Windows.json
+          --ubuntu .artifacts/task7-platform-aggregate/ubuntu/Linux.json
+          --output .artifacts/task7-platform-aggregate/consistency.json
+
+      - name: Upload Task 7 consistency receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task7-platform-consistency
+          path: .artifacts/task7-platform-aggregate/consistency.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,359 @@
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { z } from "zod";
+
+import {
+  TASK7_SOURCE_PATHSPEC,
+  assertTask7EvidencePrivacy,
+  formatTask7Evidence,
+  parseTask7VitestReport,
+  prepareTask7Output,
+  resolveTask7OutputPath,
+  task7PlatformFailureReceiptSchema,
+  task7PlatformReceiptSchema,
+  type Task7PlatformFailureReceipt,
+  type Task7PlatformReceipt,
+} from "./task7-platform-evidence.js";
+
+interface CommandResult {
+  readonly exitCode: number | null;
+  readonly stdout: Buffer;
+  readonly stderr: Buffer;
+  readonly stdoutDigest: `sha256:${string}`;
+  readonly stderrDigest: `sha256:${string}`;
+  readonly observedBytes: number;
+}
+
+interface SourceIdentity {
+  readonly commit: string;
+  readonly digest: `sha256:${string}`;
+  readonly testFileFingerprint: `sha256:${string}`;
+  readonly gitVersion: string;
+}
+
+type FailureStage = Task7PlatformFailureReceipt["stage"];
+
+function digest(value: string | Buffer): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function runCommand(
+  executable: string,
+  arguments_: readonly string[],
+  cwd: string,
+): Promise<CommandResult> {
+  return new Promise<CommandResult>((resolveResult, reject) => {
+    const child = spawn(executable, arguments_, {
+      cwd,
+      env: process.env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let observedBytes = 0;
+    child.stdout.on("data", (chunk: Buffer) => {
+      observedBytes += chunk.length;
+      stdout.push(Buffer.from(chunk));
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      observedBytes += chunk.length;
+      stderr.push(Buffer.from(chunk));
+    });
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      const stdoutBuffer = Buffer.concat(stdout);
+      const stderrBuffer = Buffer.concat(stderr);
+      resolveResult({
+        exitCode,
+        stdout: stdoutBuffer,
+        stderr: stderrBuffer,
+        stdoutDigest: digest(stdoutBuffer),
+        stderrDigest: digest(stderrBuffer),
+        observedBytes,
+      });
+    });
+  });
+}
+
+async function requireSuccessfulTextCommand(
+  executable: string,
+  arguments_: readonly string[],
+  cwd: string,
+): Promise<string> {
+  const result = await runCommand(executable, arguments_, cwd);
+  if (result.exitCode !== 0 || result.stderr.length > 0) {
+    throw new Error("source identity command did not complete cleanly");
+  }
+  return result.stdout.toString("utf8").trim();
+}
+
+function isContained(root: string, target: string): boolean {
+  const targetRelative = relative(root, target);
+  return (
+    targetRelative.length > 0 &&
+    targetRelative !== ".." &&
+    !targetRelative.startsWith(`..${sep}`) &&
+    !isAbsolute(targetRelative)
+  );
+}
+
+async function computeSourceIdentity(repositoryRoot: string): Promise<SourceIdentity> {
+  const status = await requireSuccessfulTextCommand(
+    "git",
+    ["status", "--porcelain=v1", "--untracked-files=all", "--", ...TASK7_SOURCE_PATHSPEC],
+    repositoryRoot,
+  );
+  if (status.length > 0) throw new Error("Task 7 source pathspec is not clean");
+  const [commit, gitVersionOutput, fileList] = await Promise.all([
+    requireSuccessfulTextCommand("git", ["rev-parse", "HEAD"], repositoryRoot),
+    requireSuccessfulTextCommand("git", ["--version"], repositoryRoot),
+    requireSuccessfulTextCommand(
+      "git",
+      ["ls-files", "-z", "--", ...TASK7_SOURCE_PATHSPEC],
+      repositoryRoot,
+    ),
+  ]);
+  if (!/^[a-f0-9]{40}$/u.test(commit)) throw new Error("Git commit identity is invalid");
+  const gitVersion = gitVersionOutput.replace(/^git version\s+/u, "");
+  const files = fileList
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .sort((left, right) => left.localeCompare(right));
+  if (files.length === 0) throw new Error("Task 7 source pathspec selected no files");
+  const canonicalRoot = await realpath(repositoryRoot);
+  const hash = createHash("sha256");
+  let testFileFingerprint: `sha256:${string}` | undefined;
+  for (const path of files) {
+    const target = resolve(repositoryRoot, path);
+    if (!isContained(repositoryRoot, target)) throw new Error("source file escaped repository");
+    const [entry, canonicalTarget, content] = await Promise.all([
+      lstat(target),
+      realpath(target),
+      readFile(target),
+    ]);
+    if (
+      !entry.isFile() ||
+      entry.isSymbolicLink() ||
+      entry.nlink !== 1 ||
+      !isContained(canonicalRoot, canonicalTarget)
+    ) {
+      throw new Error("Task 7 source pathspec contains an unsafe file");
+    }
+    hash.update(`${path}\0${String(content.length)}\0`, "utf8");
+    hash.update(content);
+    if (path === "test/managed-process-platform.test.ts") {
+      testFileFingerprint = digest(content);
+    }
+  }
+  if (testFileFingerprint === undefined) throw new Error("Task 7 platform test is missing");
+  return {
+    commit,
+    digest: `sha256:${hash.digest("hex")}`,
+    testFileFingerprint,
+    gitVersion,
+  };
+}
+
+function platformIdentity(): {
+  readonly platform: "win32" | "linux";
+  readonly platformLabel: "WINDOWS" | "UBUNTU";
+  readonly containment: "WINDOWS_JOB_OBJECT" | "POSIX_PROCESS_GROUP";
+} {
+  if (process.platform === "win32") {
+    return {
+      platform: "win32",
+      platformLabel: "WINDOWS",
+      containment: "WINDOWS_JOB_OBJECT",
+    };
+  }
+  if (process.platform === "linux") {
+    return {
+      platform: "linux",
+      platformLabel: "UBUNTU",
+      containment: "POSIX_PROCESS_GROUP",
+    };
+  }
+  throw new Error("Task 7 platform probe supports only Windows and Linux");
+}
+
+function createFailureReceipt(
+  stage: FailureStage,
+  status: "FAIL" | "NOT_PROVEN",
+  result?: CommandResult,
+): Task7PlatformFailureReceipt {
+  const platform =
+    process.platform === "win32" || process.platform === "linux" ? process.platform : "UNSUPPORTED";
+  return task7PlatformFailureReceiptSchema.parse({
+    schemaVersion: "hpi-task7-platform-failure.v1",
+    kind: "hunter-pi/task7-platform-failure",
+    observedAt: new Date().toISOString(),
+    status,
+    platform,
+    stage,
+    code: "TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE",
+    exitCode: result?.exitCode ?? null,
+    stdoutDigest: result?.stdoutDigest ?? digest(""),
+    stderrDigest: result?.stderrDigest ?? digest(""),
+    observedBytes: result?.observedBytes ?? 0,
+    fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
+    providerRequests: "NOT_RUN",
+    realRepositories: "NOT_RUN",
+    remoteCi: "PENDING",
+  });
+}
+
+export async function runTask7PlatformProbe(
+  repositoryRoot: string,
+): Promise<Task7PlatformReceipt | Task7PlatformFailureReceipt> {
+  let stage: FailureStage = "SOURCE_IDENTITY";
+  let result: CommandResult | undefined;
+  let reportRoot: string | undefined;
+  try {
+    const platform = platformIdentity();
+    const source = await computeSourceIdentity(repositoryRoot);
+    stage = "TEST_EXECUTION";
+    reportRoot = await mkdtemp(join(tmpdir(), "hpi-task7-platform-probe-"));
+    const reportPath = join(reportRoot, "vitest-report.json");
+    const vitestEntry = resolve(repositoryRoot, "node_modules", "vitest", "vitest.mjs");
+    const vitestEntryState = await lstat(vitestEntry);
+    if (!vitestEntryState.isFile() || vitestEntryState.isSymbolicLink()) {
+      throw new Error("Vitest entrypoint is unavailable");
+    }
+    const portableCommand = [
+      "node@24",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "test/managed-process-platform.test.ts",
+      "--reporter=json",
+      "--outputFile=<TEMP_REPORT>",
+    ];
+    const startedAt = new Date();
+    result = await runCommand(
+      process.execPath,
+      [
+        vitestEntry,
+        "run",
+        "test/managed-process-platform.test.ts",
+        "--reporter=json",
+        `--outputFile=${reportPath}`,
+      ],
+      repositoryRoot,
+    );
+    const endedAt = new Date();
+    if (result.exitCode !== 0) return createFailureReceipt(stage, "FAIL", result);
+    stage = "REPORT_PARSE";
+    const report = JSON.parse(await readFile(reportPath, "utf8")) as unknown;
+    const checks = parseTask7VitestReport(report);
+    const receipt = task7PlatformReceiptSchema.parse({
+      schemaVersion: "hpi-task7-platform-receipt.v1",
+      kind: "hunter-pi/task7-platform-receipt",
+      observedAt: endedAt.toISOString(),
+      status: "PASS",
+      source: {
+        repository: "hunter-pi",
+        commit: source.commit,
+        digest: source.digest,
+        pathspec: TASK7_SOURCE_PATHSPEC,
+      },
+      environment: {
+        platform: platform.platform,
+        platformLabel: platform.platformLabel,
+        architecture: process.arch,
+        nodeVersion: process.version,
+        gitVersion: source.gitVersion,
+      },
+      execution: {
+        commandFingerprint: digest(JSON.stringify(portableCommand)),
+        testFileFingerprint: source.testFileFingerprint,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        durationMs: Math.max(0, endedAt.getTime() - startedAt.getTime()),
+        exitCode: result.exitCode,
+        reportStatus: "COMPLETE",
+        stdoutDigest: result.stdoutDigest,
+        stderrDigest: result.stderrDigest,
+        observedBytes: result.observedBytes,
+      },
+      containment: { expected: platform.containment, status: "PASS" },
+      checks,
+      boundaries: {
+        fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
+        providerRequests: "NOT_RUN",
+        realRepositories: "NOT_RUN",
+        privateData: "EXCLUDED",
+        remoteCi: "PENDING",
+      },
+    });
+    assertTask7EvidencePrivacy(receipt);
+    return receipt;
+  } catch {
+    return createFailureReceipt(stage, "NOT_PROVEN", result);
+  } finally {
+    if (reportRoot !== undefined) {
+      await rm(reportRoot, { force: true, recursive: true });
+    }
+  }
+}
+
+function parseOutputArgument(arguments_: readonly string[]): string {
+  if (arguments_.length === 0) {
+    return `.artifacts/task7-platform/${process.platform}-node24-${String(process.pid)}.json`;
+  }
+  if (
+    arguments_.length !== 2 ||
+    arguments_[0] !== "--output" ||
+    arguments_[1] === undefined ||
+    arguments_[1].length === 0
+  ) {
+    throw new Error("usage: task7-platform-probe [--output <approved-path.json>]");
+  }
+  return arguments_[1];
+}
+
+async function assertRepositoryRoot(repositoryRoot: string): Promise<void> {
+  const manifest = z
+    .looseObject({ name: z.literal("hunter-pi") })
+    .parse(JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")) as unknown);
+  void manifest;
+}
+
+async function runCli(): Promise<void> {
+  const repositoryRoot = resolve(process.cwd());
+  await assertRepositoryRoot(repositoryRoot);
+  const outputPath = resolveTask7OutputPath(
+    repositoryRoot,
+    parseOutputArgument(process.argv.slice(2)),
+  );
+  await prepareTask7Output(repositoryRoot, outputPath);
+  const receipt = await runTask7PlatformProbe(repositoryRoot);
+  await writeFile(outputPath, await formatTask7Evidence(receipt), {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  if (receipt.status === "PASS") {
+    process.stdout.write(
+      `Task7Platform=PASS; Platform=${receipt.environment.platformLabel}; RemoteCI=PENDING\n`,
+    );
+    return;
+  }
+  process.stderr.write(
+    `Task 7 platform probe ${receipt.status}; structured failure Evidence was written\n`,
+  );
+  process.exitCode = 1;
+}
+
+const entryPoint = process.argv[1];
+if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
+  runCli().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "unknown Task 7 probe failure";
+    process.stderr.write(`Task 7 platform probe failed before Evidence publication: ${message}\n`);
+    process.exitCode = 1;
+  });
+}

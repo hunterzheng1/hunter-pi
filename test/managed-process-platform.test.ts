@@ -334,17 +334,23 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     });
 
     try {
+      const pending = await waitUntil(async () => {
+        const heartbeat = await fixture.host.heartbeat(sessionId);
+        return heartbeat.receipt.state === "EXITED" &&
+          heartbeat.receipt.processTreeState === "ACTIVE" &&
+          heartbeat.receipt.outputState === "CLOSED" &&
+          heartbeat.receipt.terminalFinality === "PENDING" &&
+          isProcessAlive(detachedPid)
+          ? heartbeat.receipt
+          : undefined;
+      });
+      expect(pending).toMatchObject({
+        state: "EXITED",
+        processTreeState: "ACTIVE",
+        outputState: "CLOSED",
+        terminalFinality: "PENDING",
+      });
       const finalPromise = fixture.host.awaitFinal(sessionId);
-      const early = await Promise.race([
-        finalPromise.then(() => "resolved" as const),
-        new Promise<"pending">((resolve) => {
-          const timer = setTimeout(() => {
-            resolve("pending");
-          }, 150);
-          timer.unref();
-        }),
-      ]);
-      expect(early).toBe("pending");
       await writeFile(releasePath, "RELEASE\n", "utf8");
       await expect(finalPromise).resolves.toMatchObject({
         receipt: {

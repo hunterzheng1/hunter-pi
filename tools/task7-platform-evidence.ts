@@ -414,7 +414,7 @@ export function parseTask7VitestReport(
       throw new Error("Vitest report did not contain the exact Task 7 platform matrix");
     }
     const applicable = check.platforms.includes(platform);
-    const expectedStatus = applicable ? "passed" : "pending";
+    const expectedStatus = applicable ? "passed" : "skipped";
     if (matches[0]?.status !== expectedStatus) {
       throw new Error(`Task 7 platform check ${check.id} did not pass`);
     }

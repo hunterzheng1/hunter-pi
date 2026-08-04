@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "hpi-task7-platform-failure.v2",
+  "kind": "hunter-pi/task7-platform-failure",
+  "observedAt": "2026-08-04T11:39:42.636Z",
+  "status": "NOT_PROVEN",
+  "platform": "linux",
+  "stage": "REPORT_PARSE",
+  "code": "TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE",
+  "exitCode": 0,
+  "stdoutDigest": "sha256:d41329f387039f06d8ea98414f2564e450d4824fadbf48e7c6b9ea92d2d654ba",
+  "stderrDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "observedBytes": 79,
+  "verifierVersion": "task7-verifier.v2",
+  "fixturePolicy": "AUTOMATIC_TEMPORARY_ONLY",
+  "providerRequests": "NOT_RUN",
+  "realRepositories": "NOT_RUN",
+  "remoteCi": "PENDING"
+}

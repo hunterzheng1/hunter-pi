@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { assertTask7WorktreeClean, runTask7ProbeCommand } from "../tools/task7-p
 import {
   compareTask7PlatformEvidence,
   task7PlatformConsistencyV1Schema,
+  task7PlatformConsistencySchema,
 } from "../tools/compare-task7-platform-evidence.js";
 import {
   TASK7_PLATFORM_CHECKS,
@@ -19,6 +20,7 @@ import {
   prepareTask7Output,
   readTask7EvidenceInput,
   resolveTask7OutputPath,
+  task7PlatformFailureReceiptSchema,
   task7PlatformFailureReceiptV1Schema,
   task7PlatformReceiptSchema,
   task7PlatformReceiptV1Schema,
@@ -38,7 +40,7 @@ function passingReport(platform: "win32" | "linux"): Record<string, unknown> {
   const assertions = TASK7_PLATFORM_CHECKS.map((check) => ({
     ancestorTitles: ["local managed process platform"],
     title: check.title,
-    status: check.platforms.includes(platform) ? "passed" : "pending",
+    status: check.platforms.includes(platform) ? "passed" : "skipped",
   }));
   const passed = assertions.filter((assertion) => assertion.status === "passed").length;
   const pending = assertions.length - passed;
@@ -333,15 +335,26 @@ describe("Task 7 platform Evidence", () => {
     const parsedHardenedConsistency = task7PlatformConsistencyV1Schema.parse(hardenedConsistency);
     expect(parsedHardenedConsistency.sourceDigest).toBe(parsedHardenedWindows.source.digest);
     expect(() => compareTask7PlatformEvidence(parsedWindows, parsedUbuntu)).toThrow();
-    for (const value of [
-      failed,
-      preliminary,
-      windows,
-      hardenedWindows,
-      ubuntu,
-      consistency,
-      hardenedConsistency,
-    ]) {
+
+    const evidenceFiles = (await readdir(evidenceRoot)).filter((name) => name.endsWith(".json"));
+    for (const name of evidenceFiles) {
+      const value = await readJson(name);
+      const schemaVersion = (value as { readonly schemaVersion?: unknown }).schemaVersion;
+      if (schemaVersion === "hpi-task7-platform-failure.v1") {
+        task7PlatformFailureReceiptV1Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-failure.v2") {
+        task7PlatformFailureReceiptSchema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-receipt.v1") {
+        task7PlatformReceiptV1Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-receipt.v2") {
+        task7PlatformReceiptSchema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-consistency.v1") {
+        task7PlatformConsistencyV1Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-consistency.v2") {
+        task7PlatformConsistencySchema.parse(value);
+      } else {
+        throw new Error(`unknown committed Task 7 Evidence schema in ${name}`);
+      }
       expect(() => {
         assertTask7EvidencePrivacy(value);
       }).not.toThrow();

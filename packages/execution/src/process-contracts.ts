@@ -52,8 +52,6 @@ export const managedProcessStartRequestSchema = z
     timeoutMs: z.number().int().positive().max(86_400_000),
     maxOutputBytes: z.number().int().positive().max(268_435_456),
     leases: z.array(leaseBindingSchema).max(128),
-    leaseBindOperationId: operationIdSchema,
-    leaseBindOperationFingerprint: fingerprintSchema,
   })
   .superRefine((request, context) => {
     if (new Set(request.leases.map((binding) => binding.leaseId)).size !== request.leases.length) {

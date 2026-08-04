@@ -43,6 +43,7 @@ RED cases:
 - reject a non-root repository, unresolved base commit, destination alias, broad target, or pre-existing destination;
 - create an exact clean worktree without changing dirty/staged/untracked content in the source checkout;
 - preserve dirty, untracked, staged, unpushed, uniquely committed, or open-review work;
+- bind each workspace generation to its unique prepare operation identity, even when two generations have otherwise identical payload fingerprints;
 - reject a symlink, junction, reparse-point, hard-link, or resolved cleanup target that can escape the owned worktree;
 - report `BLOCKED` rather than `PASS` if Git registration and physical deletion disagree;
 - never delete a branch unless its declared recoverability and review state are proven.
@@ -58,7 +59,8 @@ RED cases:
 - replay by the same operation identity is idempotent, while a changed payload is rejected;
 - expiry alone does not let an uncertain live owner get overwritten;
 - renewal is monotonic and release by a non-owner is rejected;
-- process startup binds the complete lease set atomically, and an external or second session cannot release or reuse a bound lease;
+- process startup derives one durable reservation from the start operation identity, binds the complete lease set atomically, and does not let a caller select another reservation key;
+- an external Host or second session cannot replay the start operation, release its leases, or reuse a bound lease;
 - a lease file alias, malformed record, partial publication, or clock rollback fails closed.
 
 GREEN adds file-backed local leases suitable for process boundaries. REFACTOR keeps storage details and atomic publication internal.

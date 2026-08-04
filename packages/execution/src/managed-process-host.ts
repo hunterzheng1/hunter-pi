@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import { fingerprintSchema, timestampSchema, type Fingerprint } from "@hunter-pi/domain";
 
 import type { LeaseManager } from "./contracts.js";
+import { LeaseError } from "./errors.js";
 import { ManagedProcessError } from "./process-errors.js";
 import {
   managedProcessCancelReceiptSchema,
@@ -209,8 +210,8 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
     try {
       const binding = await this.#leaseManager.bind({
         schemaVersion: "hpi-lease-bind.v1",
-        operationId: parsed.leaseBindOperationId,
-        operationFingerprint: parsed.leaseBindOperationFingerprint,
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
         bindingFingerprint: leaseBindingFingerprint,
         leases: parsed.leases.map((binding) => ({
           leaseId: binding.leaseId,
@@ -239,6 +240,13 @@ class InMemoryManagedProcessHost implements ManagedProcessHost {
         error.code === "PROCESS_OPERATION_REPLAY_NOT_PROVEN"
       ) {
         throw error;
+      }
+      if (error instanceof LeaseError && error.code === "LEASE_OPERATION_CONFLICT") {
+        throw new ManagedProcessError(
+          "PROCESS_OPERATION_CONFLICT",
+          "process start replay changed its fingerprint or canonical request",
+          error,
+        );
       }
       throw new ManagedProcessError(
         "PROCESS_LEASE_INVALID",

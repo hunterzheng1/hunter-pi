@@ -179,8 +179,6 @@ function startRequest(cwd: string, leases: readonly Record<string, unknown>[] = 
     timeoutMs: 60_000,
     maxOutputBytes: 8,
     leases,
-    leaseBindOperationId: "op_process-lease-bind",
-    leaseBindOperationFingerprint: fingerprint("operation:process-lease-bind"),
   };
 }
 
@@ -365,9 +363,10 @@ describe("managed process host", () => {
     await host.awaitFinal("process_task7-session");
   });
 
-  it("fails closed instead of spawning an exact leased start replay in a second host", async () => {
+  it("fails closed when a second host changes leases for the same start operation", async () => {
     const fixture = await createFixture();
     const ownerFingerprint = fingerprint("cross-host-replay-owner");
+    const secondOwnerFingerprint = fingerprint("cross-host-replay-second-owner");
     await fixture.leaseManager.acquire(
       leaseAcquireRequestSchema.parse({
         schemaVersion: "hpi-lease-acquire.v1",
@@ -377,6 +376,18 @@ describe("managed process host", () => {
         workspaceId: "workspace_cross-host-replay",
         ownerFingerprint,
         resources: ["cross_host_replay_slot"],
+        ttlMs: 60_000,
+      }),
+    );
+    await fixture.leaseManager.acquire(
+      leaseAcquireRequestSchema.parse({
+        schemaVersion: "hpi-lease-acquire.v1",
+        operationId: "op_cross-host-replay-second-acquire",
+        operationFingerprint: fingerprint("operation:cross-host-replay-second-acquire"),
+        leaseId: "lease_cross-host-replay-second",
+        workspaceId: "workspace_cross-host-replay-second",
+        ownerFingerprint: secondOwnerFingerprint,
+        resources: ["cross_host_replay_second_slot"],
         ttlMs: 60_000,
       }),
     );
@@ -400,9 +411,20 @@ describe("managed process host", () => {
     ]);
 
     await firstHost.start(request);
-    await expect(secondHost.start({ ...request })).rejects.toMatchObject({
+    await expect(
+      secondHost.start({
+        ...startRequest(fixture.cwd, [
+          {
+            leaseId: "lease_cross-host-replay-second",
+            ownerFingerprint: secondOwnerFingerprint,
+            releaseOperationId: "op_cross-host-replay-second-release",
+            releaseOperationFingerprint: fingerprint("operation:cross-host-replay-second-release"),
+          },
+        ]),
+      }),
+    ).rejects.toMatchObject({
       name: "ManagedProcessError",
-      code: "PROCESS_OPERATION_REPLAY_NOT_PROVEN",
+      code: "PROCESS_OPERATION_CONFLICT",
     });
     expect(firstDriver.startCalls).toBe(1);
     expect(secondDriver.startCalls).toBe(0);
@@ -434,6 +456,21 @@ describe("managed process host", () => {
 
     firstDriver.settle(terminalSnapshot());
     await firstHost.awaitFinal("process_task7-session");
+  });
+
+  it("rejects caller-selected durable reservation identities before driver startup", async () => {
+    const fixture = await createFixture();
+    const driver = new ControllableDriver();
+    const host = requireCreateHost()({ driver, leaseManager: fixture.leaseManager });
+    const candidate = {
+      ...startRequest(fixture.cwd),
+      leaseBindOperationId: "op_caller-selected-bind",
+      leaseBindOperationFingerprint: fingerprint("operation:caller-selected-bind"),
+    };
+
+    expect(managedProcessStartRequestSchema.safeParse(candidate).success).toBe(false);
+    await expect(host.start(candidate as never)).rejects.toThrow();
+    expect(driver.startCalls).toBe(0);
   });
 
   it("rejects NUL in every OS-bound process input before calling the platform driver", async () => {
@@ -501,8 +538,6 @@ describe("managed process host", () => {
         operationId: "op_process-start-second",
         operationFingerprint: fingerprint("operation:process-start-second"),
         sessionId: "process_task7-session-second",
-        leaseBindOperationId: "op_process-lease-bind-second",
-        leaseBindOperationFingerprint: fingerprint("operation:process-lease-bind-second"),
       }),
     ).rejects.toMatchObject({ code: "PROCESS_LEASE_INVALID" });
     expect(secondDriver.startCalls).toBe(0);

@@ -430,8 +430,9 @@ class LocalGitWorkspaceManager implements GitWorkspaceManager {
     const sourceFingerprint = sha256(`hpi-git-source.v1\0${parsed.baseCommit}\0${baseTree}`);
     const workspaceFingerprint = sha256(
       JSON.stringify({
-        schemaVersion: "hpi-workspace-fingerprint.v1",
+        schemaVersion: "hpi-workspace-fingerprint.v2",
         workspaceId: parsed.workspaceId,
+        operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         baseCommit: parsed.baseCommit,
         branchName,

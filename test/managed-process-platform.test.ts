@@ -71,8 +71,6 @@ function startRequest(
     timeoutMs: options.timeoutMs ?? 15_000,
     maxOutputBytes: options.maxOutputBytes ?? 1_048_576,
     leases: [],
-    leaseBindOperationId: "op_platform-process-reservation",
-    leaseBindOperationFingerprint: fingerprint("operation:platform-process-reservation"),
   });
 }
 

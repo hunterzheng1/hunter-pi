@@ -777,10 +777,11 @@ describe("local Git Workspace Interface", () => {
     const fixture = await createRepositoryFixture();
     const manager = await requireCreateManager()({ ownedRoot: fixture.ownedRoot });
     const workspaceId = "workspace_task7-delayed-cleanup";
+    const generationRequestFingerprint = fingerprint("task7-delayed-cleanup-shared-request");
     const first = await manager.prepare({
       schemaVersion: "hpi-workspace-prepare.v1",
       operationId: "op_task7-delayed-cleanup-first-prepare",
-      operationFingerprint: fingerprint("task7-delayed-cleanup-first-prepare"),
+      operationFingerprint: generationRequestFingerprint,
       workspaceId,
       repository: fixture.repository,
       baseCommit: fixture.baseCommit,
@@ -795,7 +796,7 @@ describe("local Git Workspace Interface", () => {
     const second = await manager.prepare({
       schemaVersion: "hpi-workspace-prepare.v1",
       operationId: "op_task7-delayed-cleanup-second-prepare",
-      operationFingerprint: fingerprint("task7-delayed-cleanup-second-prepare"),
+      operationFingerprint: generationRequestFingerprint,
       workspaceId,
       repository: fixture.repository,
       baseCommit: fixture.baseCommit,

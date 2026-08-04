@@ -57,6 +57,32 @@ interface Task6Artifact {
     readonly blockingFindings: readonly string[];
     readonly unresolvedRisks: readonly string[];
   };
+  readonly resourceAccounting: {
+    readonly status: "PASS" | "NOT_PROVEN" | "EXCEEDED";
+    readonly budgets: {
+      readonly maxAgentTurns: number;
+      readonly maxExternalOperations: number;
+      readonly maxCommands: number;
+      readonly maxOutputBytes: number;
+    };
+    readonly captureLimits: {
+      readonly engine: number;
+      readonly verificationAttempt1: number;
+      readonly verificationAttempt2: number;
+    };
+    readonly capturedOutputBytes: {
+      readonly engine?: number;
+      readonly verificationAttempt1: number;
+      readonly verificationAttempt2: number;
+    };
+    readonly consumed: {
+      readonly agentTurns: number;
+      readonly externalOperations: number;
+      readonly commands: number;
+      readonly outputBytes?: number;
+    };
+    readonly unprovenReasons: readonly string[];
+  };
   readonly scorecard: {
     readonly zeroFalseReady: boolean;
     readonly sourceLoss: boolean;
@@ -66,6 +92,7 @@ interface Task6Artifact {
     readonly unplannedInterventions: number;
     readonly overheadWithinLimit: boolean;
     readonly summaryComplete: boolean;
+    readonly resourceBudgetReconciled: boolean;
   };
   readonly cleanup: { readonly status: "PASS" | "BLOCKED" };
   readonly remoteCi: "PENDING";
@@ -94,7 +121,10 @@ function requireRunner(): RunTask6 {
   return value as RunTask6;
 }
 
-function createHost(mutation: (workspace: string) => Promise<void>): Task6PiEngineHost {
+function createHost(
+  mutation: (workspace: string) => Promise<void>,
+  capturedBytes = 128,
+): Task6PiEngineHost {
   return new Task6PiEngineHost({
     launchPlanForWorkspace: (workspace) =>
       Promise.resolve({
@@ -113,14 +143,42 @@ function createHost(mutation: (workspace: string) => Promise<void>): Task6PiEngi
         recordCount: 3,
         stdoutDigest: fingerprintA,
         stderrDigest: fingerprintB,
-        capturedBytes: 128,
+        capturedBytes,
         outputTruncated: false,
       };
     },
     now: () => "2026-08-04T00:00:10.000Z",
     processTimeoutMs: 30_000,
-    maximumOutputBytes: 262_144,
+    maximumOutputBytes: 229_376,
   });
+}
+
+function withoutEngineOutputMeasurement(host: EngineHost): EngineHost {
+  return {
+    probe: (request) => host.probe(request),
+    start: (request) => host.start(request),
+    send: (handle, input) => host.send(handle, input),
+    observe: async function* (handle, cursor) {
+      for await (const observation of host.observe(handle, cursor)) {
+        if (observation.kind !== "OUTPUT_CAPTURED") {
+          yield observation;
+          continue;
+        }
+        yield {
+          schemaVersion: observation.schemaVersion,
+          cursor: observation.cursor,
+          attemptId: observation.attemptId,
+          kind: observation.kind,
+          observedAt: observation.observedAt,
+          ...(observation.summary === undefined ? {} : { summary: observation.summary }),
+        };
+      }
+    },
+    interrupt: (handle, request) => host.interrupt(handle, request),
+    checkpoint: (handle, request) => host.checkpoint(handle, request),
+    reconcile: (request) => host.reconcile(request),
+    close: (handle, request) => host.close(handle, request),
+  };
 }
 
 async function runWithHost(parentDirectory: string, host: EngineHost): Promise<Task6Artifact> {
@@ -203,6 +261,33 @@ describe("Task 6 Managed Change runner", () => {
       unplannedInterventions: 0,
       overheadWithinLimit: true,
       summaryComplete: true,
+      resourceBudgetReconciled: true,
+    });
+    expect(artifact.resourceAccounting).toEqual({
+      status: "PASS",
+      budgets: {
+        maxAgentTurns: 1,
+        maxExternalOperations: 4,
+        maxCommands: 2,
+        maxOutputBytes: 262_144,
+      },
+      captureLimits: {
+        engine: 229_376,
+        verificationAttempt1: 16_384,
+        verificationAttempt2: 16_384,
+      },
+      capturedOutputBytes: {
+        engine: 128,
+        verificationAttempt1: 17,
+        verificationAttempt2: 13,
+      },
+      consumed: {
+        agentTurns: 1,
+        externalOperations: 3,
+        commands: 2,
+        outputBytes: 158,
+      },
+      unprovenReasons: [],
     });
     expect(artifact.finalSummary.attempts).toHaveLength(2);
     expect(artifact.finalSummary.checks).toEqual(["check_task6-result:PASS"]);
@@ -234,6 +319,45 @@ describe("Task 6 Managed Change runner", () => {
     expect(artifact.scorecard.zeroFalseReady).toBe(true);
     expect(artifact.scorecard.fixbackPass).toBe(false);
     expect(JSON.stringify(artifact)).not.toContain(parent);
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  it("stops instead of claiming READY when cumulative captured output exceeds the Run budget", async () => {
+    const parent = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-runner-");
+    cleanupRoots.push(parent);
+    const artifact = await runWithHost(
+      parent,
+      createHost(
+        (workspace) => writeFile(join(workspace, "result.txt"), "READY\n", "utf8"),
+        262_130,
+      ),
+    );
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.resourceAccounting.status).toBe("EXCEEDED");
+    expect(artifact.resourceAccounting.consumed.outputBytes).toBeGreaterThan(262_144);
+    expect(artifact.scorecard.resourceBudgetReconciled).toBe(false);
+    expect(artifact.projection.change.lifecycle).not.toBe("READY");
+    expect(artifact.finalSummary.blockingFindings).toContain("P1:resource-budget");
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  it("records NOT_PROVEN and stops when the Engine omits its output-byte measurement", async () => {
+    const parent = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-runner-");
+    cleanupRoots.push(parent);
+    const artifact = await runWithHost(
+      parent,
+      withoutEngineOutputMeasurement(
+        createHost((workspace) => writeFile(join(workspace, "result.txt"), "READY\n", "utf8")),
+      ),
+    );
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.resourceAccounting.status).toBe("NOT_PROVEN");
+    expect(artifact.resourceAccounting.unprovenReasons).toEqual(["ENGINE_OUTPUT_BYTES_MISSING"]);
+    expect(artifact.resourceAccounting.consumed.outputBytes).toBeUndefined();
+    expect(artifact.projection.change.lifecycle).not.toBe("READY");
+    expect(artifact.finalSummary.blockingFindings).toContain("P1:resource-budget");
     expect(await readdir(parent)).toEqual([]);
   });
 });

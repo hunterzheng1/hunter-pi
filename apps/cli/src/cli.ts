@@ -38,7 +38,7 @@ import {
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
-import { runTask6ManagedChange } from "@hunter-pi/managed-change";
+import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -627,7 +627,7 @@ async function managedFixtureCommand(
       : { runProcess: dependencies.runTask6Process }),
     now: dependencies.now,
     processTimeoutMs: 300_000,
-    maximumOutputBytes: 262_144,
+    maximumOutputBytes: task6OutputCaptureLimits.engine,
   });
   const environmentFingerprint = sha256(
     JSON.stringify({

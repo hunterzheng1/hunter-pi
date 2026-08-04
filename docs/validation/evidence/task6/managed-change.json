@@ -1,7 +1,7 @@
 {
   "schemaVersion": "hpi-task6-managed-change.v1",
-  "observedAt": "2026-08-04T05:33:41.188Z",
-  "taskResult": "GO",
+  "observedAt": "2026-08-04T06:08:36.319Z",
+  "taskResult": "STOP",
   "productSource": {
     "commit": "164fc28ac423ac3cdccf91b9a7f0c36ca51612df",
     "state": "CLEAN"
@@ -567,6 +567,30 @@
       }
     }
   ],
+  "resourceAccounting": {
+    "status": "NOT_PROVEN",
+    "budgets": {
+      "maxAgentTurns": 1,
+      "maxExternalOperations": 4,
+      "maxCommands": 2,
+      "maxOutputBytes": 262144
+    },
+    "captureLimits": {
+      "engine": 262144,
+      "verificationAttempt1": 262144,
+      "verificationAttempt2": 262144
+    },
+    "capturedOutputBytes": {
+      "verificationAttempt1": 17,
+      "verificationAttempt2": 13
+    },
+    "consumed": {
+      "agentTurns": 1,
+      "externalOperations": 3,
+      "commands": 2
+    },
+    "unprovenReasons": ["ENGINE_OUTPUT_BYTES_MISSING", "OUTPUT_CAPTURE_LIMITS_EXCEED_RUN_BUDGET"]
+  },
   "finalSummary": {
     "attempts": [
       "att_task6-1:execution=INCOMPLETE,verification=FAILED",
@@ -578,11 +602,12 @@
       "Task 6 uses a disposable fixture only; real repositories remain prohibited until Task 7.",
       "The Pi Host has PROCESS_AUTHORITY and Task 7 process-tree containment is NOT_PROVEN.",
       "Interrupt, Checkpoint, reconciliation, and resume remain NOT_PROVEN in the Task 6 JSON Host.",
-      "Remote Windows and Ubuntu CI remain PENDING until this exact source is pushed."
+      "Remote Windows and Ubuntu CI remain PENDING until this exact source is pushed.",
+      "The retained real run did not record Pi captured-output bytes and used three independent 262144-byte capture limits, so its cumulative output budget is NOT_PROVEN."
     ]
   },
   "scorecard": {
-    "zeroFalseReady": true,
+    "zeroFalseReady": false,
     "sourceLoss": false,
     "secretLeak": false,
     "failedAttemptPreserved": true,
@@ -590,7 +615,8 @@
     "unplannedInterventions": 0,
     "overheadMs": 462.1939000000002,
     "overheadWithinLimit": true,
-    "summaryComplete": true
+    "summaryComplete": true,
+    "resourceBudgetReconciled": false
   },
   "cleanup": {
     "status": "PASS"

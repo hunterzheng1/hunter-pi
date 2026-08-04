@@ -103,6 +103,7 @@ Interface rules:
 - Expected target validation compares the complete namespace/reference identity and expired operations fail closed.
 - Capability is calculated from probe receipts, never product names.
 - Process, terminal, model, and session facts are Observations.
+- Provider-neutral `resourceUsage` may accompany an Observation; captured-output Observations report locally measured byte deltas so the Workflow can reconcile one cumulative Run budget. Missing measurements remain `NOT_PROVEN` and cannot complete a gated Change.
 - Pi-private identifiers live only in adapter-owned external-reference payloads.
 
 ### Pi Host adapter

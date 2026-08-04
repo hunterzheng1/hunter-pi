@@ -68,6 +68,7 @@ interface Task6Host {
     readonly cursor: number;
     readonly kind: string;
     readonly summary?: string;
+    readonly resourceUsage?: { readonly outputBytes?: number };
   }>;
 }
 
@@ -187,6 +188,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
       "AGENT_RETURNED",
       "PROCESS_EXITED",
     ]);
+    expect(observations[0]?.resourceUsage).toEqual({ outputBytes: 128 });
     expect(JSON.stringify({ firstReceipt, observations })).not.toContain(prompt);
   });
 
@@ -249,5 +251,102 @@ describe("Task 6 fixed Pi Engine Host", () => {
     await expect(
       host.send(start.handle, { ...original, content: "different payload" }),
     ).rejects.toThrow(/replayed with a different fingerprint or payload/u);
+  });
+
+  it("coalesces an in-flight replay and rejects a conflicting payload before a second process starts", async () => {
+    const Host = requireHostConstructor();
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-host-");
+    cleanupRoots.push(root);
+    let releaseProcess = (): void => {
+      throw new Error("process gate was not initialized");
+    };
+    let reportProcessStarted = (): void => {
+      throw new Error("process-start signal was not initialized");
+    };
+    const processGate = new Promise<void>((resolve) => {
+      releaseProcess = resolve;
+    });
+    const processStarted = new Promise<void>((resolve) => {
+      reportProcessStarted = resolve;
+    });
+    let processRuns = 0;
+    const host = new Host({
+      launchPlanForWorkspace: (workspace) =>
+        Promise.resolve({
+          executable: process.execPath,
+          arguments: ["pi-cli.js"],
+          cwd: workspace,
+          environment: {},
+        }),
+      runProcess: async () => {
+        processRuns += 1;
+        reportProcessStarted();
+        await processGate;
+        return {
+          exitCode: 0,
+          timedOut: false,
+          framingValid: true,
+          eventTypes: ["agent_end"],
+          recordCount: 1,
+          stdoutDigest: fingerprintA,
+          stderrDigest: fingerprintB,
+          capturedBytes: 16,
+          outputTruncated: false,
+        };
+      },
+      now: () => observedAt,
+      processTimeoutMs: 30_000,
+      maximumOutputBytes: 262_144,
+    });
+    const start = await host.start(
+      startAttemptRequestSchema.parse({
+        schemaVersion: "1.0.0",
+        operationId: "op_task6-start",
+        fingerprint: fingerprintA,
+        expectedTarget: { namespace: "workspace", reference: root },
+        deadline: "2026-08-04T00:01:00.000Z",
+        cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+        runId: "run_task6",
+        attemptId: "att_task6-2",
+        planRevisionId: "plan_task6",
+        workspaceReference: root,
+      }),
+    );
+    const input = engineInputSchema.parse({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-send",
+      fingerprint: fingerprintB,
+      expectedTarget: {
+        namespace: "engine-handle",
+        reference: start.handle.engineHandleId,
+      },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      kind: "USER_INPUT",
+      content: "one bounded payload",
+    });
+
+    const first = host.send(start.handle, input);
+    await processStarted;
+    const replay = host.send(start.handle, input);
+    const conflict = host.send(start.handle, { ...input, content: "conflicting payload" });
+    await Promise.resolve();
+    releaseProcess();
+    const [firstResult, replayResult, conflictResult] = await Promise.allSettled([
+      first,
+      replay,
+      conflict,
+    ]);
+
+    expect(processRuns).toBe(1);
+    expect(firstResult.status).toBe("fulfilled");
+    expect(replayResult).toEqual(firstResult);
+    expect(conflictResult.status).toBe("rejected");
+    if (conflictResult.status !== "rejected") {
+      throw new Error("the conflicting replay unexpectedly fulfilled");
+    }
+    const conflictReason: unknown = conflictResult.reason;
+    expect(conflictReason).toBeInstanceOf(Error);
+    expect((conflictReason as Error).name).toBe("PiOperationReplayConflictError");
   });
 });

@@ -202,6 +202,8 @@ Preregistered Task 6 scorecard:
 
 Outcome is deterministic: **GO** only if every item passes; **REVISE** if all zero-tolerance and correctness conditions pass but the intervention or overhead target misses; **STOP** on any zero-tolerance failure or a required public-interface blocker. Real user repositories remain prohibited until Task 7 passes its containment gates.
 
+Implementation status on 2026-08-04: **STOP / cumulative output budget NOT_PROVEN**. The first real disposable-fixture run preserved the required execution, verification, review, and cleanup history, but did not retain Pi captured-output bytes and assigned the full 262144-byte Run limit independently to Pi and each verifier. The prior local `GO` is therefore superseded. The correction partitions the same frozen total into 229376 bytes for Pi and 16384 bytes for each verifier, records provider-neutral output usage, sums every component, and makes failed or missing reconciliation a blocking finding. A corrected real request and remote CI have not yet run.
+
 ## Task 7 — Git worktree, leases, and managed process host
 
 **Goal:** make Managed Change safe for normal repositories and long commands.

@@ -81,6 +81,12 @@ interface StoredOperation {
   reconciliation?: OperationReconciliationReceipt;
 }
 
+interface PendingOperation {
+  readonly fingerprint: string;
+  readonly payloadSignature: string;
+  readonly receipt: Promise<OperationReceipt>;
+}
+
 interface HandleState {
   readonly handle: EngineHandle;
   readonly launchPlan: PiLaunchPlan;
@@ -205,6 +211,7 @@ export class Task6PiEngineHost implements EngineHost {
   readonly #processTimeoutMs: number;
   readonly #maximumOutputBytes: number;
   readonly #operations = new Map<OperationId, StoredOperation>();
+  readonly #pendingOperations = new Map<OperationId, PendingOperation>();
   readonly #handles = new Map<string, HandleState>();
 
   public constructor(options: Task6PiEngineHostOptions) {
@@ -322,65 +329,90 @@ export class Task6PiEngineHost implements EngineHost {
       payloadSignature,
     );
     if (existing !== undefined) return existing;
-
-    const deadlineRemaining = Date.parse(parsed.deadline) - Date.parse(this.#now());
-    const processResult = task6PiProcessResultSchema.parse(
-      await this.#runProcess({
-        plan: state.launchPlan,
-        prompt: parsed.content,
-        timeoutMs: Math.max(
-          1,
-          Math.min(this.#processTimeoutMs, parsed.cancellationPolicy.timeoutMs, deadlineRemaining),
-        ),
-        maximumOutputBytes: this.#maximumOutputBytes,
-      }),
+    const pending = this.#existingPendingReceipt(
+      parsed.operationId,
+      parsed.fingerprint,
+      payloadSignature,
     );
-    const observations: EngineObservation[] = [
-      engineObservationSchema.parse({
-        schemaVersion: "1.0.0",
-        cursor: 1,
-        attemptId: state.handle.attemptId,
-        kind: "OUTPUT_CAPTURED",
-        observedAt: this.#now(),
-        summary: `Pi JSON emitted ${String(processResult.recordCount)} bounded records; content retained by digest only.`,
-      }),
-    ];
-    if (processResult.framingValid && processResult.eventTypes.includes("agent_end")) {
+    if (pending !== undefined) return pending;
+
+    const execution = (async (): Promise<OperationReceipt> => {
+      const deadlineRemaining = Date.parse(parsed.deadline) - Date.parse(this.#now());
+      const processResult = task6PiProcessResultSchema.parse(
+        await this.#runProcess({
+          plan: state.launchPlan,
+          prompt: parsed.content,
+          timeoutMs: Math.max(
+            1,
+            Math.min(
+              this.#processTimeoutMs,
+              parsed.cancellationPolicy.timeoutMs,
+              deadlineRemaining,
+            ),
+          ),
+          maximumOutputBytes: this.#maximumOutputBytes,
+        }),
+      );
+      const observations: EngineObservation[] = [
+        engineObservationSchema.parse({
+          schemaVersion: "1.0.0",
+          cursor: 1,
+          attemptId: state.handle.attemptId,
+          kind: "OUTPUT_CAPTURED",
+          observedAt: this.#now(),
+          summary: `Pi JSON emitted ${String(processResult.recordCount)} bounded records; content retained by digest only.`,
+          resourceUsage: { outputBytes: processResult.capturedBytes },
+        }),
+      ];
+      if (processResult.framingValid && processResult.eventTypes.includes("agent_end")) {
+        observations.push(
+          engineObservationSchema.parse({
+            schemaVersion: "1.0.0",
+            cursor: observations.length + 1,
+            attemptId: state.handle.attemptId,
+            kind: "AGENT_RETURNED",
+            observedAt: this.#now(),
+            summary: "Pi emitted agent_end; independent Verification is still required.",
+          }),
+        );
+      }
       observations.push(
         engineObservationSchema.parse({
           schemaVersion: "1.0.0",
           cursor: observations.length + 1,
           attemptId: state.handle.attemptId,
-          kind: "AGENT_RETURNED",
+          kind: "PROCESS_EXITED",
           observedAt: this.#now(),
-          summary: "Pi emitted agent_end; independent Verification is still required.",
+          summary: `Pi process exit was observed with code ${String(processResult.exitCode)}; it is not a success result.`,
         }),
       );
-    }
-    observations.push(
-      engineObservationSchema.parse({
-        schemaVersion: "1.0.0",
-        cursor: observations.length + 1,
-        attemptId: state.handle.attemptId,
-        kind: "PROCESS_EXITED",
-        observedAt: this.#now(),
-        summary: `Pi process exit was observed with code ${String(processResult.exitCode)}; it is not a success result.`,
-      }),
-    );
-    state.observations = observations;
-    const applied =
-      !processResult.timedOut &&
-      !processResult.outputTruncated &&
-      processResult.framingValid &&
-      processResult.exitCode === 0 &&
-      processResult.eventTypes.includes("agent_end");
-    return this.#storeReceipt(
-      parsed.operationId,
-      parsed.fingerprint,
+      state.observations = observations;
+      const applied =
+        !processResult.timedOut &&
+        !processResult.outputTruncated &&
+        processResult.framingValid &&
+        processResult.exitCode === 0 &&
+        processResult.eventTypes.includes("agent_end");
+      return this.#storeReceipt(
+        parsed.operationId,
+        parsed.fingerprint,
+        payloadSignature,
+        applied ? "APPLIED" : "UNKNOWN",
+        applied ? ["agent-operation-returned"] : [],
+      );
+    })();
+    this.#pendingOperations.set(parsed.operationId, {
+      fingerprint: parsed.fingerprint,
       payloadSignature,
-      applied ? "APPLIED" : "UNKNOWN",
-      applied ? ["agent-operation-returned"] : [],
-    );
+      receipt: execution,
+    });
+    try {
+      return await execution;
+    } finally {
+      if (this.#pendingOperations.get(parsed.operationId)?.receipt === execution) {
+        this.#pendingOperations.delete(parsed.operationId);
+      }
+    }
   }
 
   public async *observe(
@@ -522,6 +554,19 @@ export class Task6PiEngineHost implements EngineHost {
       throw new PiOperationReplayConflictError(operationId);
     }
     return operationReceiptSchema.parse(existing.receipt);
+  }
+
+  #existingPendingReceipt(
+    operationId: OperationId,
+    fingerprint: string,
+    payloadSignature: string,
+  ): Promise<OperationReceipt> | undefined {
+    const pending = this.#pendingOperations.get(operationId);
+    if (pending === undefined) return undefined;
+    if (pending.fingerprint !== fingerprint || pending.payloadSignature !== payloadSignature) {
+      throw new PiOperationReplayConflictError(operationId);
+    }
+    return pending.receipt;
   }
 
   #storeReceipt(

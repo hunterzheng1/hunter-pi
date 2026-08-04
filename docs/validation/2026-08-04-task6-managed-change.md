@@ -7,7 +7,7 @@
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Provider authentication metadata: **DETECTED**
 - Real Provider request: **DETECTED within the exact disposable fixture run**
-- Task result: **LOCAL GO / REMOTE CI PENDING**
+- Task result: **STOP — CUMULATIVE OUTPUT BUDGET NOT_PROVEN / REMOTE CI PENDING**
 
 ## Frozen outcome and non-goals
 
@@ -49,6 +49,8 @@ Frozen loop limits:
 - `maxOutputBytes = 262144`;
 - stop on user input and workspace drift.
 
+The post-review implementation keeps that total unchanged and partitions capture ceilings so execution cannot independently spend the same budget three times: Pi receives 229376 bytes, Attempt 1 Verification receives 16384 bytes, and Attempt 2 Verification receives 16384 bytes. Provider-neutral Engine Observations now retain measured output usage; the runner sums all three components and blocks `READY` when measurement is missing or any component/cumulative limit is exceeded.
+
 ## Required automated checks
 
 | Check | Exact definition | Required |
@@ -89,8 +91,10 @@ The one authorized request ran from the clean packaged product source `164fc28ac
 - Attempt 2: `RETURNED / PASSED` after independent `node verify.mjs` execution;
 - deterministic review: `PASS`, zero blocking findings, no extra mutation;
 - fixture cleanup: `PASS`;
-- scorecard: zero false `READY`, source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `462.1939 ms`;
+- original scorecard facts: no source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `462.1939 ms`;
 - full local `npm run verify`: `PASS` on the exact implementation source before the request;
 - Windows/Ubuntu remote CI: `PENDING` until this branch is pushed.
 
-The committed Evidence artifact SHA-256 is `6fc88c7e86bdcd5605c98adba12e9a2a007f7a45f138ed29a38b4b221a4ee718`. Its strict schema, retained-content hashes, path privacy, prompt exclusion, and credential-shaped text checks pass locally. Task 6 therefore has a local `GO`; real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.
+Independent review found a proof gap after that run: the artifact retained the two verifier outputs (17 and 13 bytes) but not Pi's captured byte count, while the old source configured 262144 bytes separately for Pi and both verifiers. The original projection and zero-finding review remain preserved as historical facts, but they are insufficient to establish the frozen cumulative resource limit; treating that projection as deliverable would be a false `READY`.
+
+The corrected committed Evidence artifact SHA-256 is `dc5db8f72124f0b30f430d60cc8c464637f15f50bd39646544169da1047ef195`. It records `taskResult=STOP`, `resourceAccounting.status=NOT_PROVEN`, both exact proof gaps, the unchanged successful Provider/Attempt/check/review/cleanup facts, and `remoteCi=PENDING`. The corrected source passed `npm run verify` locally with 31 test files / 230 tests plus lint, typecheck, strict compiler, build, format, package smoke, clean-install smoke, and the provider-independent Pi probe; that probe correctly reports `RealProvider=NOT_PROVEN`. A second real request has not run. No Agent byte count was inferred or fabricated. A new real request requires separate owner authorization, and real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.

@@ -58,7 +58,17 @@ export interface RunTask6ManagedChangeOptions {
   readonly monotonicNow?: () => number;
 }
 
-const maximumOutputBytes = 262_144;
+export const task6ResourceBudgets = Object.freeze({
+  maxAgentTurns: 1,
+  maxExternalOperations: 4,
+  maxCommands: 2,
+  maxOutputBytes: 262_144,
+});
+export const task6OutputCaptureLimits = Object.freeze({
+  engine: 229_376,
+  verificationAttempt1: 16_384,
+  verificationAttempt2: 16_384,
+});
 const task6Attempt1Id = attemptIdSchema.parse("att_task6-1");
 const task6Attempt2Id = attemptIdSchema.parse("att_task6-2");
 const task6AgentStepId = stepIdSchema.parse("step_task6-agent");
@@ -247,12 +257,7 @@ export async function runTask6ManagedChange(
         maxIterations: 2,
         maxElapsedMs: 600_000,
         repeatedFailureLimit: 2,
-        resourceBudgets: {
-          maxAgentTurns: 1,
-          maxExternalOperations: 4,
-          maxCommands: 2,
-          maxOutputBytes: maximumOutputBytes,
-        },
+        resourceBudgets: task6ResourceBudgets,
         stopOnUserInput: true,
         stopOnWorkspaceDrift: true,
       },
@@ -325,7 +330,7 @@ export async function runTask6ManagedChange(
       repository: fixture.repository,
       environmentFingerprint: fingerprintSchema.parse(options.environmentFingerprint),
       timeoutMs: 30_000,
-      maximumOutputBytes,
+      maximumOutputBytes: task6OutputCaptureLimits.verificationAttempt1,
       now,
     });
     excludedRuntimeMs += monotonicNow() - externalStartedAt;
@@ -486,7 +491,7 @@ export async function runTask6ManagedChange(
       repository: fixture.repository,
       environmentFingerprint: fingerprintSchema.parse(options.environmentFingerprint),
       timeoutMs: 30_000,
-      maximumOutputBytes,
+      maximumOutputBytes: task6OutputCaptureLimits.verificationAttempt2,
       now,
     });
     excludedRuntimeMs += monotonicNow() - externalStartedAt;
@@ -508,6 +513,60 @@ export async function runTask6ManagedChange(
       receipt: secondVerification.receipt,
     });
 
+    const engineOutputObservations = engineObservations.filter(
+      (observation) => observation.kind === "OUTPUT_CAPTURED",
+    );
+    const engineOutputMeasured =
+      engineOutputObservations.length > 0 &&
+      engineOutputObservations.every(
+        (observation) => observation.resourceUsage?.outputBytes !== undefined,
+      );
+    const engineOutputBytes = engineOutputMeasured
+      ? engineOutputObservations.reduce(
+          (total, observation) => total + (observation.resourceUsage?.outputBytes ?? 0),
+          0,
+        )
+      : undefined;
+    const capturedOutputBytes = {
+      ...(engineOutputBytes === undefined ? {} : { engine: engineOutputBytes }),
+      verificationAttempt1: firstVerification.receipt.output.capturedBytes,
+      verificationAttempt2: secondVerification.receipt.output.capturedBytes,
+    };
+    const consumedOutputBytes =
+      engineOutputBytes === undefined
+        ? undefined
+        : engineOutputBytes +
+          capturedOutputBytes.verificationAttempt1 +
+          capturedOutputBytes.verificationAttempt2;
+    const unprovenReasons = [
+      ...(engineOutputBytes === undefined ? (["ENGINE_OUTPUT_BYTES_MISSING"] as const) : []),
+      ...(task6OutputCaptureLimits.engine +
+        task6OutputCaptureLimits.verificationAttempt1 +
+        task6OutputCaptureLimits.verificationAttempt2 >
+      task6ResourceBudgets.maxOutputBytes
+        ? (["OUTPUT_CAPTURE_LIMITS_EXCEED_RUN_BUDGET"] as const)
+        : []),
+    ];
+    const budgetExceeded =
+      (consumedOutputBytes !== undefined &&
+        consumedOutputBytes > task6ResourceBudgets.maxOutputBytes) ||
+      (engineOutputBytes !== undefined && engineOutputBytes > task6OutputCaptureLimits.engine) ||
+      capturedOutputBytes.verificationAttempt1 > task6OutputCaptureLimits.verificationAttempt1 ||
+      capturedOutputBytes.verificationAttempt2 > task6OutputCaptureLimits.verificationAttempt2;
+    const resourceAccounting: Task6ManagedChangeEvidence["resourceAccounting"] = {
+      status: budgetExceeded ? "EXCEEDED" : unprovenReasons.length > 0 ? "NOT_PROVEN" : "PASS",
+      budgets: task6ResourceBudgets,
+      captureLimits: task6OutputCaptureLimits,
+      capturedOutputBytes,
+      consumed: {
+        agentTurns: 1,
+        externalOperations: 3,
+        commands: 2,
+        ...(consumedOutputBytes === undefined ? {} : { outputBytes: consumedOutputBytes }),
+      },
+      unprovenReasons,
+    };
+
     const review = await inspectTask6FixtureForReview(fixture, promotion);
     let reviewEvidence: EvidenceEnvelope | undefined;
     if (secondVerification.receipt.outcome === "PASS") {
@@ -527,6 +586,17 @@ export async function runTask6ManagedChange(
                 scope: "agent-operation-outcome",
                 rationale:
                   "The real Agent operation did not produce both an APPLIED Receipt and AGENT_RETURNED Observation.",
+                evidenceIds: [reviewEvidenceId],
+                confidence: 1,
+              },
+            ]),
+        ...(resourceAccounting.status === "PASS"
+          ? []
+          : [
+              {
+                severity: "P1" as const,
+                scope: "resource-budget",
+                rationale: `Task 6 cumulative resource accounting is ${resourceAccounting.status}.`,
                 evidenceIds: [reviewEvidenceId],
                 confidence: 1,
               },
@@ -647,6 +717,7 @@ export async function runTask6ManagedChange(
       lifecycleAfterAgentReturn,
       projection,
       evidence,
+      resourceAccounting,
       finalSummary: summary,
       remoteCi: "PENDING" as const,
     };
@@ -667,6 +738,7 @@ export async function runTask6ManagedChange(
       overheadMs,
       overheadWithinLimit,
       summaryComplete,
+      resourceBudgetReconciled: resourceAccounting.status === "PASS",
     };
     const correctnessPassed =
       projection.change.lifecycle === "READY" &&
@@ -675,7 +747,8 @@ export async function runTask6ManagedChange(
       !scorecard.secretLeak &&
       failedAttemptPreserved &&
       fixbackPass &&
-      summaryComplete;
+      summaryComplete &&
+      scorecard.resourceBudgetReconciled;
     const taskResult = correctnessPassed
       ? overheadWithinLimit && scorecard.unplannedInterventions <= 2
         ? "GO"

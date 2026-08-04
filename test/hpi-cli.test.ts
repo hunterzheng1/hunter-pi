@@ -542,6 +542,7 @@ describe("hpi command", () => {
     ): Promise<Task6PiProcessResult> => {
       processRequests += 1;
       expect(request.plan.cwd).not.toBe(dependencies.cwd);
+      expect(request.maximumOutputBytes).toBe(229_376);
       expect(request.plan.environment).toMatchObject({
         HUNTER_PI_MODE: "QUICK",
         HUNTER_PI_PERMISSION_PROFILE: "FULL_ACCESS",

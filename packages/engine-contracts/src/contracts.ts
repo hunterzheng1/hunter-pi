@@ -9,6 +9,7 @@ import {
   operationIdSchema,
   operationReceiptSchema,
   planRevisionIdSchema,
+  resourceUsageSchema,
   runIdSchema,
   schemaVersionSchema,
   timestampSchema,
@@ -174,6 +175,7 @@ export const engineObservationSchema = z.strictObject({
   kind: engineObservationKindSchema,
   observedAt: timestampSchema,
   summary: z.string().trim().min(1).max(4_096).optional(),
+  resourceUsage: resourceUsageSchema.optional(),
 });
 export type EngineObservation = z.infer<typeof engineObservationSchema>;
 

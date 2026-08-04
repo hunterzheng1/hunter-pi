@@ -26,6 +26,95 @@ const normalizedFixturePathSchema = z
     "expected a normalized fixture-relative path",
   );
 
+const nonnegativeIntegerSchema = z.number().int().nonnegative();
+const positiveIntegerSchema = z.number().int().positive();
+const task6ResourceAccountingSchema = z
+  .strictObject({
+    status: z.enum(["PASS", "NOT_PROVEN", "EXCEEDED"]),
+    budgets: z.strictObject({
+      maxAgentTurns: positiveIntegerSchema,
+      maxExternalOperations: positiveIntegerSchema,
+      maxCommands: positiveIntegerSchema,
+      maxOutputBytes: positiveIntegerSchema,
+    }),
+    captureLimits: z.strictObject({
+      engine: positiveIntegerSchema,
+      verificationAttempt1: positiveIntegerSchema,
+      verificationAttempt2: positiveIntegerSchema,
+    }),
+    capturedOutputBytes: z.strictObject({
+      engine: nonnegativeIntegerSchema.optional(),
+      verificationAttempt1: nonnegativeIntegerSchema,
+      verificationAttempt2: nonnegativeIntegerSchema,
+    }),
+    consumed: z.strictObject({
+      agentTurns: nonnegativeIntegerSchema,
+      externalOperations: nonnegativeIntegerSchema,
+      commands: nonnegativeIntegerSchema,
+      outputBytes: nonnegativeIntegerSchema.optional(),
+    }),
+    unprovenReasons: z.array(
+      z.enum(["ENGINE_OUTPUT_BYTES_MISSING", "OUTPUT_CAPTURE_LIMITS_EXCEED_RUN_BUDGET"]),
+    ),
+  })
+  .superRefine((accounting, context) => {
+    const engineOutputMissing = accounting.capturedOutputBytes.engine === undefined;
+    const captureLimitTotal =
+      accounting.captureLimits.engine +
+      accounting.captureLimits.verificationAttempt1 +
+      accounting.captureLimits.verificationAttempt2;
+    const captureLimitsExceedBudget = captureLimitTotal > accounting.budgets.maxOutputBytes;
+    const reasons = new Set(accounting.unprovenReasons);
+    if (reasons.size !== accounting.unprovenReasons.length) {
+      context.addIssue({ code: "custom", message: "resource-accounting reasons must be unique" });
+    }
+    if (engineOutputMissing !== reasons.has("ENGINE_OUTPUT_BYTES_MISSING")) {
+      context.addIssue({
+        code: "custom",
+        message: "engine output measurement and its NOT_PROVEN reason must agree",
+      });
+    }
+    if (captureLimitsExceedBudget !== reasons.has("OUTPUT_CAPTURE_LIMITS_EXCEED_RUN_BUDGET")) {
+      context.addIssue({
+        code: "custom",
+        message: "capture-limit partition and its NOT_PROVEN reason must agree",
+      });
+    }
+
+    const measuredOutputBytes =
+      accounting.capturedOutputBytes.engine === undefined
+        ? undefined
+        : accounting.capturedOutputBytes.engine +
+          accounting.capturedOutputBytes.verificationAttempt1 +
+          accounting.capturedOutputBytes.verificationAttempt2;
+    if (measuredOutputBytes !== accounting.consumed.outputBytes) {
+      context.addIssue({
+        code: "custom",
+        message: "cumulative output usage must equal every measured output component",
+      });
+    }
+
+    const budgetExceeded =
+      accounting.consumed.agentTurns > accounting.budgets.maxAgentTurns ||
+      accounting.consumed.externalOperations > accounting.budgets.maxExternalOperations ||
+      accounting.consumed.commands > accounting.budgets.maxCommands ||
+      (accounting.consumed.outputBytes !== undefined &&
+        accounting.consumed.outputBytes > accounting.budgets.maxOutputBytes) ||
+      (accounting.capturedOutputBytes.engine !== undefined &&
+        accounting.capturedOutputBytes.engine > accounting.captureLimits.engine) ||
+      accounting.capturedOutputBytes.verificationAttempt1 >
+        accounting.captureLimits.verificationAttempt1 ||
+      accounting.capturedOutputBytes.verificationAttempt2 >
+        accounting.captureLimits.verificationAttempt2;
+    const expectedStatus = budgetExceeded ? "EXCEEDED" : reasons.size > 0 ? "NOT_PROVEN" : "PASS";
+    if (accounting.status !== expectedStatus) {
+      context.addIssue({
+        code: "custom",
+        message: `resource-accounting status must be ${expectedStatus}`,
+      });
+    }
+  });
+
 export const task6ManagedChangeEvidenceSchema = z
   .strictObject({
     schemaVersion: z.literal("hpi-task6-managed-change.v1"),
@@ -60,6 +149,7 @@ export const task6ManagedChangeEvidenceSchema = z
     lifecycleAfterAgentReturn: z.enum(["VERIFYING", "NOT_OBSERVED"]),
     projection: runProjectionSchema,
     evidence: z.array(evidenceEnvelopeSchema).min(1),
+    resourceAccounting: task6ResourceAccountingSchema,
     finalSummary: z.strictObject({
       attempts: z.array(z.string().trim().min(1)),
       checks: z.array(z.string().trim().min(1)),
@@ -76,6 +166,7 @@ export const task6ManagedChangeEvidenceSchema = z
       overheadMs: z.number().nonnegative(),
       overheadWithinLimit: z.boolean(),
       summaryComplete: z.boolean(),
+      resourceBudgetReconciled: z.boolean(),
     }),
     cleanup: z.strictObject({
       status: z.enum(["PASS", "BLOCKED"]),
@@ -83,6 +174,15 @@ export const task6ManagedChangeEvidenceSchema = z
     remoteCi: z.literal("PENDING"),
   })
   .superRefine((artifact, context) => {
+    if (
+      artifact.scorecard.resourceBudgetReconciled !==
+      (artifact.resourceAccounting.status === "PASS")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "scorecard and resource-accounting status must agree",
+      });
+    }
     const correctnessPassed =
       artifact.projection.change.lifecycle === "READY" &&
       artifact.scorecard.zeroFalseReady &&
@@ -90,18 +190,36 @@ export const task6ManagedChangeEvidenceSchema = z
       !artifact.scorecard.secretLeak &&
       artifact.scorecard.failedAttemptPreserved &&
       artifact.scorecard.fixbackPass &&
-      artifact.scorecard.summaryComplete;
+      artifact.scorecard.summaryComplete &&
+      artifact.scorecard.resourceBudgetReconciled;
+    const deliveryTargetPassed =
+      artifact.scorecard.overheadWithinLimit && artifact.scorecard.unplannedInterventions <= 2;
+    const cleanupPassed = artifact.cleanup.status === "PASS";
     if (
       artifact.taskResult === "GO" &&
-      (!correctnessPassed || !artifact.scorecard.overheadWithinLimit)
+      (!correctnessPassed || !deliveryTargetPassed || !cleanupPassed)
     ) {
       context.addIssue({ code: "custom", message: "GO requires every Task 6 scorecard gate" });
     }
-    if (artifact.taskResult === "REVISE" && !correctnessPassed) {
-      context.addIssue({ code: "custom", message: "REVISE requires correctness to pass" });
+    if (
+      artifact.taskResult === "REVISE" &&
+      (!correctnessPassed || deliveryTargetPassed || !cleanupPassed)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "REVISE requires correctness and cleanup to pass but a delivery target to miss",
+      });
     }
-    if (artifact.taskResult === "STOP" && artifact.projection.change.lifecycle === "READY") {
-      context.addIssue({ code: "custom", message: "a READY Task 6 result is GO or REVISE" });
+    if (
+      artifact.taskResult === "STOP" &&
+      correctnessPassed &&
+      deliveryTargetPassed &&
+      cleanupPassed
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "STOP requires a correctness, cleanup, or delivery-target failure",
+      });
     }
   });
 export type Task6ManagedChangeEvidence = z.infer<typeof task6ManagedChangeEvidenceSchema>;

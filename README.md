@@ -1,10 +1,10 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 6 已在自动创建的临时 Git fixture 中执行一次真实 Managed Change，但独立评审发现该次运行没有保留 Agent 输出字节数，因而累计资源预算仍为 `NOT_PROVEN`；这不代表真实用户仓库或生产使用已安全。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 6 已用修正后的精确干净制品在自动创建的临时 Git fixture 中完成一次资源可对账的真实 Managed Change；这仍不代表真实用户仓库或生产使用已安全。
 
 ## 当前状态
 
-**Task 6 当前为 `STOP（累计输出预算 NOT_PROVEN）/ 远端 CI PENDING`：精确代码 `164fc28ac423ac3cdccf91b9a7f0c36ca51612df` 的真实临时 fixture 请求确实保留了失败历史，并在 Agent 返回后另行通过命令检查与确定性审查；但旧制品分别给 Agent 和两次验证各配置了完整的 262144 字节上限，且证据未保存 Agent 实际字节数，所以不能继续宣称本地 `GO`。修正版已把总预算切分并增加累计对账，仍需一次新的明确授权真实请求验证。Task 7 尚未开始，不得把该入口用于真实项目。**
+**Task 6 当前为本地 `GO / 远端 CI PENDING`：精确干净代码 `e36ee52764065cea02982962e2f84ff9ed3d0034` 的单次授权真实请求只修改临时 fixture 的 `result.txt`；失败 Attempt 保留，Agent 返回后才运行独立命令检查与确定性审查，累计输出 90506 / 262144 字节并完成对账，清理通过。旧运行的资源证据缺口仍保留在 Git 历史中。Task 7 尚未开始，不得把该入口用于真实项目。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。操作系统级进程树隔离、真实仓库 worktree/lease、恢复、第三方插件兼容和生产发布仍未被证明。
 

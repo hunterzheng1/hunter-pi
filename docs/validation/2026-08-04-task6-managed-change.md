@@ -7,11 +7,11 @@
 - Engine Release: `@earendil-works/pi-coding-agent@0.83.0`
 - Provider authentication metadata: **DETECTED**
 - Real Provider request: **DETECTED within the exact disposable fixture run**
-- Task result: **STOP — CUMULATIVE OUTPUT BUDGET NOT_PROVEN / REMOTE CI PENDING**
+- Task result: **LOCAL GO / REMOTE CI PENDING**
 
 ## Frozen outcome and non-goals
 
-Task 6 must run one disposable-fixture Managed Change through Define → Plan → Execute → Verify → Review → Ready while preserving an intentional failed Attempt and proving that a Pi return is only an Observation. The task may send one minimal real Provider request during the fixback Attempt after the owner's 2026-08-04 authorization.
+Task 6 must run one disposable-fixture Managed Change through Define → Plan → Execute → Verify → Review → Ready while preserving an intentional failed Attempt and proving that a Pi return is only an Observation. Each exact validation run may send only its separately authorized single minimal Provider request during the fixback Attempt; neither failure nor review correction permits an automatic retry.
 
 This task does not authorize a real-repository mutation, commit/push automation, third-party Plugin execution, publication, updater work, Windows installation/signing, a Pi/OMP fork, or a production-readiness claim.
 
@@ -84,17 +84,18 @@ Result is **GO** only if every item passes; **REVISE** if correctness and all ze
 
 ## Observed result
 
-The one authorized request ran from the clean packaged product source `164fc28ac423ac3cdccf91b9a7f0c36ca51612df` through `hpi managed fixture --json`. The Provider request returned an `APPLIED` operation receipt and Pi emitted 53 bounded JSON records. Those facts are evidence of this exact request only, not a general Provider capability or production-readiness claim.
+The first authorized request ran from clean packaged source `164fc28ac423ac3cdccf91b9a7f0c36ca51612df`. It preserved the required Provider, Attempt, Verification, review, and cleanup facts, but independent review found that it omitted Pi captured-output bytes and configured three separate full-run capture limits. Its premature local `GO` was replaced by `STOP / NOT_PROVEN`; the corrected artifact hash `dc5db8f72124f0b30f430d60cc8c464637f15f50bd39646544169da1047ef195` remains recoverable in Git history.
+
+After explicit separate authorization, exactly one corrected request ran from the clean packaged product source `e36ee52764065cea02982962e2f84ff9ed3d0034` through `hpi managed fixture --json`. The process exited zero with empty stderr, the Provider request returned an `APPLIED` operation receipt, and Pi emitted 53 bounded JSON records. No automatic retry occurred. Those facts are evidence of this exact request only, not a general Provider capability or production-readiness claim.
 
 - Attempt 1: `INCOMPLETE / FAILED`, preserved with its exact failure Evidence;
 - Agent return: observed while the Change was `VERIFYING`;
 - Attempt 2: `RETURNED / PASSED` after independent `node verify.mjs` execution;
 - deterministic review: `PASS`, zero blocking findings, no extra mutation;
 - fixture cleanup: `PASS`;
-- original scorecard facts: no source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `462.1939 ms`;
-- full local `npm run verify`: `PASS` on the exact implementation source before the request;
+- resource accounting: `PASS` — Pi 90476 bytes, Attempt 1 verifier 17 bytes, Attempt 2 verifier 13 bytes, 90506 / 262144 bytes total;
+- scorecard: zero false `READY`, source loss, secret leak, or overwritten failure; zero unplanned interventions; measured Hunter-only overhead `488.2329 ms`;
+- full local `npm run verify`: `PASS` on the exact implementation source before the corrected request (31 test files / 230 tests plus every non-Provider gate);
 - Windows/Ubuntu remote CI: `PENDING` until this branch is pushed.
 
-Independent review found a proof gap after that run: the artifact retained the two verifier outputs (17 and 13 bytes) but not Pi's captured byte count, while the old source configured 262144 bytes separately for Pi and both verifiers. The original projection and zero-finding review remain preserved as historical facts, but they are insufficient to establish the frozen cumulative resource limit; treating that projection as deliverable would be a false `READY`.
-
-The corrected committed Evidence artifact SHA-256 is `dc5db8f72124f0b30f430d60cc8c464637f15f50bd39646544169da1047ef195`. It records `taskResult=STOP`, `resourceAccounting.status=NOT_PROVEN`, both exact proof gaps, the unchanged successful Provider/Attempt/check/review/cleanup facts, and `remoteCi=PENDING`. The corrected source passed `npm run verify` locally with 31 test files / 230 tests plus lint, typecheck, strict compiler, build, format, package smoke, clean-install smoke, and the provider-independent Pi probe; that probe correctly reports `RealProvider=NOT_PROVEN`. A second real request has not run. No Agent byte count was inferred or fabricated. A new real request requires separate owner authorization, and real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.
+The committed corrected Evidence artifact SHA-256 is `573800451fc04de3aa251b75be19e7d28b010cb27aae7abd1443ec3428527092`. Its strict schema, retained-content hashes, path privacy, prompt exclusion, credential-shaped-text scan, source identity, output partition, cumulative usage, zero-finding review, and cleanup all pass locally. Task 6 therefore has a bounded local `GO`; remote CI is still `PENDING`, and real user repositories remain prohibited until Task 7 proves worktree, lease, process-containment, and cleanup gates.

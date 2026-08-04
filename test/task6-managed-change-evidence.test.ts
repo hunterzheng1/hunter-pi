@@ -15,17 +15,17 @@ function sha256(value: string): string {
 }
 
 describe("committed Task 6 Managed Change Evidence", () => {
-  it("preserves the exact real-run facts while downgrading the unproven output budget", async () => {
+  it("preserves the corrected exact GO result with complete cumulative output accounting", async () => {
     const raw = await readFile(artifactUrl, "utf8");
     const artifact = task6ManagedChangeEvidenceSchema.parse(JSON.parse(raw));
 
     expect(sha256(raw)).toBe(
-      "sha256:dc5db8f72124f0b30f430d60cc8c464637f15f50bd39646544169da1047ef195",
+      "sha256:573800451fc04de3aa251b75be19e7d28b010cb27aae7abd1443ec3428527092",
     );
     expect(artifact).toMatchObject({
-      taskResult: "STOP",
+      taskResult: "GO",
       productSource: {
-        commit: "164fc28ac423ac3cdccf91b9a7f0c36ca51612df",
+        commit: "e36ee52764065cea02982962e2f84ff9ed3d0034",
         state: "CLEAN",
       },
       provider: {
@@ -38,13 +38,25 @@ describe("committed Task 6 Managed Change Evidence", () => {
       remoteCi: "PENDING",
     });
     expect(artifact.resourceAccounting).toMatchObject({
-      status: "NOT_PROVEN",
-      capturedOutputBytes: { verificationAttempt1: 17, verificationAttempt2: 13 },
-      consumed: { agentTurns: 1, externalOperations: 3, commands: 2 },
-      unprovenReasons: ["ENGINE_OUTPUT_BYTES_MISSING", "OUTPUT_CAPTURE_LIMITS_EXCEED_RUN_BUDGET"],
+      status: "PASS",
+      captureLimits: {
+        engine: 229_376,
+        verificationAttempt1: 16_384,
+        verificationAttempt2: 16_384,
+      },
+      capturedOutputBytes: {
+        engine: 90_476,
+        verificationAttempt1: 17,
+        verificationAttempt2: 13,
+      },
+      consumed: {
+        agentTurns: 1,
+        externalOperations: 3,
+        commands: 2,
+        outputBytes: 90_506,
+      },
+      unprovenReasons: [],
     });
-    expect(artifact.resourceAccounting.capturedOutputBytes.engine).toBeUndefined();
-    expect(artifact.resourceAccounting.consumed.outputBytes).toBeUndefined();
     expect(artifact.projection.change.lifecycle).toBe("READY");
     expect(artifact.projection.attempts).toMatchObject([
       { executionStatus: "INCOMPLETE", verificationStatus: "FAILED" },
@@ -56,7 +68,7 @@ describe("committed Task 6 Managed Change Evidence", () => {
     ]);
     expect(artifact.projection.reviewReceipts[0]?.findings).toEqual([]);
     expect(artifact.scorecard).toMatchObject({
-      zeroFalseReady: false,
+      zeroFalseReady: true,
       sourceLoss: false,
       secretLeak: false,
       failedAttemptPreserved: true,
@@ -64,7 +76,7 @@ describe("committed Task 6 Managed Change Evidence", () => {
       unplannedInterventions: 0,
       overheadWithinLimit: true,
       summaryComplete: true,
-      resourceBudgetReconciled: false,
+      resourceBudgetReconciled: true,
     });
 
     for (const evidence of artifact.evidence) {
@@ -97,32 +109,6 @@ describe("committed Task 6 Managed Change Evidence", () => {
       task6ManagedChangeEvidenceSchema.safeParse({
         ...artifact,
         taskResult: "STOP",
-        resourceAccounting: {
-          status: "PASS",
-          budgets: artifact.resourceAccounting.budgets,
-          captureLimits: {
-            engine: 229_376,
-            verificationAttempt1: 16_384,
-            verificationAttempt2: 16_384,
-          },
-          capturedOutputBytes: {
-            engine: 128,
-            verificationAttempt1: 17,
-            verificationAttempt2: 13,
-          },
-          consumed: {
-            agentTurns: 1,
-            externalOperations: 3,
-            commands: 2,
-            outputBytes: 158,
-          },
-          unprovenReasons: [],
-        },
-        scorecard: {
-          ...artifact.scorecard,
-          zeroFalseReady: true,
-          resourceBudgetReconciled: true,
-        },
       }).success,
     ).toBe(false);
   });

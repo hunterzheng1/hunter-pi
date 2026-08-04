@@ -1,12 +1,12 @@
 # Hunter Pi
 
-Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 5 已实现首个 `hpi` npm 开发者预览、隔离配置、诚实 Doctor、Provider 披露、Safe Mode 和 Quick Session 启动边界，并完成精确制品的真实 Windows TUI 人工 smoke；真实 Provider 仍未验证。
+Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使用的终端编码 Agent。它以固定版本 Pi 为底层引擎，把 Hunter-Harness 的计划、执行、验证、证据、恢复和知识机制有选择地重新实现为自己的工作流内核，同时面向标准 Pi 扩展和 Pi Package 生态。Task 6 已用修正后的精确干净制品在自动创建的临时 Git fixture 中完成一次资源可对账的真实 Managed Change；这仍不代表真实用户仓库或生产使用已安全。
 
 ## 当前状态
 
-**Task 5 开发者预览已完成本机自动化、单制品安装烟测及精确代码合并 `0e58f539b713edb35f46fcbb55a63063dbbfa328` 的 Windows/Ubuntu CI，并已从该干净源码安装到当前 Windows 用户；真实 Windows TUI 人工 smoke 在绑定产品壳/Core 双 SHA 的限定范围内为 `DETECTED`，Provider 登录仍为 `BLOCKED`，真实请求仍为 `NOT_PROVEN`。**
+**Task 6 当前为有界 `GO / PR 双平台与聚合 Evidence 门禁 PASS`：精确干净代码 `e36ee52764065cea02982962e2f84ff9ed3d0034` 的单次授权真实请求只修改临时 fixture 的 `result.txt`；失败 Attempt 保留，Agent 返回后才运行独立命令检查与确定性审查，累计输出 90506 / 262144 字节并完成对账，清理通过。产品与 Evidence 提交 `502011b8a34e9773e415643b01a838c04d5582c5` 又通过 PR #15 的 Windows、Ubuntu 和跨平台身份门禁。旧运行的资源证据缺口仍保留在 Git 历史中。Task 7 尚未开始，不得把该入口用于真实项目。**
 
-本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 5 的单个 npm tarball 内含 Hunter 产品壳、Core Extension 与所需原创运行时代码，并把 Pi 0.83.0 作为精确依赖安装；打包身份分别绑定 `hpi.js` 产品壳与 Core 的 SHA-256，启动前会拒绝不匹配的字节；隔离全局安装 smoke 证明现有 raw `pi` 命令未被改写。操作系统网络隔离、真实 Provider、第三方插件兼容、Managed Change 和生产发布仍未被证明。
+本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。操作系统级进程树隔离、真实仓库 worktree/lease、恢复、第三方插件兼容和生产发布仍未被证明。
 
 ## 安装开发者预览
 
@@ -33,6 +33,7 @@ hpi
 - `hpi setup` 显示 Provider、endpoint 类别、离线解析的精确 origin、可能外发的数据类别、外部政策引用、未知的 retention/training 事实及 Hunter 可控的 telemetry/startup-network 设置；版本化 acknowledgement 会绑定这些值。拒绝确认会得到 `BLOCKED`，不会启动请求。
 - `hpi smoke tui` 只接受带精确产品壳与 Core SHA-256 的打包制品，并以 Safe Mode 打开 Pi。该模式阻断普通 prompt 输入，但 Pi 的部分内建斜杠命令先于 Extension hook 执行，因此所有 Provider 请求仍标记为 `NOT_PROVEN`。不要发送模型请求或运行其他内建命令；只运行 `/hunter-status`、检查 Hunter 头部后退出。退出码本身不算成功，随后明确确认只记录绑定 product/Engine/source/platform/configuration/`hpi.js` SHA/Core SHA 的本机可变人工 smoke acknowledgement，不是正式 Human Receipt；换产品壳或换 Core 后自动失效。
 - `hpi login` 打开 Pi 管理的登录界面；在 Pi 内运行 `/login`。Pi Engine 自主管理 credential storage；Hunter host 只接收并持久化 `configured/source` 元数据，不提取、复制或输出 token。真实登录或可能收费的请求需要用户自行决定。
+- `hpi managed fixture --json` 是 Task 6 的严格验收入口，只会创建并清理 Hunter 自有的临时 Git fixture；它会发起真实 Provider 请求，必须使用精确干净制品和已配置登录。Task 7 完成前不要把它解释为真实仓库 Managed Change。
 - 普通 `hpi` 在当前 Git 仓库启动 Quick Session。开发者预览会拒绝任何已启用用户插件；先运行 `hpi plugin doctor` 和 `hpi plugin disable <id>`。`hpi --safe-mode` 不加载用户插件、skills、prompt templates、themes 或 context files，只显式加载 Core，并拦截 Agent 工具写入与 `!` 直接 shell；它不是操作系统沙箱。Core 会对 `.envrc`、`secrets.json`、`token.json`、`service-account.json` 等明确的 credential-like 路径要求确认（Safe Mode 阻断），即使选择 Full Access 也不会预批准；但它不能仅凭路径识别任意文件内容，因此界面明确显示 `CredentialGuard=NAMED_PATHS_ONLY / ContentDetection=NOT_PROVEN`。每次 Quick、login、smoke 启动都会先检查隔离 Session 树；但 Pi 的 `/share`、`/import`、`/export`、`/compact`、`/trust`、设置及其他内建命令属于用户直接操作，不受全局 Hunter tool policy 保证，开发者预览中应避免使用这些命令。特别是 `/share` 可通过 GitHub CLI 上传完整会话 HTML，且 Task 5 无法在公开 Extension hook 中插入 Hunter 确认或 Receipt，因此显示为 `ShareCommand=NOT_MEDIATED / RemoteWriteGuarantee=NOT_PROVEN`。
 - Quick Session 退出只记录 `PROCESS_EXIT` 和 `VerifiedChange=NOT_CLAIMED`，不会伪装成已验证交付。
 

@@ -221,6 +221,13 @@ describe("provider-neutral Engine Host contract", () => {
     expect(
       engineObservationSchema.safeParse({
         ...observation,
+        kind: "OUTPUT_CAPTURED",
+        resourceUsage: { outputBytes: 128 },
+      }).success,
+    ).toBe(true);
+    expect(
+      engineObservationSchema.safeParse({
+        ...observation,
         stepSucceeded: true,
       }).success,
     ).toBe(false);

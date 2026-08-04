@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import {
+  Task6PiEngineHost,
   HPI_CORE_EXTENSION_VERSION,
   HpiLaunchBlockedError,
   acknowledgeProviderDisclosure,
@@ -33,7 +35,10 @@ import {
   type PiLaunchPlan,
   type PiProviderDestination,
   type PiProviderAuthMetadata,
+  type Task6PiProcessRequest,
+  type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
+import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -72,6 +77,7 @@ export interface HpiCliDependencies {
   readonly coreExtensionPath?: string;
   readonly platform: string;
   readonly getVersionInfo?: () => Promise<HpiVersionInfo>;
+  readonly runTask6Process?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
 }
 
 function runGit(cwd: string, arguments_: readonly string[]): string {
@@ -136,6 +142,10 @@ function line(io: HpiCliIo, text: string): void {
 
 function errorLine(io: HpiCliIo, text: string): void {
   io.writeStderr(`${text}\n`);
+}
+
+function sha256(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
 function optionValue(arguments_: readonly string[], name: string): string | undefined {
@@ -211,6 +221,14 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (command === "login" || command === "help") {
     if (arguments_.length !== 1) throw new HpiCliUsageError();
+    return;
+  }
+  if (
+    command === "managed" &&
+    arguments_.length === 3 &&
+    arguments_[1] === "fixture" &&
+    arguments_[2] === "--json"
+  ) {
     return;
   }
   if (
@@ -542,6 +560,102 @@ async function loginCommand(dependencies: HpiCliDependencies, paths: HpiPaths): 
   return 0;
 }
 
+async function managedFixtureCommand(
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+): Promise<number> {
+  const configuration = await loadHpiConfiguration(paths);
+  if (configuration?.setupCompletedAt == null) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi setup` first.",
+    );
+    return 2;
+  }
+  const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
+  if (!auth.configured) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_AUTH_REQUIRED NextAction=Run `hpi login` first.",
+    );
+    return 2;
+  }
+  const version = await assertCoreExtensionIntegrity(dependencies);
+  if (!/^[a-f0-9]{40}$/u.test(version.sourceCommit) || version.sourceState !== "CLEAN") {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=UNSTAMPED_OR_DIRTY_PRODUCT NextAction=Use an exact clean packaged Hunter Pi artifact.",
+    );
+    return 2;
+  }
+  await prepareRuntimeDirectories(paths);
+  await assertHpiSessionTreeSafe(paths);
+  const resolvedProviderDestination = await resolveLaunchDestination(
+    configuration,
+    dependencies,
+    paths,
+  );
+  const managedConfiguration = hpiConfigurationSchema.parse({
+    ...configuration,
+    permissionProfile: "FULL_ACCESS",
+  });
+  const host = new Task6PiEngineHost({
+    launchPlanForWorkspace: (workspace) =>
+      Promise.resolve(
+        createPiLaunchPlan({
+          paths,
+          configuration: managedConfiguration,
+          cwd: workspace,
+          purpose: "QUICK",
+          safeMode: false,
+          providerAuthConfigured: true,
+          sessionTreeInspected: true,
+          resolvedProviderDestination,
+          displayHeader: [
+            "Hunter Pi | Mode=MANAGED_FIXTURE Permission=FULL_ACCESS",
+            "Scope=AUTOMATIC_TEMPORARY_GIT_ONLY AgentReturn=OBSERVATION_ONLY",
+            "IndependentVerification=REQUIRED RemoteWrite=PROHIBITED",
+          ].join("\n"),
+          ...(dependencies.piCliPath === undefined ? {} : { piCliPath: dependencies.piCliPath }),
+          ...(dependencies.coreExtensionPath === undefined
+            ? {}
+            : { coreExtensionPath: dependencies.coreExtensionPath }),
+        }),
+      ),
+    ...(dependencies.runTask6Process === undefined
+      ? {}
+      : { runProcess: dependencies.runTask6Process }),
+    now: dependencies.now,
+    processTimeoutMs: 300_000,
+    maximumOutputBytes: task6OutputCaptureLimits.engine,
+  });
+  const environmentFingerprint = sha256(
+    JSON.stringify({
+      platform: dependencies.platform,
+      node: process.version,
+      productVersion: version.productVersion,
+      productShellIntegrity: version.productShellIntegrity,
+      coreExtensionIntegrity: version.coreExtensionIntegrity,
+      engine: version.engine,
+      provider: configuration.provider.id,
+      model: configuration.provider.selectedModel,
+      permissionProfile: "FULL_ACCESS",
+      fixturePolicy: "AUTOMATIC_TEMPORARY_GIT_ONLY",
+    }),
+  );
+  const artifact = await runTask6ManagedChange({
+    parentDirectory: dependencies.temporaryParent,
+    engineHost: host,
+    productSource: { commit: version.sourceCommit, state: version.sourceState },
+    engineRelease: version.engine,
+    providerId: configuration.provider.id,
+    environmentFingerprint,
+    now: dependencies.now,
+  });
+  line(dependencies.io, JSON.stringify(artifact));
+  return artifact.taskResult === "GO" ? 0 : 2;
+}
+
 async function firstRunCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
   line(dependencies.io, "Hunter Pi — First Run");
   line(
@@ -800,6 +914,7 @@ function printHelp(io: HpiCliIo): void {
   );
   line(io, "       hpi login | doctor [--json] | version --json");
   line(io, "       hpi smoke tui");
+  line(io, "       hpi managed fixture --json");
   line(io, "       hpi plugin doctor | plugin disable <id>");
 }
 
@@ -834,6 +949,9 @@ export async function runHpiCli(
     }
     if (command === "login") {
       return await loginCommand(dependencies, paths);
+    }
+    if (command === "managed" && arguments_[1] === "fixture") {
+      return await managedFixtureCommand(dependencies, paths);
     }
     if (command === "plugin") {
       return await pluginCommand(arguments_, dependencies, paths);

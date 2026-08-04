@@ -263,6 +263,28 @@ describe("in-memory Workflow Kernel", () => {
     },
   );
 
+  it("preserves RETURNED when PROCESS_EXITED is observed after AGENT_RETURNED", async () => {
+    const { kernel, run } = await createStartedKernel();
+    await recordAgentReturn(kernel, run.runId, "att_first", "obs_ordered-return");
+    await kernel.dispatch({
+      type: "RECORD_OBSERVATION",
+      observation: observationSchema.parse({
+        schemaVersion: "1.0.0",
+        observationId: "obs_ordered-exit",
+        runId: run.runId,
+        attemptId: "att_first",
+        stepId: "step_execute",
+        kind: "PROCESS_EXITED",
+        observedAt: timestamp,
+        evidenceIds: [],
+      }),
+    });
+
+    const projection = await kernel.project(run.runId);
+    expect(projection.attempts[0]?.executionStatus).toBe("RETURNED");
+    expect(projection.run.lifecycle).toBe("VERIFYING");
+  });
+
   it("becomes READY only after every required Verification passes", async () => {
     const { kernel, run } = await createStartedKernel();
     await kernel.dispatch({

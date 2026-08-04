@@ -6,9 +6,11 @@
     { "path": "./packages/domain" },
     { "path": "./packages/evidence" },
     { "path": "./packages/engine-contracts" },
+    { "path": "./packages/verification" },
     { "path": "./packages/pi-host" },
     { "path": "./packages/workflow-kernel" },
     { "path": "./packages/testkit" },
+    { "path": "./packages/managed-change" },
     { "path": "./tools" }
   ]
 }

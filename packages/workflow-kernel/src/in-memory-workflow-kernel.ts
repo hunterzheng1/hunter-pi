@@ -117,6 +117,19 @@ function replaceAttempt(state: ProjectionState, updated: Attempt): void {
   state.attempts[index] = updated;
 }
 
+function executionStatusAfterObservation(
+  currentStatus: Attempt["executionStatus"],
+  observationKind: Observation["kind"],
+): Attempt["executionStatus"] {
+  if (observationKind === "AGENT_RETURNED") {
+    return "RETURNED";
+  }
+  if (observationKind === "PROCESS_EXITED" && currentStatus !== "RETURNED") {
+    return "INCOMPLETE";
+  }
+  return currentStatus;
+}
+
 function verificationStatusFor(
   plan: PlanRevision,
   attempt: Attempt,
@@ -375,11 +388,13 @@ export function assertRunProjectionIntegrity(input: RunProjection): void {
       throw new WorkflowTransitionError("Run projection contains an invalid Observation");
     }
     observationIds.add(observation.observationId);
-    if (observation.kind === "AGENT_RETURNED") {
-      expectedExecution.set(observation.attemptId, "RETURNED");
-    } else if (observation.kind === "PROCESS_EXITED") {
-      expectedExecution.set(observation.attemptId, "INCOMPLETE");
-    }
+    expectedExecution.set(
+      observation.attemptId,
+      executionStatusAfterObservation(
+        expectedExecution.get(observation.attemptId) ?? "RUNNING",
+        observation.kind,
+      ),
+    );
   }
   for (const [index, attempt] of projection.attempts.entries()) {
     const previous = projection.attempts[index - 1];
@@ -628,12 +643,7 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           const previousExecutionStatus = observations
             .filter((observation) => observation.attemptId === previous.attemptId)
             .reduce<Attempt["executionStatus"]>(
-              (status, observation) =>
-                observation.kind === "AGENT_RETURNED"
-                  ? "RETURNED"
-                  : observation.kind === "PROCESS_EXITED"
-                    ? "INCOMPLETE"
-                    : status,
+              (status, observation) => executionStatusAfterObservation(status, observation.kind),
               previous.executionStatus,
             );
           const projectedPrevious = attemptSchema.parse({
@@ -908,12 +918,10 @@ export function replayWorkflowEvents(events: readonly WorkflowEvent[]): RunProje
       case "OBSERVATION_RECORDED": {
         state.observations.push(event.observation);
         const attempt = findAttempt(state, event.observation.attemptId);
-        const executionStatus =
-          event.observation.kind === "AGENT_RETURNED"
-            ? "RETURNED"
-            : event.observation.kind === "PROCESS_EXITED"
-              ? "INCOMPLETE"
-              : attempt.executionStatus;
+        const executionStatus = executionStatusAfterObservation(
+          attempt.executionStatus,
+          event.observation.kind,
+        );
         replaceAttempt(state, attemptSchema.parse({ ...attempt, executionStatus }));
         break;
       }

@@ -36,6 +36,7 @@ The public contract contains no Pi, Oh My Pi, Codex, CodeBuddy, Cursor, Orca, mo
 | `npm run lint` | passed |
 | `npm run typecheck` | passed |
 | `npm test` | 39 files, 308 tests passed |
+| `npm test -- --run test/managed-process-platform.test.ts` | Windows 9/9 passed; WSL Ubuntu 7/7 applicable passed after the CI timeout-budget adjustment |
 | `npm run build` | passed |
 | `git diff --check` | passed |
 
@@ -57,6 +58,8 @@ After the formatting-only commit `24671c5`, PR run [`30983778626`](https://githu
 Exact merge-head main run [`30984969665`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30984969665) also passed all six jobs. The committed adequacy contract and local fixtures are therefore covered by actual Windows and Ubuntu CI, while the CI runs remain evidence of the tested merge artifact rather than a claim about any Provider or real repository.
 
 The documentation follow-up PR #19 preserved one additional real retry history in run [`30986236506`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30986236506): its first attempt failed only at Ubuntu Task 7 containment with the same v5 `TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE` / `observedBytes=79` structured failure, while both quality jobs and Windows containment passed. The failed job was rerun once without source changes; the rerun and its dependent Task 7 Evidence aggregate passed. Exact docs merge-head main run [`30987578579`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30987578579) passed all six jobs. These failures remain historical and are not relabelled as source or Task 8 contract failures.
+
+The later documentation-history PR #20 initially recorded a different Ubuntu quality failure in run [`30988816659`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30988816659): the Unit tests step reached 304/308 passing tests, but `test/managed-process-platform.test.ts:325` (`times out and reconciles the exact nested process tree`) exceeded its 15-second Vitest test budget. Windows quality and both Task 7 containment jobs passed. A single failed-job rerun retained the same failure at job [`92253562410`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30988816659/job/92253562410), so it was not relabelled as transient. The focused test passed on local Windows and WSL Ubuntu; the follow-up change raises only this test's allowance to 30 seconds to accommodate shared-runner process-tree scheduling, without changing runtime or product behavior. The original failure and rerun remain append-only history.
 
 ## Frozen outcome and next gate
 

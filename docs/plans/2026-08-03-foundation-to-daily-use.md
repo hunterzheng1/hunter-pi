@@ -258,7 +258,7 @@ Deliverables:
 
 No knowledge auto-promotion yet. Stop if recovery requires manual state editing or rewrites incomplete history.
 
-Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN PROVIDER-NEUTRAL DURABLE-FIXTURE BOUNDS** — periodic Checkpointing, exact operation-identity recovery replay, reconciliation-driven recovery Attempts, cancellation finality, five terminal Archive outcomes, canonical archive binding, exact export/delete, clean-profile second-device import/rejection, and cross-process durable mutation locks are implemented and locally verified. The focused Task 9 set is 7 files / 66 tests; the sharded repository set is 46 files / 356 tests. Exact PR CI run `31023272061` passes Windows/Ubuntu quality, containment, and Evidence jobs; exact main CI is `PENDING`. Real power loss, arbitrary user repositories, and Provider recovery remain `NOT_PROVEN`.
+Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN PROVIDER-NEUTRAL DURABLE-FIXTURE BOUNDS** — periodic Checkpointing, exact operation-identity recovery replay, reconciliation-driven recovery Attempts, cancellation finality, five terminal Archive outcomes, canonical archive binding, exact export/delete, clean-profile second-device import/rejection, and cross-process durable mutation locks are implemented and locally verified. The focused Task 9 set is 7 files / 66 tests; the sharded repository set is 46 files / 357 tests. Final PR CI run `31032218373` passes Windows/Ubuntu quality, containment, and Evidence jobs; the retained hosted Linux process-tree timeout history and its fix are recorded in [Linux process-tree validation](../validation/2026-08-05-linux-process-tree-hosted.md). Exact main CI is `PENDING`. Real power loss, arbitrary user repositories, and Provider recovery remain `NOT_PROVEN`.
 
 ## Task 10 — Standard Pi Package manager and compatibility/trust/isolation
 
@@ -293,7 +293,7 @@ Deliverables:
 
 Publishing requires explicit owner authorization after all candidate gates and actual remote CI pass. Unsigned artifacts are labeled accordingly.
 
-Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, redacted failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, and clean install smoke pass. Exact PR CI run `31023272061` passes; the initial lint failure remains preserved in run `31022928024`. The produced local artifact was dirty and unsigned; exact main CI, publication, signing, state migration, and stable promotion remain `NOT_PROVEN`/`PENDING`.
+Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, redacted failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, and clean install smoke pass. Final PR CI run `31032218373` passes all Windows/Ubuntu quality, containment, and Evidence jobs; the initial updater lint failure remains preserved in `31022928024`, and the later hosted Linux process-tree history remains preserved in `31028497285`. The rebuilt local artifact is clean and unsigned with `updateChannel=developer-preview`; exact main CI, publication, signing, state migration, and stable promotion remain `NOT_PROVEN`/`PENDING`.
 
 ## Task 12 — Windows daily-use pilot
 
@@ -341,7 +341,7 @@ Terminal outcomes:
 
 The terminal pilot decision is an aggregate projection over the original and replacement Run Archives. It lists every miss and predecessor/successor link; a later passing Run never erases an earlier pilot failure.
 
-Implementation status on 2026-08-05: **EVALUATOR IMPLEMENTED / REAL PILOT NOT_RUN** — the strict evidence schema, two-distinct-repository/source-identity comparator, and GO/REVISE/STOP/NOT_PROVEN evaluator pass policy tests. The sharded local repository set is 46 files / 356 tests. No repository targets, Provider credentials, ten-task observations, or current-branch remote CI receipt were safely inferable, so daily-use acceptance remains `NOT_PROVEN`.
+Implementation status on 2026-08-05: **EVALUATOR IMPLEMENTED / REAL PILOT NOT_RUN** — the strict evidence schema, two-distinct-repository/source-identity comparator, and GO/REVISE/STOP/NOT_PROVEN evaluator pass policy tests. The sharded local repository set is 46 files / 357 tests. No repository targets, Provider credentials, ten-task observations, or current-branch main CI receipt were safely inferable, so daily-use acceptance remains `NOT_PROVEN`.
 
 ## Task 13 — Stable 1.0 decision, not automatic work
 

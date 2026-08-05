@@ -56,6 +56,8 @@ After the formatting-only commit `24671c5`, PR run [`30983778626`](https://githu
 
 Exact merge-head main run [`30984969665`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30984969665) also passed all six jobs. The committed adequacy contract and local fixtures are therefore covered by actual Windows and Ubuntu CI, while the CI runs remain evidence of the tested merge artifact rather than a claim about any Provider or real repository.
 
+The documentation follow-up PR #19 preserved one additional real retry history in run [`30986236506`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30986236506): its first attempt failed only at Ubuntu Task 7 containment with the same v5 `TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE` / `observedBytes=79` structured failure, while both quality jobs and Windows containment passed. The failed job was rerun once without source changes; the rerun and its dependent Task 7 Evidence aggregate passed. Exact docs merge-head main run [`30987578579`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30987578579) passed all six jobs. These failures remain historical and are not relabelled as source or Task 8 contract failures.
+
 ## Frozen outcome and next gate
 
 Task 8 is complete within the deterministic receipt-fixture boundary. It prevents partial execution or review text from becoming a false `READY`, but it does not implement checkpoint recovery, archive finalization, device migration, or process reconciliation after interruption. Those are Task 9 deliverables and remain `NOT_STARTED`.

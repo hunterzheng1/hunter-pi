@@ -1,31 +1,40 @@
-import { createHash } from "node:crypto";
-
 import {
+  pilotExecutionPlanSchema,
   pilotDecisionSchema,
   pilotEvidenceSchema,
   type PilotDecision,
+  type PilotExecutionPlan,
   type PilotEvidence,
   type PilotMetrics,
 } from "./contracts.js";
+import { canonicalJson, pilotFingerprint } from "./serialization.js";
 
-function canonicalJson(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return JSON.stringify(value);
+const invalidEvidenceFingerprint = pilotFingerprint({
+  schemaVersion: "hpi-pilot-invalid-evidence.v1",
+});
+
+function safePilotFingerprint(input: unknown) {
+  try {
+    return pilotFingerprint(input);
+  } catch {
+    return invalidEvidenceFingerprint;
   }
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  if (typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
-      .join(",")}}`;
-  }
-  return "null";
 }
 
-function evidenceFingerprint(evidence: unknown): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(canonicalJson(evidence), "utf8").digest("hex")}`;
+function safeParseEvidence(input: unknown) {
+  try {
+    return pilotEvidenceSchema.safeParse(input);
+  } catch {
+    return null;
+  }
+}
+
+function safeParsePlan(input: unknown) {
+  try {
+    return pilotExecutionPlanSchema.safeParse(input);
+  } catch {
+    return null;
+  }
 }
 
 export function nearestRank(samples: readonly number[], rank: number): number {
@@ -91,7 +100,15 @@ function metricsFor(evidence: PilotEvidence): PilotMetrics {
   };
 }
 
-function identityProblems(evidence: PilotEvidence): string[] {
+function sameCanonicalValue(left: unknown, right: unknown): boolean {
+  try {
+    return canonicalJson(left) === canonicalJson(right);
+  } catch {
+    return false;
+  }
+}
+
+function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | null): string[] {
   const reasons: string[] = [];
   const oracleIds = new Set(evidence.taskOracles.map((oracle) => oracle.taskId));
   const resultIds = new Set(evidence.taskResults.map((result) => result.taskId));
@@ -123,16 +140,109 @@ function identityProblems(evidence: PilotEvidence): string[] {
   ) {
     reasons.push("Hunter captured fewer workflow facts than raw Pi in a paired task");
   }
+  if (plan !== null) {
+    if (evidence.planFingerprint !== plan.planFingerprint) {
+      reasons.push("Evidence does not bind the exact frozen pilot plan fingerprint");
+    }
+    if (!sameCanonicalValue(evidence.operatorScope, plan.operatorScope)) {
+      reasons.push("Evidence does not bind the exact frozen Provider authorization scope");
+    }
+    if (!sameCanonicalValue(evidence.machine, plan.machineProfile)) {
+      reasons.push("Evidence does not bind the exact frozen pilot machine profile");
+    }
+    const targetById = new Map(
+      plan.repositoryTargets.map((target) => [target.targetId, target.repositoryFingerprint]),
+    );
+    const targetReferenceById = new Map(
+      plan.repositoryTargets.map((target) => [target.targetId, target.targetReferenceFingerprint]),
+    );
+    const acceptanceDefinitionById = new Map(
+      plan.acceptanceChecks.map((check) => [check.checkId, check.definitionFingerprint]),
+    );
+    const planTaskById = new Map(plan.tasks.map((task) => [task.taskId, task]));
+    const evidenceTaskIds = new Set(evidence.taskOracles.map((oracle) => oracle.taskId));
+    if (
+      plan.tasks.some((task) => {
+        const oracle = evidence.taskOracles.find((candidate) => candidate.taskId === task.taskId);
+        const repositoryFingerprint = targetById.get(task.targetId);
+        const targetReferenceFingerprint = targetReferenceById.get(task.targetId);
+        const acceptanceDefinitionFingerprints = task.acceptanceCheckIds.map((checkId) =>
+          acceptanceDefinitionById.get(checkId),
+        );
+        return (
+          oracle === undefined ||
+          repositoryFingerprint === undefined ||
+          targetReferenceFingerprint === undefined ||
+          oracle.repositoryFingerprint !== repositoryFingerprint ||
+          oracle.targetReferenceFingerprint !== targetReferenceFingerprint ||
+          oracle.sourceFingerprint !== task.sourceFingerprint ||
+          oracle.mode !== task.mode ||
+          oracle.expectedOutcome !== task.expectedOutcome ||
+          JSON.stringify(oracle.acceptanceCheckIds) !== JSON.stringify(task.acceptanceCheckIds) ||
+          JSON.stringify(oracle.acceptanceCheckDefinitionFingerprints) !==
+            JSON.stringify(acceptanceDefinitionFingerprints)
+        );
+      }) ||
+      evidence.taskOracles.some((oracle) => !planTaskById.has(oracle.taskId)) ||
+      evidenceTaskIds.size !== plan.tasks.length
+    ) {
+      reasons.push("Evidence task oracles do not bind the exact frozen pilot task set");
+    }
+    const pairedTaskIds = new Set(plan.pairedTaskIds);
+    const evidenceComparatorIds = new Set(
+      evidence.pairedComparators.map((comparator) => comparator.taskId),
+    );
+    if (
+      evidenceComparatorIds.size !== pairedTaskIds.size ||
+      [...pairedTaskIds].some((taskId) => !evidenceComparatorIds.has(taskId))
+    ) {
+      reasons.push("Evidence paired comparators do not bind the exact frozen paired task set");
+    }
+    const planPluginFixturesById = new Map(
+      plan.pluginFixtures.map((fixture) => [fixture.fixtureId, fixture]),
+    );
+    const evidencePluginFixtureIds = new Set(
+      evidence.pluginFixtures.map((fixture) => fixture.fixtureId),
+    );
+    if (
+      planPluginFixturesById.size !== evidencePluginFixtureIds.size ||
+      evidence.pluginFixtures.some(
+        (fixture) =>
+          planPluginFixturesById.get(fixture.fixtureId)?.definitionFingerprint !==
+          fixture.definitionFingerprint,
+      )
+    ) {
+      reasons.push("Evidence Plugin fixtures do not bind the exact frozen fixture set");
+    }
+    const planUpdateCandidatesById = new Map(
+      plan.updateCandidates.map((candidate) => [candidate.candidateId, candidate]),
+    );
+    const evidenceUpdateCandidateIds = new Set(
+      evidence.updateRollbackCycles.map((cycle) => cycle.candidateId),
+    );
+    if (
+      planUpdateCandidatesById.size !== evidenceUpdateCandidateIds.size ||
+      evidence.updateRollbackCycles.some((cycle) => {
+        const candidate = planUpdateCandidatesById.get(cycle.candidateId);
+        return (
+          candidate?.artifactFingerprint !== cycle.artifactFingerprint ||
+          candidate.qualificationFingerprint !== cycle.qualificationFingerprint
+        );
+      })
+    ) {
+      reasons.push("Evidence update cycles do not bind the exact frozen update candidates");
+    }
+  }
   return reasons;
 }
 
 export class PilotEvaluator {
-  public evaluate(input: PilotEvidence): PilotDecision {
-    const parsed = pilotEvidenceSchema.safeParse(input);
-    if (!parsed.success) {
+  public evaluate(input: unknown, planInput?: unknown): PilotDecision {
+    const parsed = safeParseEvidence(input);
+    if (parsed?.success !== true) {
       return pilotDecisionSchema.parse({
         schemaVersion: "hpi-pilot-decision.v2",
-        evidenceFingerprint: evidenceFingerprint(input),
+        evidenceFingerprint: safePilotFingerprint(input),
         outcome: "STOP",
         reasons: ["pilot Evidence failed strict identity and consistency validation"],
         metrics: {
@@ -152,10 +262,38 @@ export class PilotEvaluator {
         observedAt: new Date().toISOString(),
       });
     }
+    const parsedPlan = planInput === undefined ? undefined : safeParsePlan(planInput);
+    if (parsedPlan !== undefined && parsedPlan?.success !== true) {
+      return pilotDecisionSchema.parse({
+        schemaVersion: "hpi-pilot-decision.v2",
+        evidenceFingerprint: safePilotFingerprint(input),
+        outcome: "STOP",
+        reasons: ["pilot execution plan failed strict identity validation"],
+        metrics: {
+          taskCount: 0,
+          correctTaskCount: 0,
+          interruptionCount: 0,
+          resumedInterruptionCount: 0,
+          warmStartP95Ms: 0,
+          acknowledgementP95Ms: 0,
+          memoryP95MiB: 0,
+          comparatorFactScore: 0,
+          rawPiManualInterventions: 0,
+          hunterManualInterventions: 0,
+          manualInterventionReductionRatio: 0,
+          hunterAdditionalOverheadMedianMinutes: 0,
+        },
+        observedAt: new Date().toISOString(),
+      });
+    }
     const evidence = parsed.data;
+    const plan = parsedPlan?.data ?? null;
     const metrics = metricsFor(evidence);
-    const reasons = identityProblems(evidence);
+    const reasons = identityProblems(evidence, plan);
     const missingEvidence: string[] = [];
+    if (plan === null) {
+      missingEvidence.push("the exact frozen pilot execution plan was not supplied");
+    }
     if (evidence.ci.windows.status !== "PASS" || evidence.ci.ubuntu.status !== "PASS") {
       missingEvidence.push("exact Windows and Ubuntu CI are not both PASS");
     }
@@ -251,7 +389,7 @@ export class PilotEvaluator {
     if (decisionReasons.length === 0) decisionReasons.push("all frozen Task 12 gates passed");
     return pilotDecisionSchema.parse({
       schemaVersion: "hpi-pilot-decision.v2",
-      evidenceFingerprint: evidenceFingerprint(evidence),
+      evidenceFingerprint: safePilotFingerprint(evidence),
       outcome,
       reasons: decisionReasons,
       metrics,

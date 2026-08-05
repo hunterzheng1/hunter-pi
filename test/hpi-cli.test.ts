@@ -60,6 +60,7 @@ async function createDependencies(
     readonly confirmed?: boolean;
     readonly authConfigured?: boolean;
     readonly launch?: (plan: PiLaunchPlan) => Promise<number>;
+    readonly readTextFile?: HpiCliDependencies["readTextFile"];
     readonly readProviderAuthStatus?: HpiCliDependencies["readProviderAuthStatus"];
     readonly getVersionInfo?: HpiCliDependencies["getVersionInfo"];
   } = {},
@@ -97,6 +98,7 @@ async function createDependencies(
     coreExtensionPath: join(root, "core-extension.js"),
     temporaryParent: root,
     platform: process.platform,
+    ...(options.readTextFile === undefined ? {} : { readTextFile: options.readTextFile }),
     getVersionInfo:
       options.getVersionInfo ??
       (() =>
@@ -140,7 +142,54 @@ describe("hpi command", () => {
       expect(await runHpiCli([helpArgument], dependencies)).toBe(0);
       expect(io.stdout.join("\n")).toContain("--model exact-id");
       expect(io.stdout.join("\n")).toContain("--permission safe|balanced|full-access");
+      expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
     }
+  });
+
+  it("runs only the safe pilot preflight and never echoes an invalid plan", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan.json");
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        credential: "token=do-not-echo",
+        privatePath: root,
+      }),
+      "utf8",
+    );
+
+    expect(
+      await runHpiCli(["pilot", "preflight", "--plan", planPath, "--json"], dependencies),
+    ).toBe(2);
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).toContain('"status":"BLOCKED"');
+    expect(output).not.toContain(root);
+    expect(output).not.toContain("do-not-echo");
+  });
+
+  it("returns redacted actionable preflight reason codes for file and JSON failures", async () => {
+    const unreadable = await createDependencies({
+      readTextFile: () => Promise.reject(new Error("C:\\private\\pilot-plan.json")),
+    });
+    expect(
+      await runHpiCli(
+        ["pilot", "preflight", "--plan", "C:\\private\\pilot-plan.json", "--json"],
+        unreadable.dependencies,
+      ),
+    ).toBe(2);
+    expect(unreadable.io.stdout.join("\n")).toContain("PILOT_PLAN_FILE_UNREADABLE");
+    expect(unreadable.io.stdout.join("\n")).not.toContain("C:\\private");
+
+    const invalidJson = await createDependencies({
+      readTextFile: () => Promise.resolve("{not-json"),
+    });
+    expect(
+      await runHpiCli(
+        ["pilot", "preflight", "--plan", "pilot-plan.json", "--json"],
+        invalidJson.dependencies,
+      ),
+    ).toBe(2);
+    expect(invalidJson.io.stdout.join("\n")).toContain("PILOT_PLAN_JSON_INVALID");
   });
 
   it("rejects unknown commands and malformed options before confirmation or launch", async () => {

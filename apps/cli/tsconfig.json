@@ -3,10 +3,17 @@
   "compilerOptions": {
     "composite": true,
     "outDir": "dist",
+    "paths": {
+      "@hunter-pi/pilot": ["../../packages/pilot/src/index.ts"]
+    },
     "rootDir": "src",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/managed-change" }, { "path": "../../packages/pi-host" }]
+  "references": [
+    { "path": "../../packages/managed-change" },
+    { "path": "../../packages/pi-host" },
+    { "path": "../../packages/pilot" }
+  ]
 }

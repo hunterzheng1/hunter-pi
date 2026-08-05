@@ -6,7 +6,7 @@
 
 ## Evidence contract
 
-`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v2` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; and comparator/task-result binding for both identities and numeric observations. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
+`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v3` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; and comparator/task-result binding for both identities and numeric observations. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. Its `PilotPlanCompiler` freezes the machine profile, comparator/check fingerprints, five plugin fixtures, two update candidates, ten tasks, three paired tasks, two distinct repository identities, and the Provider authorization policy into a path-free, fingerprint-bound execution plan. Evidence must carry the exact plan fingerprint and authorization scope, and the evaluator rejects task, paired-comparator, Plugin, update, or machine identities that do not match that plan. `hpi pilot preflight --plan <file> --json` exposes only a redacted `READY`/`BLOCKED` receipt with fixed actionable reason codes. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
 
 ## Required run
 
@@ -19,4 +19,4 @@
 
 ## Current disposition
 
-The evaluator and policy tests are implemented and pass. The real ten-task pilot is **NOT_RUN** on this branch because no repository targets, Provider credentials, or remote CI run were supplied or safely inferable. This is an evidence boundary, not a product pass. The product must remain `NOT_PROVEN` for daily-use acceptance until a dated pilot Archive and exact remote CI receipts exist.
+The evaluator, explicit plan compiler, safe preflight CLI, and policy tests are implemented and pass. The real ten-task pilot is **NOT_RUN** on this branch because no repository targets, Provider credentials, or remote CI run were supplied or safely inferable. This is an evidence boundary, not a product pass. The product must remain `NOT_PROVEN` for daily-use acceptance until a dated pilot Archive and exact remote CI receipts exist.

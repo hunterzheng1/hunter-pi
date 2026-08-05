@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -39,6 +40,7 @@ import {
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
+import { PilotPlanCompiler, type PilotPreflightFailure } from "@hunter-pi/pilot";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -78,6 +80,7 @@ export interface HpiCliDependencies {
   readonly platform: string;
   readonly getVersionInfo?: () => Promise<HpiVersionInfo>;
   readonly runTask6Process?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly readTextFile?: (path: string) => Promise<string>;
 }
 
 function runGit(cwd: string, arguments_: readonly string[]): string {
@@ -133,6 +136,7 @@ function defaultDependencies(): HpiCliDependencies {
     launch: launchPi,
     temporaryParent: tmpdir(),
     platform: process.platform,
+    readTextFile: (path) => readFile(path, "utf8"),
   };
 }
 
@@ -213,6 +217,22 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (command === "doctor") {
     assertUniqueFlags(arguments_.slice(1), new Set(["--json"]));
+    return;
+  }
+  if (command === "pilot" && arguments_[1] === "preflight") {
+    const options = arguments_.slice(2);
+    const planIndex = options.indexOf("--plan");
+    const planPath = options[planIndex + 1];
+    const remaining = [...options.slice(0, planIndex), ...options.slice(planIndex + 2)];
+    if (
+      planIndex < 0 ||
+      planPath === undefined ||
+      planPath.startsWith("-") ||
+      remaining.length !== 1 ||
+      remaining[0] !== "--json"
+    ) {
+      throw new HpiCliUsageError();
+    }
     return;
   }
   if (command === "version") {
@@ -916,6 +936,37 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi smoke tui");
   line(io, "       hpi managed fixture --json");
   line(io, "       hpi plugin doctor | plugin disable <id>");
+  line(io, "       hpi pilot preflight --plan <file> --json");
+}
+
+async function pilotPreflightCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+): Promise<number> {
+  const planPath = optionValue(arguments_, "--plan");
+  if (planPath === undefined) throw new HpiCliUsageError();
+  let input: unknown;
+  let failure: PilotPreflightFailure | undefined;
+  let rawPlan: string;
+  try {
+    rawPlan = await (dependencies.readTextFile ?? ((path: string) => readFile(path, "utf8")))(
+      planPath,
+    );
+  } catch {
+    rawPlan = "";
+    failure = "FILE_UNREADABLE";
+  }
+  if (failure === undefined) {
+    try {
+      input = JSON.parse(rawPlan) as unknown;
+    } catch {
+      input = null;
+      failure = "INVALID_JSON";
+    }
+  }
+  const receipt = new PilotPlanCompiler().preflight(input, failure);
+  line(dependencies.io, JSON.stringify(receipt));
+  return receipt.status === "READY" ? 0 : 2;
 }
 
 export async function runHpiCli(
@@ -936,6 +987,9 @@ export async function runHpiCli(
     if (command === "help" || command === "--help" || command === "-h") {
       printHelp(dependencies.io);
       return 0;
+    }
+    if (command === "pilot" && arguments_[1] === "preflight") {
+      return await pilotPreflightCommand(arguments_.slice(2), dependencies);
     }
     const paths = resolveHpiPaths({
       env: dependencies.environment,

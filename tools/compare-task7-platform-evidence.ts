@@ -53,51 +53,62 @@ export const task7PlatformConsistencyV1Schema = z.strictObject({
 });
 export type Task7PlatformConsistencyV1 = z.infer<typeof task7PlatformConsistencyV1Schema>;
 
-export const task7PlatformConsistencySchema = z
-  .strictObject({
-    schemaVersion: z.literal("hpi-task7-platform-consistency.v2"),
-    kind: z.literal("hunter-pi/task7-platform-consistency"),
-    observedAt: z.iso.datetime({ offset: true }),
-    status: z.literal("PASS"),
-    platforms: z.tuple([z.literal("win32"), z.literal("linux")]),
-    sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
-    sourceDigest: fingerprintSchema,
-    verifierFingerprint: fingerprintSchema,
-    commandFingerprint: fingerprintSchema,
-    testFileFingerprint: fingerprintSchema,
-    receiptDigests: z.strictObject({
-      windows: fingerprintSchema,
-      ubuntu: fingerprintSchema,
-    }),
-    checks: z
-      .array(
-        z.strictObject({
-          id: z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id)),
-          windowsStatus: z.literal("PASS"),
-          ubuntuStatus: z.enum(["PASS", "NOT_RUN"]),
-        }),
-      )
-      .length(TASK7_PLATFORM_CHECKS.length),
-    fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
-    providerRequests: z.literal("NOT_RUN"),
-    realRepositories: z.literal("NOT_RUN"),
-    remoteCi: z.literal("PENDING"),
-  })
-  .superRefine((receipt, context) => {
-    receipt.checks.forEach((result, index) => {
-      const check = TASK7_PLATFORM_CHECKS[index];
-      if (check === undefined) {
-        context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
-        return;
-      }
-      if (
-        result.id !== check.id ||
-        result.ubuntuStatus !== (check.platforms.includes("linux") ? "PASS" : "NOT_RUN")
-      ) {
-        context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
-      }
+function createTask7PlatformConsistencySchema(
+  schemaVersion: "hpi-task7-platform-consistency.v2" | "hpi-task7-platform-consistency.v3",
+) {
+  return z
+    .strictObject({
+      schemaVersion: z.literal(schemaVersion),
+      kind: z.literal("hunter-pi/task7-platform-consistency"),
+      observedAt: z.iso.datetime({ offset: true }),
+      status: z.literal("PASS"),
+      platforms: z.tuple([z.literal("win32"), z.literal("linux")]),
+      sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+      sourceDigest: fingerprintSchema,
+      verifierFingerprint: fingerprintSchema,
+      commandFingerprint: fingerprintSchema,
+      testFileFingerprint: fingerprintSchema,
+      receiptDigests: z.strictObject({
+        windows: fingerprintSchema,
+        ubuntu: fingerprintSchema,
+      }),
+      checks: z
+        .array(
+          z.strictObject({
+            id: z.enum(TASK7_PLATFORM_CHECKS.map((check) => check.id)),
+            windowsStatus: z.literal("PASS"),
+            ubuntuStatus: z.enum(["PASS", "NOT_RUN"]),
+          }),
+        )
+        .length(TASK7_PLATFORM_CHECKS.length),
+      fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+      providerRequests: z.literal("NOT_RUN"),
+      realRepositories: z.literal("NOT_RUN"),
+      remoteCi: z.literal("PENDING"),
+    })
+    .superRefine((receipt, context) => {
+      receipt.checks.forEach((result, index) => {
+        const check = TASK7_PLATFORM_CHECKS[index];
+        if (check === undefined) {
+          context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
+          return;
+        }
+        if (
+          result.id !== check.id ||
+          result.ubuntuStatus !== (check.platforms.includes("linux") ? "PASS" : "NOT_RUN")
+        ) {
+          context.addIssue({ code: "custom", message: "consistency check matrix is not exact" });
+        }
+      });
     });
-  });
+}
+
+export const task7PlatformConsistencyV2Schema = createTask7PlatformConsistencySchema(
+  "hpi-task7-platform-consistency.v2",
+);
+export const task7PlatformConsistencySchema = createTask7PlatformConsistencySchema(
+  "hpi-task7-platform-consistency.v3",
+);
 export type Task7PlatformConsistency = z.infer<typeof task7PlatformConsistencySchema>;
 
 function canonicalJson(value: unknown): string {
@@ -171,7 +182,7 @@ export function compareTask7PlatformEvidence(
     };
   });
   const result = task7PlatformConsistencySchema.parse({
-    schemaVersion: "hpi-task7-platform-consistency.v2",
+    schemaVersion: "hpi-task7-platform-consistency.v3",
     kind: "hunter-pi/task7-platform-consistency",
     observedAt,
     status: "PASS",

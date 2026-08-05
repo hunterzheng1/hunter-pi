@@ -20,6 +20,12 @@ describe("Linux process-tree finality", () => {
     expect(completeEmptyScans >= 2).toBe(false);
   });
 
+  it("invalidates an empty candidate at a control boundary", () => {
+    const emptyCandidate = nextLinuxCompleteEmptyScanCount(0, "EMPTY");
+
+    expect(nextLinuxCompleteEmptyScanCount(emptyCandidate, "CONTROL_BOUNDARY")).toBe(0);
+  });
+
   it("embeds the tested scan transition in the generated subreaper helper", () => {
     expect(linuxSubreaperProcessTreeHelperSource).toContain("nextLinuxCompleteEmptyScanCount");
   });

@@ -19,6 +19,35 @@ const TASK7_SOURCE_PATHSPEC_V1 = [
   "test/managed-process-platform.test.ts",
 ] as const;
 
+const TASK7_VERIFIER_PATHSPEC_V2 = [
+  ".github/workflows/ci.yml",
+  ".gitattributes",
+  ".gitignore",
+  ".node-version",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierignore",
+  "eslint.config.mjs",
+  "package-lock.json",
+  "package.json",
+  "prettier.config.mjs",
+  "scripts/bundle-cli.mjs",
+  "test/file-lease-manager.test.ts",
+  "test/git-workspace-manager.test.ts",
+  "test/managed-process-host.test.ts",
+  "test/managed-process-platform.test.ts",
+  "test/support/temporary-test-directory.ts",
+  "test/task7-platform-evidence.test.ts",
+  "tools/compare-task7-platform-evidence.ts",
+  "tools/task7-platform-evidence.ts",
+  "tools/task7-platform-probe.ts",
+  "tools/tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+] as const;
+
 export const TASK7_VERIFIER_PATHSPEC = [
   ".github/workflows/ci.yml",
   ".gitattributes",
@@ -36,6 +65,7 @@ export const TASK7_VERIFIER_PATHSPEC = [
   "test/git-workspace-manager.test.ts",
   "test/managed-process-host.test.ts",
   "test/managed-process-platform.test.ts",
+  "test/posix-process-tree-finality.test.ts",
   "test/support/temporary-test-directory.ts",
   "test/task7-platform-evidence.test.ts",
   "tools/compare-task7-platform-evidence.ts",
@@ -147,6 +177,10 @@ const sourcePathspecV1Schema = exactOrderedStrings(
   "Task 7 v1 source pathspec",
 );
 const sourcePathspecSchema = exactOrderedStrings(TASK7_SOURCE_PATHSPEC, "Task 7 source pathspec");
+const verifierPathspecV2Schema = exactOrderedStrings(
+  TASK7_VERIFIER_PATHSPEC_V2,
+  "Task 7 v2 verifier pathspec",
+);
 const verifierPathspecSchema = exactOrderedStrings(
   TASK7_VERIFIER_PATHSPEC,
   "Task 7 verifier pathspec",
@@ -238,87 +272,101 @@ const task7CheckResultSchema = z.strictObject({
   status: z.enum(["PASS", "FAIL", "NOT_PROVEN", "NOT_RUN"]),
 });
 
-export const task7PlatformReceiptSchema = z
-  .strictObject({
-    schemaVersion: z.literal("hpi-task7-platform-receipt.v2"),
-    kind: z.literal("hunter-pi/task7-platform-receipt"),
-    observedAt: z.iso.datetime({ offset: true }),
-    status: z.enum(["PASS", "FAIL", "NOT_PROVEN"]),
-    source: z.strictObject({
-      repository: z.literal("hunter-pi"),
-      commit: commitSchema,
-      digest: fingerprintSchema,
-      pathspec: sourcePathspecSchema,
-      verifierPathspec: verifierPathspecSchema,
-      verifierFingerprint: fingerprintSchema,
-    }),
-    environment: z.strictObject({
-      platform: z.enum(["win32", "linux"]),
-      platformLabel: z.enum(["WINDOWS", "UBUNTU"]),
-      architecture: z.string().regex(/^[a-z0-9_-]{2,32}$/u),
-      nodeVersion: z.string().regex(/^v24\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u),
-      gitVersion: z.string().regex(/^\d+\.\d+\.\d+(?:\.[A-Za-z0-9.-]+)?$/u),
-    }),
-    execution: z.strictObject({
-      commandFingerprint: fingerprintSchema,
-      testFileFingerprint: fingerprintSchema,
-      startedAt: z.iso.datetime({ offset: true }),
-      endedAt: z.iso.datetime({ offset: true }),
-      durationMs: z.number().int().nonnegative(),
-      exitCode: z.number().int().nullable(),
-      reportStatus: z.enum(["COMPLETE", "NOT_PROVEN"]),
-      stdoutDigest: fingerprintSchema,
-      stderrDigest: fingerprintSchema,
-      observedBytes: z.number().int().nonnegative(),
-    }),
-    containment: z.strictObject({
-      expected: z.enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE"]),
-      status: z.enum(["PASS", "NOT_PROVEN"]),
-    }),
-    checks: z.array(task7CheckResultSchema).length(TASK7_PLATFORM_CHECKS.length),
-    boundaries: z.strictObject({
-      fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
-      providerRequests: z.literal("NOT_RUN"),
-      realRepositories: z.literal("NOT_RUN"),
-      privateData: z.literal("EXCLUDED"),
-      remoteCi: z.literal("PENDING"),
-    }),
-  })
-  .superRefine((receipt, context) => {
-    const expectedLabel = receipt.environment.platform === "win32" ? "WINDOWS" : "UBUNTU";
-    const expectedContainment =
-      receipt.environment.platform === "win32"
-        ? "WINDOWS_JOB_OBJECT"
-        : "LINUX_SUBREAPER_PROCESS_TREE";
-    if (receipt.environment.platformLabel !== expectedLabel) {
-      context.addIssue({ code: "custom", message: "platform label does not match platform" });
-    }
-    if (receipt.containment.expected !== expectedContainment) {
-      context.addIssue({ code: "custom", message: "containment does not match platform" });
-    }
-    const ids = receipt.checks.map((check) => check.id);
-    if (JSON.stringify(ids) !== JSON.stringify(TASK7_PLATFORM_CHECKS.map((check) => check.id))) {
-      context.addIssue({
-        code: "custom",
-        message: "Task 7 checks must use the exact ordered matrix",
-      });
-    }
-    if (
-      receipt.status === "PASS" &&
-      (receipt.execution.exitCode !== 0 ||
-        receipt.execution.reportStatus !== "COMPLETE" ||
-        receipt.containment.status !== "PASS" ||
-        receipt.checks.some((result, index) => {
-          const check = TASK7_PLATFORM_CHECKS[index];
-          const expected = check?.platforms.includes(receipt.environment.platform)
-            ? "PASS"
-            : "NOT_RUN";
-          return result.status !== expected;
-        }))
-    ) {
-      context.addIssue({ code: "custom", message: "PASS receipt contains an unproven result" });
-    }
-  });
+function createTask7PlatformReceiptSchema(
+  schemaVersion: "hpi-task7-platform-receipt.v2" | "hpi-task7-platform-receipt.v3",
+  exactVerifierPathspecSchema: ReturnType<typeof exactOrderedStrings>,
+) {
+  return z
+    .strictObject({
+      schemaVersion: z.literal(schemaVersion),
+      kind: z.literal("hunter-pi/task7-platform-receipt"),
+      observedAt: z.iso.datetime({ offset: true }),
+      status: z.enum(["PASS", "FAIL", "NOT_PROVEN"]),
+      source: z.strictObject({
+        repository: z.literal("hunter-pi"),
+        commit: commitSchema,
+        digest: fingerprintSchema,
+        pathspec: sourcePathspecSchema,
+        verifierPathspec: exactVerifierPathspecSchema,
+        verifierFingerprint: fingerprintSchema,
+      }),
+      environment: z.strictObject({
+        platform: z.enum(["win32", "linux"]),
+        platformLabel: z.enum(["WINDOWS", "UBUNTU"]),
+        architecture: z.string().regex(/^[a-z0-9_-]{2,32}$/u),
+        nodeVersion: z.string().regex(/^v24\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u),
+        gitVersion: z.string().regex(/^\d+\.\d+\.\d+(?:\.[A-Za-z0-9.-]+)?$/u),
+      }),
+      execution: z.strictObject({
+        commandFingerprint: fingerprintSchema,
+        testFileFingerprint: fingerprintSchema,
+        startedAt: z.iso.datetime({ offset: true }),
+        endedAt: z.iso.datetime({ offset: true }),
+        durationMs: z.number().int().nonnegative(),
+        exitCode: z.number().int().nullable(),
+        reportStatus: z.enum(["COMPLETE", "NOT_PROVEN"]),
+        stdoutDigest: fingerprintSchema,
+        stderrDigest: fingerprintSchema,
+        observedBytes: z.number().int().nonnegative(),
+      }),
+      containment: z.strictObject({
+        expected: z.enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE"]),
+        status: z.enum(["PASS", "NOT_PROVEN"]),
+      }),
+      checks: z.array(task7CheckResultSchema).length(TASK7_PLATFORM_CHECKS.length),
+      boundaries: z.strictObject({
+        fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+        providerRequests: z.literal("NOT_RUN"),
+        realRepositories: z.literal("NOT_RUN"),
+        privateData: z.literal("EXCLUDED"),
+        remoteCi: z.literal("PENDING"),
+      }),
+    })
+    .superRefine((receipt, context) => {
+      const expectedLabel = receipt.environment.platform === "win32" ? "WINDOWS" : "UBUNTU";
+      const expectedContainment =
+        receipt.environment.platform === "win32"
+          ? "WINDOWS_JOB_OBJECT"
+          : "LINUX_SUBREAPER_PROCESS_TREE";
+      if (receipt.environment.platformLabel !== expectedLabel) {
+        context.addIssue({ code: "custom", message: "platform label does not match platform" });
+      }
+      if (receipt.containment.expected !== expectedContainment) {
+        context.addIssue({ code: "custom", message: "containment does not match platform" });
+      }
+      const ids = receipt.checks.map((check) => check.id);
+      if (JSON.stringify(ids) !== JSON.stringify(TASK7_PLATFORM_CHECKS.map((check) => check.id))) {
+        context.addIssue({
+          code: "custom",
+          message: "Task 7 checks must use the exact ordered matrix",
+        });
+      }
+      if (
+        receipt.status === "PASS" &&
+        (receipt.execution.exitCode !== 0 ||
+          receipt.execution.reportStatus !== "COMPLETE" ||
+          receipt.containment.status !== "PASS" ||
+          receipt.checks.some((result, index) => {
+            const check = TASK7_PLATFORM_CHECKS[index];
+            const expected = check?.platforms.includes(receipt.environment.platform)
+              ? "PASS"
+              : "NOT_RUN";
+            return result.status !== expected;
+          }))
+      ) {
+        context.addIssue({ code: "custom", message: "PASS receipt contains an unproven result" });
+      }
+    });
+}
+
+export const task7PlatformReceiptV2Schema = createTask7PlatformReceiptSchema(
+  "hpi-task7-platform-receipt.v2",
+  verifierPathspecV2Schema,
+);
+export const task7PlatformReceiptSchema = createTask7PlatformReceiptSchema(
+  "hpi-task7-platform-receipt.v3",
+  verifierPathspecSchema,
+);
 export type Task7PlatformReceipt = z.infer<typeof task7PlatformReceiptSchema>;
 
 export const task7PlatformFailureReceiptV1Schema = z.strictObject({
@@ -360,50 +408,71 @@ export const task7PlatformFailureReceiptV2Schema = z.strictObject({
 });
 export type Task7PlatformFailureReceiptV2 = z.infer<typeof task7PlatformFailureReceiptV2Schema>;
 
-const task7FailureSourceSchema = z.strictObject({
-  repository: z.literal("hunter-pi"),
-  commit: commitSchema,
-  digest: fingerprintSchema,
-  pathspec: sourcePathspecSchema,
-  verifierPathspec: verifierPathspecSchema,
-  verifierFingerprint: fingerprintSchema,
-  testFileFingerprint: fingerprintSchema,
-});
-
-export const task7PlatformFailureReceiptSchema = z
-  .strictObject({
-    schemaVersion: z.literal("hpi-task7-platform-failure.v3"),
-    kind: z.literal("hunter-pi/task7-platform-failure"),
-    observedAt: z.iso.datetime({ offset: true }),
-    status: z.enum(["FAIL", "NOT_PROVEN"]),
-    platform: z.enum(["win32", "linux", "UNSUPPORTED"]),
-    stage: z.enum([
-      "SOURCE_IDENTITY",
-      "TEST_EXECUTION",
-      "REPORT_PARSE",
-      "SOURCE_REVALIDATION",
-      "EVIDENCE_WRITE",
-    ]),
-    code: z.literal("TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE"),
-    source: task7FailureSourceSchema.nullable(),
-    exitCode: z.number().int().nullable(),
-    stdoutDigest: fingerprintSchema,
-    stderrDigest: fingerprintSchema,
-    observedBytes: z.number().int().nonnegative(),
-    verifierVersion: z.literal("task7-verifier.v3"),
-    fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
-    providerRequests: z.literal("NOT_RUN"),
-    realRepositories: z.literal("NOT_RUN"),
-    remoteCi: z.literal("PENDING"),
-  })
-  .superRefine((receipt, context) => {
-    if (receipt.stage !== "SOURCE_IDENTITY" && receipt.source === null) {
-      context.addIssue({
-        code: "custom",
-        message: "post-identity Task 7 failures must bind the exact source and verifier",
-      });
-    }
+function createTask7FailureSourceSchema(
+  exactVerifierPathspecSchema: ReturnType<typeof exactOrderedStrings>,
+) {
+  return z.strictObject({
+    repository: z.literal("hunter-pi"),
+    commit: commitSchema,
+    digest: fingerprintSchema,
+    pathspec: sourcePathspecSchema,
+    verifierPathspec: exactVerifierPathspecSchema,
+    verifierFingerprint: fingerprintSchema,
+    testFileFingerprint: fingerprintSchema,
   });
+}
+
+function createTask7PlatformFailureReceiptSchema(
+  schemaVersion: "hpi-task7-platform-failure.v3" | "hpi-task7-platform-failure.v4",
+  verifierVersion: "task7-verifier.v3" | "task7-verifier.v4",
+  sourceSchema: ReturnType<typeof createTask7FailureSourceSchema>,
+) {
+  return z
+    .strictObject({
+      schemaVersion: z.literal(schemaVersion),
+      kind: z.literal("hunter-pi/task7-platform-failure"),
+      observedAt: z.iso.datetime({ offset: true }),
+      status: z.enum(["FAIL", "NOT_PROVEN"]),
+      platform: z.enum(["win32", "linux", "UNSUPPORTED"]),
+      stage: z.enum([
+        "SOURCE_IDENTITY",
+        "TEST_EXECUTION",
+        "REPORT_PARSE",
+        "SOURCE_REVALIDATION",
+        "EVIDENCE_WRITE",
+      ]),
+      code: z.literal("TASK7_PLATFORM_PROBE_DID_NOT_COMPLETE"),
+      source: sourceSchema.nullable(),
+      exitCode: z.number().int().nullable(),
+      stdoutDigest: fingerprintSchema,
+      stderrDigest: fingerprintSchema,
+      observedBytes: z.number().int().nonnegative(),
+      verifierVersion: z.literal(verifierVersion),
+      fixturePolicy: z.literal("AUTOMATIC_TEMPORARY_ONLY"),
+      providerRequests: z.literal("NOT_RUN"),
+      realRepositories: z.literal("NOT_RUN"),
+      remoteCi: z.literal("PENDING"),
+    })
+    .superRefine((receipt, context) => {
+      if (receipt.stage !== "SOURCE_IDENTITY" && receipt.source === null) {
+        context.addIssue({
+          code: "custom",
+          message: "post-identity Task 7 failures must bind the exact source and verifier",
+        });
+      }
+    });
+}
+
+export const task7PlatformFailureReceiptV3Schema = createTask7PlatformFailureReceiptSchema(
+  "hpi-task7-platform-failure.v3",
+  "task7-verifier.v3",
+  createTask7FailureSourceSchema(verifierPathspecV2Schema),
+);
+export const task7PlatformFailureReceiptSchema = createTask7PlatformFailureReceiptSchema(
+  "hpi-task7-platform-failure.v4",
+  "task7-verifier.v4",
+  createTask7FailureSourceSchema(verifierPathspecSchema),
+);
 export type Task7PlatformFailureReceipt = z.infer<typeof task7PlatformFailureReceiptSchema>;
 
 const vitestAssertionSchema = z.looseObject({

@@ -2,12 +2,13 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672`
+- Preserved attempt #13 v2 Evidence source: `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672`
+- Replacement attempt #14 v3 Evidence source: `PENDING CLEAN COMMIT`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **IN_PROGRESS / PLATFORM V2 PASS / FULL LOCAL PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **IN_PROGRESS / ATTEMPT #13 PRESERVED / ATTEMPT #14 LOCAL EVIDENCE PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -21,7 +22,7 @@ The next independent rereview still reproduced two Critical gaps on `c188695`: c
 
 Final independent rereview of `eda8274` confirms both Critical findings are closed: old-generation disposal is blocked while the replacement directory remains, and exact or changed-payload start reuse in another Host stops before a second driver call. It found no new Critical or Important correctness issue, independently reconciled the 65 focused and 295 full test counts, and recomputed the attempt #5 source/verifier/receipt identities. Actual PR/main CI are still required.
 
-That historical rereview did not cover the later repository-wide fixture-scheduling change. Source `4ae6735d1d472fe7eb902d38bb625fa182d12611` changed test orchestration and lifecycle cleanup only. A later review of attempt #12 then reproduced an `EMPTY -> ACTIVE -> EMPTY` cancel/timeout gap in the Linux helper's scan accounting. Current source `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` closes that reviewed path and has attempt #13 local Evidence; its independent rereview remains `PENDING`, and no prior review is carried forward as proof for the new head.
+That historical rereview did not cover the later repository-wide fixture-scheduling change. Source `4ae6735d1d472fe7eb902d38bb625fa182d12611` changed test orchestration and lifecycle cleanup only. A later review of attempt #12 then reproduced an `EMPTY -> ACTIVE -> EMPTY` cancel/timeout gap in the Linux helper's scan accounting. Source `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` closes that reviewed path and produced attempt #13 local Evidence. The current rereview retained its later mixed-stress failure, then closed it as non-reproducible host/test-scheduling history after exact clean and pressured reproductions; it separately found that attempt #13's verifier fingerprint omitted the pure Linux-finality test. No prior review or receipt is carried forward as proof for replacement attempt #14.
 
 ## Frozen outcome and limits
 
@@ -75,7 +76,7 @@ The superseded Task 7 receipts use strict `hpi-task7-platform-receipt.v1`, `hpi-
 
 The formerly selected receipts bind source commit `760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10` and source digest `sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f`. Their incomplete source pathspec excluded the verifier and CI definition, which is why they are preserved but superseded.
 
-The replacement implementation defines strict v2 successful platform and consistency schemas. Historical v1/v2 failure envelopes remain parseable; current failures use strict v3 so every failure emitted after source identification binds the exact source commit, source digest, source pathspec, and verifier fingerprint. Before and after hashing or test execution, the probe requires the exact source commit and entire Git worktree to remain clean. Its source digest covers all application/package implementation, scripts, tests, tools, lockfile, Node/npm/build/lint/format/test configuration, and the pinned CI workflow; a separate verifier fingerprint binds the exact parser, comparator, focused tests, configuration, lockfile, and CI definition. Cross-platform consistency includes the exact source commit and rejects a verifier/pathspec mismatch. Linux receipts qualify `/etc/os-release` as Ubuntu rather than relabelling an arbitrary Linux host.
+The first replacement implementation defined strict v2 successful platform/consistency and v3 failure schemas. Those schemas and every historical v1/v2 failure remain parseable and immutable. Because the v2 verifier pathspec omitted `test/posix-process-tree-finality.test.ts`, current emissions advance append-only to success v3, failure v4 with `task7-verifier.v4`, and consistency v3; the old schemas retain their old exact pathspec and cannot accept a new receipt. Every failure emitted after source identification binds the exact source commit, source digest, source pathspec, and verifier fingerprint. Before and after hashing or test execution, the probe requires the exact source commit and entire Git worktree to remain clean. Its source digest covers all application/package implementation, scripts, tests, tools, lockfile, Node/npm/build/lint/format/test configuration, and the pinned CI workflow; a separate verifier fingerprint now binds the exact parser, comparator, both focused test files, configuration, lockfile, and CI definition. Cross-platform consistency includes the exact source commit and rejects a verifier/pathspec mismatch. Linux receipts qualify `/etc/os-release` as Ubuntu rather than relabelling an arbitrary Linux host.
 
 | V2 artifact | Actual result | Disposition |
 |---|---|---|
@@ -112,11 +113,11 @@ The replacement implementation defines strict v2 successful platform and consist
 | [`windows-local-v2-attempt-12.json`](evidence/task7/windows-local-v2-attempt-12.json) | `PASS`, 9/9 checks, 13286 ms | preserved; superseded after independent review reproduced cancel/timeout scan-accounting ambiguity |
 | [`ubuntu-wsl-v2-attempt-12.json`](evidence/task7/ubuntu-wsl-v2-attempt-12.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4607 ms | preserved; superseded by the reviewed Linux correction |
 | [`local-consistency-v2-attempt-12.json`](evidence/task7/local-consistency-v2-attempt-12.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded by attempt #13 |
-| [`windows-local-v2-attempt-13.json`](evidence/task7/windows-local-v2-attempt-13.json) | `PASS`, 9/9 checks, 19835 ms | selected local Windows receipt after serialized Linux finality correction |
-| [`ubuntu-wsl-v2-attempt-13.json`](evidence/task7/ubuntu-wsl-v2-attempt-13.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 8337 ms | selected Ubuntu 22.04 WSL receipt from an exact clean clone |
-| [`local-consistency-v2-attempt-13.json`](evidence/task7/local-consistency-v2-attempt-13.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-13.json`](evidence/task7/windows-local-v2-attempt-13.json) | `PASS`, 9/9 checks, 19835 ms | preserved local Windows receipt; superseded because its verifier set omitted the pure Linux-finality test |
+| [`ubuntu-wsl-v2-attempt-13.json`](evidence/task7/ubuntu-wsl-v2-attempt-13.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 8337 ms | preserved Ubuntu 22.04 WSL receipt with the same incomplete verifier identity |
+| [`local-consistency-v2-attempt-13.json`](evidence/task7/local-consistency-v2-attempt-13.json) | `PASS / remoteCi=PENDING` | preserved local aggregate; not selected as current completion proof |
 
-The selected attempt #13 pair binds source commit `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672`, source digest `sha256:40f64b09fd55132913dbd2ae3fab882ff3461e9983c033b77a1f140b884b6011`, and verifier fingerprint `sha256:6b0ba90b520d9e4d49d24c32da5524e00f3a1b25c40205f6d0a3e6dc24a41d97`.
+The preserved attempt #13 pair binds source commit `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672`, source digest `sha256:40f64b09fd55132913dbd2ae3fab882ff3461e9983c033b77a1f140b884b6011`, and verifier fingerprint `sha256:6b0ba90b520d9e4d49d24c32da5524e00f3a1b25c40205f6d0a3e6dc24a41d97`.
 
 The selected artifact SHA-256 values are:
 
@@ -161,7 +162,9 @@ npx vitest run test/managed-process-platform.test.ts -t "cancels an owned nested
 npx vitest run test/managed-process-platform.test.ts -t "times out and reconciles the exact nested process tree" --reporter=verbose
 ```
 
-The failed combined stress result remains part of the history and is not relabelled as PASS. It does not alter the earlier formal receipts, but independent rereview must decide whether it exposes a Task 7 correctness issue or only the explicitly unproven host-abort/recovery boundary before this branch may be pushed.
+The failed combined stress result remains part of the history and is not relabelled as PASS. Independent rereview repeated staged reparent 30/30 and cancel 20/20 against the exact clean source, then ran the original timeout filter under per-process tracing. The test body completed in 5.319 seconds (7.536 seconds total); its protocol showed the detached descendant become a zombie before the helper emitted terminal finality, and the final scan found zero matching helpers or zombies. The same timeout filter also passed in 4.382 seconds (5.576 seconds total) while exactly 200 temporary `sleep` processes raised the observed process-table peak to 258; all 200 pressure PIDs were cleaned and the final matching scan was empty.
+
+The reviewer therefore closed the prior hard stop as non-reproducible host/test-scheduling history, not as a newly proven PASS and not as proof of host-crash recovery. The separate verifier-identity omission requires a clean attempt #14 before push.
 
 The replacement nine-check platform matrix is required to prove:
 
@@ -227,8 +230,9 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - PR run `30966180228` reproduced the detached closed-stdio failure in Ubuntu base while the isolated Ubuntu containment job passed. An exact WSL reproduction passed six times and failed on the seventh; diagnostic repetition then observed a live detached child while the Host remained `EXITED / EMPTY / CLOSED / PENDING`. The child's `/proc` parent was WSL `/init`, so the helper had exited after one inconsistent whole-table scan and genuinely lost containment. Increasing the eight-second wait would not repair that escape.
 - Commit `63d6b66eaefad49a58d4b99dfd45b50956ad748b` requires two consecutive complete empty scans. The candidate passed 30/30 focused Linux repetitions, both complete platform files, Windows lint/typecheck/298 tests/format/diff checks, and full `npm run verify` in 404.7 seconds. The final Pi probe remained provider-independent `SUPPORTED`; real Provider stayed `NOT_PROVEN` and no Provider request occurred.
 - Attempt #12 passes Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN`; the strict comparator and 10/10 Evidence suite pass. Its selected hashes and identities are listed above. Independent rereview and replacement remote CI remain `PENDING`.
-- Independent review then showed the attempt #12 counter could retain an empty candidate across an intervening active pre-signal scan. The new pure RED failed 2/2 before implementation. Commit `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` serializes scan/termination, makes every scan update one candidate sequence, adds direct-child snapshots, and strengthens the existing formal cancel, timeout, and detached checks without changing the nine-check Evidence schema.
-- Attempt #13 passes Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN`; strict comparison and the 10/10 Evidence suite pass. Full verification passes 300/300. The later mixed stress timeout, exact cleanup, and subsequent 20/20 visible timeout rerun are retained in the reproducibility section. Independent rereview and replacement remote CI remain `PENDING`.
+- Independent review then showed the attempt #12 counter could retain an empty candidate across an intervening active pre-signal scan. The new pure RED failed 2/2 before implementation. Commit `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` serializes scan/termination, makes every scan update one candidate sequence, adds direct-child snapshots, and strengthens the existing formal cancel, timeout, and detached checks without changing the nine-check platform matrix.
+- Attempt #13 passes Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN`; strict comparison and the 10/10 Evidence suite pass. Full verification passes 300/300. The later mixed stress timeout and all exact rereproduction results are retained in the reproducibility section. Independent rereview closes that result as non-reproducible host/test-scheduling history but finds the v2 verifier pathspec omitted the pure Linux-finality test.
+- Historical success v2/failure v3/consistency v2 schemas remain frozen and parseable. Current success v3/failure v4 with `task7-verifier.v4`/consistency v3 schemas add that test to the exact verifier identity. Attempt #14 local Evidence and replacement remote CI remain `PENDING`.
 
 ## CI and remaining boundaries
 

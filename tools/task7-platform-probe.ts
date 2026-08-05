@@ -261,7 +261,7 @@ function createFailureReceipt(
   const platform =
     process.platform === "win32" || process.platform === "linux" ? process.platform : "UNSUPPORTED";
   return task7PlatformFailureReceiptSchema.parse({
-    schemaVersion: "hpi-task7-platform-failure.v3",
+    schemaVersion: "hpi-task7-platform-failure.v4",
     kind: "hunter-pi/task7-platform-failure",
     observedAt: new Date().toISOString(),
     status,
@@ -284,7 +284,7 @@ function createFailureReceipt(
     stdoutDigest: result?.stdoutDigest ?? digest(""),
     stderrDigest: result?.stderrDigest ?? digest(""),
     observedBytes: result?.observedBytes ?? 0,
-    verifierVersion: "task7-verifier.v3",
+    verifierVersion: "task7-verifier.v4",
     fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
     providerRequests: "NOT_RUN",
     realRepositories: "NOT_RUN",
@@ -349,7 +349,7 @@ export async function runTask7PlatformProbe(
       throw new Error("Task 7 source or verifier identity changed during platform execution");
     }
     const receipt = task7PlatformReceiptSchema.parse({
-      schemaVersion: "hpi-task7-platform-receipt.v2",
+      schemaVersion: "hpi-task7-platform-receipt.v3",
       kind: "hunter-pi/task7-platform-receipt",
       observedAt: endedAt.toISOString(),
       status: "PASS",

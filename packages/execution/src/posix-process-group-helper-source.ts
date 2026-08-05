@@ -59,13 +59,13 @@ finally:
     os.close(pidfd)
 `;
 
-export type LinuxCompleteTreeScanObservation = "ACTIVE" | "BOUNDARY" | "EMPTY";
+export type LinuxTreeFinalityEvent = "ACTIVE" | "CONTROL_BOUNDARY" | "EMPTY";
 
 export function nextLinuxCompleteEmptyScanCount(
   current: number,
-  observation: LinuxCompleteTreeScanObservation,
+  event: LinuxTreeFinalityEvent,
 ): number {
-  if (observation !== "EMPTY") return 0;
+  if (event !== "EMPTY") return 0;
   return Math.min(current + 1, 2);
 }
 
@@ -280,7 +280,7 @@ const requestTermination = (cause) => {
   terminationCause = cause;
   consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
     consecutiveCompleteEmptyScans,
-    "BOUNDARY",
+    "CONTROL_BOUNDARY",
   );
 };
 
@@ -384,7 +384,7 @@ const poll = async () => {
         terminationAcknowledged = true;
         consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
           consecutiveCompleteEmptyScans,
-          "BOUNDARY",
+          "CONTROL_BOUNDARY",
         );
         send({ type: "terminationAcknowledged", cause: terminationCause });
       }

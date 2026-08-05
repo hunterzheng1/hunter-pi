@@ -4,7 +4,7 @@
 
 Tasks 0–6 are complete within their recorded bounds. Task 6 product/Evidence commit `502011b8a34e9773e415643b01a838c04d5582c5` passed PR #15, documentation HEAD `3c4d5e5200f29a70a607fa6d40be63a6c99b92c9` passed the final PR gates, and merge `b77937f689bca859a29c7df22025ce12e875bda4` passed exact Windows, Ubuntu, and aggregate Evidence main CI. The real request remains bounded to its disposable fixture; broader Provider reliability and real-repository safety are not proven.
 
-Task 7 is the only active task. Independent review superseded its earlier receipts; replacement Windows/Ubuntu local v2 Evidence now passes while independent rereview and PR/main CI remain `PENDING`. Its detailed execution and hard-stop rules are frozen in [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md). Real repositories and Provider requests remain prohibited during Task 7.
+Task 7 is the only active task. Owner-authorized repository-wide fixture scheduling closed the retained full-suite blocker: source `4ae6735d1d472fe7eb902d38bb625fa182d12611` passes `npm run verify`, and replacement Windows/Ubuntu/consistency attempt #11 Evidence passes locally. Independent rereview and PR/main CI remain `PENDING`; Task 8 remains `NOT_STARTED`. Its detailed execution and hard-stop rules are frozen in [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md). Real repositories and Provider requests remain prohibited during Task 7.
 
 The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/provenance/` policy must remain committed before executable code, and every external source port requires a specific record.
 

@@ -2,12 +2,12 @@
 
 - Preregistered: 2026-08-04
 - Implementation baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
-- Selected v2 Evidence source: `4aa7db7f19cb2bd36eee6335b11f628d12d5e392`
+- Selected v2 Evidence source: `4ae6735d1d472fe7eb902d38bb625fa182d12611`
 - Branch: `codex/task7-worktree-process`
 - Local platforms: Windows x64 and Ubuntu 22.04 x64 under WSL
 - Provider requests: `NOT_RUN`
 - Real user repositories: `NOT_RUN`
-- Task result: **BLOCKED / PLATFORM V2 PASS / FULL LOCAL FAIL / INDEPENDENT REREVIEW NOT_RUN / REMOTE CI PENDING / TASK 8 NOT_STARTED**
+- Task result: **IN_PROGRESS / PLATFORM V2 PASS / FULL LOCAL PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING / TASK 8 NOT_STARTED**
 
 ## Independent-review disposition
 
@@ -20,6 +20,8 @@ Commit `869e456c9d5feaa86dd4b359908bb3e2f7884812` remediates those findings. Att
 The next independent rereview still reproduced two Critical gaps on `c188695`: changing a caller-supplied bind operation identity let the same start operation launch once in each Host, and distinct prepare operations with the same payload fingerprint produced the same workspace-generation fingerprint, letting stale disposal delete the replacement generation. Commit `d47c4decfb6c857160004aa602f93d99b9943538` derives the only durable process-reservation key from the canonical start operation, rejects caller-selected bind identities, and includes the unique prepare operation in workspace fingerprint v2. Attempt #5 is the selected local pair.
 
 Final independent rereview of `eda8274` confirms both Critical findings are closed: old-generation disposal is blocked while the replacement directory remains, and exact or changed-payload start reuse in another Host stops before a second driver call. It found no new Critical or Important correctness issue, independently reconciled the 65 focused and 295 full test counts, and recomputed the attempt #5 source/verifier/receipt identities. Actual PR/main CI are still required.
+
+That historical rereview did not cover the later repository-wide fixture-scheduling change. The replacement source `4ae6735d1d472fe7eb902d38bb625fa182d12611` changes test orchestration and lifecycle cleanup only; its independent rereview remains `PENDING` and no prior review is being carried forward as proof for the new head.
 
 ## Frozen outcome and limits
 
@@ -101,11 +103,14 @@ The replacement implementation defines strict v2 successful platform and consist
 | [`ubuntu-wsl-v2-attempt-8.json`](evidence/task7/ubuntu-wsl-v2-attempt-8.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4376 ms | preserved Ubuntu receipt; superseded after the full suite retained two more default-budget timeouts |
 | [`local-consistency-v2-attempt-8.json`](evidence/task7/local-consistency-v2-attempt-8.json) | `PASS / remoteCi=PENDING` | preserved aggregate; superseded after the full suite retained two more default-budget timeouts |
 | [`windows-local-v2-attempt-9.json`](evidence/task7/windows-local-v2-attempt-9.json) | `NOT_PROVEN / SOURCE_IDENTITY`, 0 captured bytes | preserved clean-worktree refusal; no platform test ran and no Ubuntu or consistency receipt was produced |
-| [`windows-local-v2-attempt-10.json`](evidence/task7/windows-local-v2-attempt-10.json) | `PASS`, 9/9 checks, 12655 ms | selected clean Windows receipt after the inherited Workspace timeout change |
-| [`ubuntu-wsl-v2-attempt-10.json`](evidence/task7/ubuntu-wsl-v2-attempt-10.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4735 ms | selected clean Ubuntu receipt after one preserved no-receipt failed launcher run |
-| [`local-consistency-v2-attempt-10.json`](evidence/task7/local-consistency-v2-attempt-10.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
+| [`windows-local-v2-attempt-10.json`](evidence/task7/windows-local-v2-attempt-10.json) | `PASS`, 9/9 checks, 12655 ms | preserved clean Windows receipt; superseded after full local verification failed |
+| [`ubuntu-wsl-v2-attempt-10.json`](evidence/task7/ubuntu-wsl-v2-attempt-10.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4735 ms | preserved clean Ubuntu receipt; superseded after full local verification failed |
+| [`local-consistency-v2-attempt-10.json`](evidence/task7/local-consistency-v2-attempt-10.json) | `PASS / remoteCi=PENDING` | preserved local aggregate; superseded after full local verification failed |
+| [`windows-local-v2-attempt-11.json`](evidence/task7/windows-local-v2-attempt-11.json) | `PASS`, 9/9 checks, 12565 ms | selected Windows receipt after deterministic repository-wide fixture scheduling |
+| [`ubuntu-wsl-v2-attempt-11.json`](evidence/task7/ubuntu-wsl-v2-attempt-11.json) | `PASS`, 7 applicable checks and 2 Windows-only `NOT_RUN` checks, 4548 ms | selected Ubuntu 22.04 WSL receipt from an exact disposable clone |
+| [`local-consistency-v2-attempt-11.json`](evidence/task7/local-consistency-v2-attempt-11.json) | `PASS / remoteCi=PENDING` | selected local aggregate; exact commit, source digest, verifier, command, test, and applicability matrix match |
 
-The selected attempt #10 pair binds source commit `4aa7db7f19cb2bd36eee6335b11f628d12d5e392`, source digest `sha256:2dee3bc86b383e9710864bb61cfd47d7d4da7064000a3400ba7937d529e4c06e`, and verifier fingerprint `sha256:e798ab36d5b10bac36be2db41289c32806fa7bc964acb87a8e68ebf1cf3aa5b5`.
+The selected attempt #11 pair binds source commit `4ae6735d1d472fe7eb902d38bb625fa182d12611`, source digest `sha256:60801caccceb62445067b8a77e6f0effacdbd9f6606233870e55a748c45e9873`, and verifier fingerprint `sha256:2f28d4e9e479e66bfcaf4d62989f00b6d4141b5e92817cdc37a591059068858a`.
 
 The selected artifact SHA-256 values are:
 
@@ -116,6 +121,9 @@ The selected artifact SHA-256 values are:
 - Windows attempt #10: `814abf63549414250f8cb5dcb33842d0c0ebe8a8266c7cef9474e2319d93ca2f`;
 - Ubuntu attempt #10: `0363ae4113d450b9ce2e896baea9a804e28ca1a9afcec3daeb3f845b8bc91715`;
 - local consistency attempt #10: `f7098e7b479eab25609e149ee1fff91dd9b26008df910ae3e6232b29297847cd`;
+- Windows attempt #11: `6c5ab356e2c9038560cb52f196949f5a421c2acc79b89fefd603e2c8ec0ab4ff`;
+- Ubuntu attempt #11: `56b36d09dd15ae80e78cb6bda8cf979c455086e3bbecc5334b188e5f31781efd`;
+- local consistency attempt #11: `ab029a0d865520e6525e605e80fe03f82cd71df97081c9ffd6aeffacdc53d0ab`;
 - preserved Ubuntu v2 failure: `ab1751beec9ccc1ffbc2dbaa9758acdd9aa04a02e0c10575573cd9fa525c5c66`.
 
 The replacement nine-check platform matrix is required to prove:
@@ -158,7 +166,7 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - the post-hardening `npm run probe:task7` passed the exact Windows 6/6 matrix, and `npm run compare:task7-evidence` matched it against the preserved Ubuntu receipt while retaining `remoteCi=PENDING`;
 - strict tests parse and privacy-scan every committed Task 7 receipt and recompute both local consistency artifacts.
 
-## Attempts #8–#10 and terminal local blocker
+## Attempts #8–#11 and local blocker resolution
 
 - Attempt #8 passes Windows 9/9 and, in a fresh locked Ubuntu WSL clone, 7 applicable checks with 2 Windows-only checks skipped. Its exact five-file command passes 65/65 in 75.3 seconds.
 - A disposable Ubuntu 22.04 WSL clone passes the exact platform matrix with 7 applicable checks and 2 Windows-only checks skipped by declared applicability.
@@ -173,6 +181,12 @@ The pre-review local branch state completed these gates on Windows x64; they are
 - The Pi public-interface probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`; Task 7 made no Provider request.
 - Strict Evidence passes 10/10. A separate count-only scan over all three attempt #10 receipts finds zero Windows absolute paths, UNC paths, private Windows or POSIX home paths, and credential-assignment shapes; all three file hashes match the selected values above. These checks preserve the receipts but do not override the full-suite failure.
 - This is the third evidence-based remediation round for the repository-wide fixture budget/scheduling blocker. Further timeout expansion or rerun is stopped by the iteration rule; independent review and replacement remote CI remain `NOT_RUN`/`PENDING`.
+- The owner explicitly authorized a bounded scope expansion into repository-wide real Git/process fixture scheduling, timeout cleanup, and Temp lifecycle. Product contracts, Task 8, Pi/model calls, Provider requests, and real user repositories remained out of scope.
+- A deterministic test-infrastructure RED first failed because the new runtime and captured-process modules did not exist. The implementation then introduced one per-run contained Temp root, exact retrying cleanup, inherited Temp restoration, child-close settlement, and a repository-wide worker cap.
+- A four-resource-file baseline passed 48/48 but took 86.4 seconds, while the prior 16-worker full suite had failed; the host exposes 16 logical workers and 23 of 36 then-existing files used temporary directories. A concurrent test/typecheck/lint diagnostic reproduced the outer egress timeout and `EBUSY`; after child-close settlement, an intentionally tight 10-second child budget failed cleanly without `EBUSY` and was corrected to a 15-second inner / 60-second outer hierarchy.
+- `maxWorkers=2` passed the five resource suites 51/51, but the full suite stopped at 297/298 when the first real Doctor fixture took 5488 ms and cleanup reported `EPERM`. The same Doctor file passed 9/9 alone, with the target case at 444 ms, proving cross-file resource contention rather than a Doctor contract failure.
+- Final `fileParallelism=false / maxWorkers=1` scheduling passed 37 files and 298/298 tests in 148.15 seconds. Fresh full `npm run verify` then passed in 325.7 seconds, including lint, typecheck, the same 298 tests, strict compiler, build, format, package smoke, clean-install smoke, and the Pi public-interface probe. The probe reported provider-independent `SUPPORTED` and real Provider `NOT_PROVEN`.
+- Attempt #11 passes Windows 9/9 and Ubuntu 7 applicable + 2 Windows-only `NOT_RUN`; the strict comparator passes. All three schemas and privacy guards pass, count-only scans find zero Windows/UNC/private-home/credential-assignment patterns, and the hashes match above. No per-run `hunter-pi-vitest-*` Temp root or Ubuntu clone remained. The two old attempt #10 Temp directories remain preserved as historical residue; no bypass was used.
 
 ## CI and remaining boundaries
 

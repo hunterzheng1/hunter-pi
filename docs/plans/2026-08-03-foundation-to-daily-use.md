@@ -219,6 +219,8 @@ Deliverables:
 
 Stop on any reproducible source-loss, escaped process tree, or ambiguous cleanup result.
 
+Implementation status on 2026-08-05: **FULL LOCAL PASS / INDEPENDENT REREVIEW PENDING / REMOTE CI PENDING**. Owner-authorized test-infrastructure scope made real Git/process fixtures run one file at a time under a per-run contained Temp root, with bounded retry cleanup and child-close reconciliation. Exact source `4ae6735d1d472fe7eb902d38bb625fa182d12611` passes 298/298 tests and full `npm run verify`; Windows/Ubuntu/consistency attempt #11 receipts pass locally with `remoteCi=PENDING`. Task 8 remains `NOT_STARTED` until Task 7 review and remote closure.
+
 Detailed execution: [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md).
 
 ## Task 8 — Verification adequacy and review/fixback

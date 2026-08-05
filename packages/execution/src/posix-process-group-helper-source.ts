@@ -185,6 +185,7 @@ let terminationCause = "NONE";
 let terminationAcknowledged = false;
 let terminationInFlight = false;
 let lastState = "";
+let consecutiveEmptyScans = 0;
 
 const fail = (code) => {
   if (fatal) return;
@@ -314,7 +315,11 @@ const poll = async () => {
       await killIdentified(descendants);
       descendants = await liveDescendants();
     }
-    const treeState = descendants.length === 0 ? "EMPTY" : "ACTIVE";
+    // A /proc table scan is not atomic across orphan reparenting. The first
+    // empty result is only a candidate; a later complete scan must confirm it.
+    consecutiveEmptyScans = descendants.length === 0 ? consecutiveEmptyScans + 1 : 0;
+    const treeEmpty = consecutiveEmptyScans >= 2;
+    const treeState = treeEmpty ? "EMPTY" : "ACTIVE";
     const phase =
       terminationAcknowledged && descendants.length > 0
         ? "TERMINATING"
@@ -343,7 +348,7 @@ const poll = async () => {
     }
     if (
       targetExited &&
-      descendants.length === 0 &&
+      treeEmpty &&
       stdoutClosed &&
       stderrClosed &&
       process.stdout.writableLength === 0 &&

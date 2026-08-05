@@ -242,10 +242,7 @@ function hasCycle(nodes: readonly VerificationNode[]): boolean {
   return nodes.some((node) => visit(node.nodeId));
 }
 
-function latestObservedAt(
-  request: ParsedVerificationAdequacyRequest,
-  plan: PlanRevision,
-): string {
+function latestObservedAt(request: ParsedVerificationAdequacyRequest, plan: PlanRevision): string {
   const timestamps = [
     plan.createdAt,
     ...request.verificationReceipts.map((receipt) => receipt.observedAt),
@@ -297,7 +294,8 @@ function validateDAGAndLocks(
         severity: "P0",
         code: "DAG_NODE_UNKNOWN",
         scope: node.nodeId,
-        rationale: "The DAG references a gate or review Step that is not declared by the Plan Revision.",
+        rationale:
+          "The DAG references a gate or review Step that is not declared by the Plan Revision.",
       });
     }
     if (node.kind === "HUMAN_GATE" && declaredStep?.kind !== "human_gate") {
@@ -362,7 +360,9 @@ function validateDAGAndLocks(
     });
   }
 
-  const requiredChecks = plan.checks.filter((check) => check.required).map((check) => check.checkId);
+  const requiredChecks = plan.checks
+    .filter((check) => check.required)
+    .map((check) => check.checkId);
   for (const checkId of requiredChecks) {
     const node = nodesById.get(checkId);
     if (node?.kind !== "CHECK") {
@@ -374,8 +374,11 @@ function validateDAGAndLocks(
       });
     }
   }
-  for (const step of plan.steps.filter((candidate) => candidate.required && candidate.kind !== "agent")) {
-    const expectedKind = step.kind === "human_gate" ? "HUMAN_GATE" : step.kind === "review" ? "REVIEW" : undefined;
+  for (const step of plan.steps.filter(
+    (candidate) => candidate.required && candidate.kind !== "agent",
+  )) {
+    const expectedKind =
+      step.kind === "human_gate" ? "HUMAN_GATE" : step.kind === "review" ? "REVIEW" : undefined;
     if (expectedKind !== undefined) {
       const node = nodesById.get(step.stepId);
       if (node?.kind !== expectedKind) {
@@ -383,7 +386,8 @@ function validateDAGAndLocks(
           severity: "P0",
           code: "DAG_NODE_UNKNOWN",
           scope: step.stepId,
-          rationale: "Every required human gate or review must be represented in the verification DAG.",
+          rationale:
+            "Every required human gate or review must be represented in the verification DAG.",
         });
       }
     }
@@ -427,7 +431,8 @@ function validateDAGAndLocks(
             severity: "P1",
             code: "RESOURCE_LOCK_CONFLICT",
             scope: `${lockName}:${left},${right}`,
-            rationale: "Concurrent verification nodes share a resource lock without a deterministic order.",
+            rationale:
+              "Concurrent verification nodes share a resource lock without a deterministic order.",
           });
         }
       }
@@ -551,7 +556,8 @@ function validateChecks(
         severity: "P0",
         code: "CHECK_STALE_REUSE",
         scope: receipt.checkId,
-        rationale: "A verification receipt does not match the active Run, Attempt, source, configuration, workspace, or environment identity.",
+        rationale:
+          "A verification receipt does not match the active Run, Attempt, source, configuration, workspace, or environment identity.",
         evidenceIds: receipt.evidenceIds,
       });
     }
@@ -580,7 +586,8 @@ function validateChecks(
         severity: "P0",
         code: "OUTPUT_NOT_REDACTED",
         scope: receipt.checkId,
-        rationale: "Verification output must carry an explicit redaction result before it can become Evidence.",
+        rationale:
+          "Verification output must carry an explicit redaction result before it can become Evidence.",
         evidenceIds: receipt.evidenceIds,
       });
     }
@@ -610,17 +617,20 @@ function validateChecks(
       });
     }
     const check = checksById.get(checkId);
-    const currentReceipt = check === undefined ? undefined : receipts.find(
-      (receipt) =>
-        receipt.runId === request.runId &&
-        receipt.attemptId === request.attemptId &&
-        receipt.checkVersion === check.version &&
-        receipt.checkDefinitionFingerprint === check.definitionFingerprint &&
-        receipt.configFingerprint === check.configurationFingerprint &&
-        receipt.workspaceFingerprint === plan.workspaceFingerprint &&
-        receipt.sourceFingerprint === plan.sourceFingerprint &&
-        receipt.environmentFingerprint === request.environmentFingerprint,
-    );
+    const currentReceipt =
+      check === undefined
+        ? undefined
+        : receipts.find(
+            (receipt) =>
+              receipt.runId === request.runId &&
+              receipt.attemptId === request.attemptId &&
+              receipt.checkVersion === check.version &&
+              receipt.checkDefinitionFingerprint === check.definitionFingerprint &&
+              receipt.configFingerprint === check.configurationFingerprint &&
+              receipt.workspaceFingerprint === plan.workspaceFingerprint &&
+              receipt.sourceFingerprint === plan.sourceFingerprint &&
+              receipt.environmentFingerprint === request.environmentFingerprint,
+          );
     if (currentReceipt === undefined) {
       notRun += 1;
       addFinding(findings, {
@@ -642,10 +652,12 @@ function validateChecks(
     passed,
     skipped: skippedCount,
     notRun,
-    duplicates: duplicateSelectionCount + [...receiptsByCheck.values()].reduce(
-      (total, receipts) => total + Math.max(0, receipts.length - 1),
-      0,
-    ),
+    duplicates:
+      duplicateSelectionCount +
+      [...receiptsByCheck.values()].reduce(
+        (total, receipts) => total + Math.max(0, receipts.length - 1),
+        0,
+      ),
     filtered: filteredCount,
     staleReuse,
     timedOut,
@@ -681,7 +693,8 @@ function validateHumanGates(
         severity: "P0",
         code: "HUMAN_EXPECTATION_MISSING",
         scope: gate.stepId,
-        rationale: "A required human gate must declare the exact content and result fingerprints it accepts.",
+        rationale:
+          "A required human gate must declare the exact content and result fingerprints it accepts.",
       });
       continue;
     }
@@ -727,7 +740,8 @@ function validateHumanGates(
         severity: "P0",
         code: "HUMAN_RECEIPT_MISMATCH",
         scope: gate.stepId,
-        rationale: "The Human Receipt is not bound to the active Run, Attempt, frozen content, and expected result.",
+        rationale:
+          "The Human Receipt is not bound to the active Run, Attempt, frozen content, and expected result.",
         evidenceIds: receipt.evidenceIds,
       });
     }
@@ -747,7 +761,8 @@ function validateHumanGates(
         severity: "P1",
         code: "HUMAN_RECEIPT_UNBOUND",
         scope: receipt.stepId,
-        rationale: "A Human Receipt must bind a predeclared required human gate in this Plan Revision.",
+        rationale:
+          "A Human Receipt must bind a predeclared required human gate in this Plan Revision.",
         evidenceIds: receipt.evidenceIds,
       });
     }
@@ -803,7 +818,8 @@ function validateReviews(
         severity: "P0",
         code: "REVIEW_RECEIPT_STALE",
         scope: review.stepId,
-        rationale: "The Review Receipt does not bind the active Run, Attempt, review definition, source, or workspace.",
+        rationale:
+          "The Review Receipt does not bind the active Run, Attempt, review definition, source, or workspace.",
         evidenceIds: receipt.evidenceIds,
       });
     }
@@ -869,7 +885,8 @@ function validateFixback(
       severity: "P0",
       code: "FIXBACK_INVALID",
       scope: `${batch.previousAttemptId}->${batch.newAttemptId}`,
-      rationale: "A fixback batch must link a distinct prior Attempt to the active Attempt and focus on selected invalidated checks.",
+      rationale:
+        "A fixback batch must link a distinct prior Attempt to the active Attempt and focus on selected invalidated checks.",
       evidenceIds: batch.failureEvidenceIds,
     });
   }
@@ -919,7 +936,12 @@ export function validateVerificationAdequacy(
     if (code !== 0) return code;
     return left.scope.localeCompare(right.scope);
   });
-  const status: AdequacyStatus = findings.length === 0 ? "READY" : findings.some((finding) => finding.severity === "P0") ? "BLOCKED" : "NOT_PROVEN";
+  const status: AdequacyStatus =
+    findings.length === 0
+      ? "READY"
+      : findings.some((finding) => finding.severity === "P0")
+        ? "BLOCKED"
+        : "NOT_PROVEN";
   const receiptWithoutId = {
     schemaVersion,
     planRevisionId: request.planRevision.planRevisionId,

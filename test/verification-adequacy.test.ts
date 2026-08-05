@@ -394,8 +394,8 @@ describe("verification adequacy validator", () => {
           },
         ],
         resourceLocks: [
-          { nodeId: "check_task8-a", lockNames: ["shared" ] },
-          { nodeId: "check_task8-b", lockNames: ["shared" ] },
+          { nodeId: "check_task8-a", lockNames: ["shared"] },
+          { nodeId: "check_task8-b", lockNames: ["shared"] },
         ],
       }),
     );

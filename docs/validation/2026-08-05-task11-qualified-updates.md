@@ -10,4 +10,4 @@ External package smoke and clean `npm ci` pass. The package smoke imports nine w
 
 ## Not proven
 
-No npm publication, Windows installer/signing, migration of existing user state, stable promotion, or remote Windows/Ubuntu CI for this branch occurred. Those remain `PENDING`/`NOT_PROVEN` and block a qualified release claim.
+No npm publication, Windows installer/signing, migration of existing user state, or stable promotion occurred. Exact PR CI run `31023272061` passes Windows/Ubuntu quality, containment, and Evidence jobs; exact main CI remains `PENDING`. The initial fresh-checkout lint failure is preserved in run `31022928024`; these CI results and the unsigned/dirty artifact still do not establish a qualified release claim.

@@ -4,7 +4,7 @@
 
 The provider-neutral `@hunter-pi/pilot` schema/evaluator and its policy tests pass. The comparator now requires exact repository/source/mode/acceptance identity binding and at least two distinct repository fingerprints. The complete synthetic evaluator fixture reaches `GO` only to prove the aggregation rules; it is not pilot Evidence and is not a product readiness claim. The current local verification covers all 46 test files in passing shards (356 tests); a single-process full run remains recorded as Windows host-scheduling history, with the affected Pi/Provider/Git fixture files passing independently.
 
-The actual ten-task Windows run has not been executed on this branch. There is no frozen pair of operator-selected repositories, no raw-Pi/Hunter paired run set, no real Provider readiness/request receipt for this run, no 20 warm-start/30 acknowledgement/30 memory sample set, and no exact remote CI receipt for the current source.
+The actual ten-task Windows run has not been executed on this branch. There is no frozen pair of operator-selected repositories, no raw-Pi/Hunter paired run set, no real Provider readiness/request receipt for this run, no 20 warm-start/30 acknowledgement/30 memory sample set, and no exact main CI receipt for the current source. PR CI run `31023272061` is recorded separately and does not substitute for the real pilot or mainline gate.
 
 ## Terminal disposition
 

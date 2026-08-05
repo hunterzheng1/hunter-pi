@@ -18,7 +18,7 @@ Task 9 was implemented on the isolated `codex/daily-use` worktree using provider
 
 ## Local evidence
 
-The focused Task 9 tests pass (7 files / 66 tests). A sharded local run covered all 46 test files and 356 tests with every shard passing; the Git fixture file passed 22/22 after its host-sensitive fixture budgets were raised to 30 seconds. A prior single-process full Vitest run remains retained as scheduling history: 337 tests passed and 5 were skipped while Pi/Provider/Git fixture cases exceeded their Windows host budgets under external process pressure. Package smoke, clean install, lint, typecheck, build, format, and strict compiler smoke also pass.
+The focused Task 9 tests pass (7 files / 66 tests). A sharded local run covered all 46 test files and 356 tests with every shard passing; the Git fixture file passed 22/22 after its host-sensitive fixture budgets were raised to 30 seconds. A prior single-process full Vitest run remains retained as scheduling history: 337 tests passed and 5 were skipped while Pi/Provider/Git fixture cases exceeded their Windows host budgets under external process pressure. Package smoke, clean install, lint, typecheck, build, format, and strict compiler smoke also pass. Exact PR CI run `31023272061` passes Windows/Ubuntu quality, containment, and Evidence jobs; exact main CI remains `PENDING`. The preceding updater lint failure is retained in run `31022928024`.
 
 ## Not proven
 

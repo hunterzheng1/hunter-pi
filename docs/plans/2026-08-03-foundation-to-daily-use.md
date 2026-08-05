@@ -258,7 +258,7 @@ Deliverables:
 
 No knowledge auto-promotion yet. Stop if recovery requires manual state editing or rewrites incomplete history.
 
-Implementation status on 2026-08-05: **LOCAL PASS WITHIN PROVIDER-NEUTRAL DURABLE-FIXTURE BOUNDS** — periodic Checkpointing, exact operation-identity recovery replay, reconciliation-driven recovery Attempts, cancellation finality, five terminal Archive outcomes, canonical archive binding, exact export/delete, clean-profile second-device import/rejection, and cross-process durable mutation locks are implemented and locally verified. The focused Task 9 set is 7 files / 66 tests; the sharded repository set is 46 files / 356 tests. Real power loss, arbitrary user repositories, and Provider recovery remain `NOT_PROVEN`; branch remote CI is `PENDING`.
+Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN PROVIDER-NEUTRAL DURABLE-FIXTURE BOUNDS** — periodic Checkpointing, exact operation-identity recovery replay, reconciliation-driven recovery Attempts, cancellation finality, five terminal Archive outcomes, canonical archive binding, exact export/delete, clean-profile second-device import/rejection, and cross-process durable mutation locks are implemented and locally verified. The focused Task 9 set is 7 files / 66 tests; the sharded repository set is 46 files / 356 tests. Exact PR CI run `31023272061` passes Windows/Ubuntu quality, containment, and Evidence jobs; exact main CI is `PENDING`. Real power loss, arbitrary user repositories, and Provider recovery remain `NOT_PROVEN`.
 
 ## Task 10 — Standard Pi Package manager and compatibility/trust/isolation
 
@@ -293,7 +293,7 @@ Deliverables:
 
 Publishing requires explicit owner authorization after all candidate gates and actual remote CI pass. Unsigned artifacts are labeled accordingly.
 
-Implementation status on 2026-08-05: **LOCAL PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, redacted failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, and clean install smoke pass. The produced local artifact was dirty and unsigned; publication, signing, state migration, stable promotion, and remote CI remain `NOT_PROVEN`/`PENDING`.
+Implementation status on 2026-08-05: **LOCAL PASS / EXACT PR CI PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, redacted failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, and clean install smoke pass. Exact PR CI run `31023272061` passes; the initial lint failure remains preserved in run `31022928024`. The produced local artifact was dirty and unsigned; exact main CI, publication, signing, state migration, and stable promotion remain `NOT_PROVEN`/`PENDING`.
 
 ## Task 12 — Windows daily-use pilot
 

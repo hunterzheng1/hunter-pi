@@ -7,6 +7,7 @@ export type DurableStoreErrorCode =
   | "RESERVE_CORRUPT"
   | "RESERVE_REQUIRED"
   | "STORAGE_EXHAUSTED"
+  | "STORE_BUSY"
   | "STORE_CORRUPT";
 
 export class DurableStoreError extends Error {

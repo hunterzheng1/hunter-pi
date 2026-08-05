@@ -16,6 +16,9 @@ const packageNames = [
   "@hunter-pi/evidence",
   "@hunter-pi/engine-contracts",
   "@hunter-pi/pi-host",
+  "@hunter-pi/pilot",
+  "@hunter-pi/plugin-manager",
+  "@hunter-pi/updater",
   "@hunter-pi/workflow-kernel",
   "@hunter-pi/testkit",
 ];
@@ -24,6 +27,9 @@ const packageDirectories = [
   "evidence",
   "engine-contracts",
   "pi-host",
+  "pilot",
+  "plugin-manager",
+  "updater",
   "workflow-kernel",
   "testkit",
 ];

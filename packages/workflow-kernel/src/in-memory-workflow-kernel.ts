@@ -291,6 +291,9 @@ function exhaustedGateFailureLifecycle(
 }
 
 function lifecycleFor(state: ProjectionState): ChangeLifecycle {
+  if (state.run.lifecycle === "CANCELLED") {
+    return "CANCELLED";
+  }
   const attempt = state.attempts.at(-1);
   if (attempt === undefined) {
     return "PLANNED";
@@ -551,7 +554,9 @@ export function assertRunProjectionIntegrity(input: RunProjection): void {
     projection.verificationReceipts.length +
     projection.humanReceipts.length +
     projection.reviewReceipts.length +
-    projection.checkpoints.length;
+    projection.checkpoints.length +
+    (projection.run.lifecycle === "CANCELLED" ? 1 : 0) +
+    (projection.run.archiveStatus === "ARCHIVED" ? 1 : 0);
   if (projection.eventCursor !== expectedEventCursor) {
     throw new WorkflowTransitionError("Run projection event cursor does not match its facts");
   }
@@ -604,6 +609,9 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
   const humanReceipts: HumanReceipt[] = [];
   const reviewReceipts: ReviewReceipt[] = [];
   const checkpointIds = new Set<string>();
+  const checkpoints = new Map<string, Checkpoint>();
+  let cancelled = false;
+  let archived = false;
   const requireAttempt = (attemptId: string): Attempt => {
     const attempt = attempts.find((candidate) => candidate.attemptId === attemptId);
     if (attempt === undefined) {
@@ -613,6 +621,9 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
   };
 
   for (const event of events.slice(1)) {
+    if (archived || (cancelled && event.type !== "RUN_ARCHIVED")) {
+      throw new WorkflowTransitionError("no workflow fact may follow Run cancellation");
+    }
     switch (event.type) {
       case "RUN_CREATED":
         throw new WorkflowTransitionError("a Run cannot be created twice");
@@ -697,7 +708,8 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           if (
             attempt.previousAttemptId !== previous.attemptId ||
             !["RETURNED", "INTERRUPTED", "INCOMPLETE"].includes(previousExecutionStatus) ||
-            (!["FAILED", "BLOCKED", "NOT_PROVEN"].includes(previousVerificationStatus) &&
+            (attempt.recoveryCheckpointId === undefined &&
+              !["FAILED", "BLOCKED", "NOT_PROVEN"].includes(previousVerificationStatus) &&
               !hasGateFailure) ||
             attempts.length >= created.planRevision.loopPolicy.maxIterations ||
             attempt.elapsedMsAtStart >= created.planRevision.loopPolicy.maxElapsedMs ||
@@ -761,11 +773,20 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
               ]),
           ]);
           if (
-            failureEvidence.size === 0 ||
-            attempt.failureEvidenceIds?.some((evidenceId) => !failureEvidence.has(evidenceId))
+            attempt.recoveryCheckpointId === undefined &&
+            (failureEvidence.size === 0 ||
+              attempt.failureEvidenceIds?.some((evidenceId) => !failureEvidence.has(evidenceId)))
           ) {
             throw new WorkflowTransitionError(
               "replayed retry Evidence is not bound to the preceding failure",
+            );
+          }
+        }
+        if (attempt.recoveryCheckpointId !== undefined) {
+          const recoveryCheckpoint = checkpoints.get(attempt.recoveryCheckpointId);
+          if (previous === undefined || recoveryCheckpoint?.attemptId !== previous.attemptId) {
+            throw new WorkflowTransitionError(
+              "replayed recovery Attempt does not bind its Checkpoint to the preceding Attempt",
             );
           }
         }
@@ -880,6 +901,73 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           throw new WorkflowTransitionError("replayed Checkpoint does not bind the durable Run");
         }
         checkpointIds.add(checkpoint.checkpointId);
+        checkpoints.set(checkpoint.checkpointId, checkpoint);
+        break;
+      }
+      case "RUN_CANCELLED": {
+        const previous = attempts.at(-1);
+        const previousExecutionStatus =
+          previous === undefined
+            ? undefined
+            : observations
+                .filter((observation) => observation.attemptId === previous.attemptId)
+                .reduce<Attempt["executionStatus"]>(
+                  (status, observation) =>
+                    executionStatusAfterObservation(status, observation.kind),
+                  previous.executionStatus,
+                );
+        if (
+          event.runId !== created.run.runId ||
+          (previousExecutionStatus !== undefined &&
+            ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(
+              previousExecutionStatus,
+            )) ||
+          Date.parse(event.endedAt) < Date.parse(created.run.startedAt)
+        ) {
+          throw new WorkflowTransitionError("replayed cancellation does not bind finality");
+        }
+        cancelled = true;
+        break;
+      }
+      case "RUN_ARCHIVED": {
+        const projectedAttempts = attempts.map((attempt) => {
+          const executionStatus = observations
+            .filter((observation) => observation.attemptId === attempt.attemptId)
+            .reduce<Attempt["executionStatus"]>(
+              (status, observation) => executionStatusAfterObservation(status, observation.kind),
+              attempt.executionStatus,
+            );
+          const withExecution = attemptSchema.parse({ ...attempt, executionStatus });
+          return attemptSchema.parse({
+            ...withExecution,
+            verificationStatus: verificationStatusFor(
+              created.planRevision,
+              withExecution,
+              verificationReceipts,
+            ),
+          });
+        });
+        const partialState: ProjectionState = {
+          change: created.change,
+          planRevision: created.planRevision,
+          run: created.run,
+          attempts: projectedAttempts,
+          observations,
+          verificationReceipts,
+          humanReceipts,
+          reviewReceipts,
+          checkpoints: [...checkpoints.values()],
+        };
+        const lifecycle = cancelled ? "CANCELLED" : lifecycleFor(partialState);
+        if (
+          event.runId !== created.run.runId ||
+          created.run.archiveStatus !== "UNARCHIVED" ||
+          !terminalRunLifecycles.has(lifecycle) ||
+          Date.parse(event.archivedAt) < Date.parse(created.run.startedAt)
+        ) {
+          throw new WorkflowTransitionError("replayed Archive does not bind terminal Run finality");
+        }
+        archived = true;
         break;
       }
     }
@@ -936,6 +1024,21 @@ export function replayWorkflowEvents(events: readonly WorkflowEvent[]): RunProje
         break;
       case "CHECKPOINT_RECORDED":
         state.checkpoints.push(event.checkpoint);
+        break;
+      case "RUN_CANCELLED":
+        state.run = runSchema.parse({
+          ...state.run,
+          lifecycle: "CANCELLED",
+          endedAt: event.endedAt,
+          terminalReason: event.reason,
+        });
+        break;
+      case "RUN_ARCHIVED":
+        state.run = runSchema.parse({
+          ...state.run,
+          archiveStatus: "ARCHIVED",
+          archiveId: event.archiveId,
+        });
         break;
       case "RUN_CREATED":
         throw new WorkflowTransitionError("a Run cannot be created twice");
@@ -1009,7 +1112,7 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
 
     const runId = this.#runIdFor(parsed);
     const current = await this.project(runId);
-    if (terminalRunLifecycles.has(current.run.lifecycle)) {
+    if (terminalRunLifecycles.has(current.run.lifecycle) && parsed.type !== "ARCHIVE_RUN") {
       throw new WorkflowTransitionError(
         `Run ${runId} has terminal ${current.run.lifecycle} outcome; create a replacement Run`,
       );
@@ -1076,6 +1179,11 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
     if (command.run.lifecycle !== "PLANNED") {
       throw new WorkflowTransitionError("a new Run must be PLANNED");
     }
+    if (command.run.archiveStatus !== "UNARCHIVED" || command.run.archiveId !== undefined) {
+      throw new WorkflowTransitionError(
+        "a new Run must begin unarchived without an Archive identity",
+      );
+    }
   }
 
   #runIdFor(command: Exclude<WorkflowCommand, { type: "CREATE_RUN" }>): RunId {
@@ -1103,6 +1211,48 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
   ): WorkflowEvent {
     const cursor = current.eventCursor + 1;
     switch (command.type) {
+      case "ARCHIVE_RUN":
+        if (current.run.archiveStatus !== "UNARCHIVED") {
+          throw new WorkflowTransitionError("Run is already archived");
+        }
+        if (!terminalRunLifecycles.has(current.run.lifecycle)) {
+          throw new WorkflowTransitionError("only a terminal Run can be archived");
+        }
+        if (Date.parse(command.archivedAt) < Date.parse(current.run.startedAt)) {
+          throw new WorkflowTransitionError("Archive time cannot precede Run start");
+        }
+        return workflowEventSchema.parse({
+          schemaVersion: "1.0.0",
+          cursor,
+          type: "RUN_ARCHIVED",
+          runId: command.runId,
+          archiveId: command.archiveId,
+          operationId: command.operationId,
+          operationFingerprint: command.operationFingerprint,
+          archivedAt: command.archivedAt,
+        });
+      case "CANCEL_RUN": {
+        const previous = current.attempts.at(-1);
+        if (
+          previous !== undefined &&
+          ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(previous.executionStatus)
+        ) {
+          throw new WorkflowTransitionError(
+            "cannot cancel while the latest Attempt has an active execution",
+          );
+        }
+        if (Date.parse(command.endedAt) < Date.parse(current.run.startedAt)) {
+          throw new WorkflowTransitionError("cancellation time cannot precede Run start");
+        }
+        return workflowEventSchema.parse({
+          schemaVersion: "1.0.0",
+          cursor,
+          type: "RUN_CANCELLED",
+          runId: command.runId,
+          reason: command.reason,
+          endedAt: command.endedAt,
+        });
+      }
       case "START_ATTEMPT": {
         if (current.attempts.length > 0) {
           throw new WorkflowTransitionError("use RETRY_ATTEMPT after the first try");
@@ -1245,10 +1395,23 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           receipt: command.receipt,
         });
       }
-      case "RETRY_ATTEMPT": {
+      case "RETRY_ATTEMPT":
+      case "RECOVER_ATTEMPT": {
+        const recoveryCheckpointId =
+          command.type === "RECOVER_ATTEMPT" ? command.checkpointId : undefined;
+        const isRecovery = recoveryCheckpointId !== undefined;
         const previous = this.#requireAttempt(current, command.previousAttemptId);
         if (current.attempts.at(-1)?.attemptId !== previous.attemptId) {
           throw new WorkflowTransitionError("retry must follow the latest Attempt");
+        }
+        if (
+          isRecovery &&
+          current.checkpoints.find((checkpoint) => checkpoint.checkpointId === recoveryCheckpointId)
+            ?.attemptId !== previous.attemptId
+        ) {
+          throw new WorkflowTransitionError(
+            "recovery Attempt must bind a Checkpoint for the preceding Attempt",
+          );
         }
         if (!["RETURNED", "INTERRUPTED", "INCOMPLETE"].includes(previous.executionStatus)) {
           throw new WorkflowTransitionError(
@@ -1277,6 +1440,7 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
                 )),
           );
         if (
+          !isRecovery &&
           !["FAILED", "BLOCKED", "NOT_PROVEN"].includes(previous.verificationStatus) &&
           !hasGateFailure
         ) {
@@ -1357,15 +1521,33 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           ]),
         ]);
         if (
-          matchingVerificationReceipts.length +
+          !isRecovery &&
+          (matchingVerificationReceipts.length +
             matchingHumanReceipts.length +
             matchingReviewReceipts.length ===
             0 ||
-          command.failureEvidenceIds.some((evidenceId) => !precedingFailureEvidence.has(evidenceId))
+            command.failureEvidenceIds.some(
+              (evidenceId) => !precedingFailureEvidence.has(evidenceId),
+            ))
         ) {
           throw new WorkflowTransitionError(
             "retry Evidence is not bound to the preceding failed Attempt",
           );
+        }
+        if (isRecovery) {
+          const recoveryEvidenceBound = current.observations.some(
+            (observation) =>
+              observation.attemptId === previous.attemptId &&
+              observation.kind === "PROCESS_EXITED" &&
+              command.failureEvidenceIds.every((evidenceId) =>
+                observation.evidenceIds.includes(evidenceId),
+              ),
+          );
+          if (!recoveryEvidenceBound) {
+            throw new WorkflowTransitionError(
+              "recovery Evidence must be bound to a PROCESS_EXITED observation for the preceding Attempt",
+            );
+          }
         }
         if (current.attempts.some((attempt) => attempt.attemptId === command.attemptId)) {
           throw new WorkflowTransitionError("Attempt identity must be unique");
@@ -1389,6 +1571,13 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
             failureEvidenceIds: command.failureEvidenceIds,
             retryReason: command.reason,
             precedingFailureFingerprint: command.failureFingerprint,
+            ...(recoveryCheckpointId === undefined ? {} : { recoveryCheckpointId }),
+            ...(command.type === "RECOVER_ATTEMPT"
+              ? {
+                  recoveryOperationId: command.operationId,
+                  recoveryOperationFingerprint: command.operationFingerprint,
+                }
+              : {}),
             retryStopConditions: {
               userInputRequired: command.userInputRequired,
               workspaceDriftDetected: command.workspaceDriftDetected,
@@ -1401,7 +1590,7 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           },
         });
       }
-      case "RECORD_CHECKPOINT":
+      case "RECORD_CHECKPOINT": {
         if (
           current.checkpoints.some(
             (checkpoint) => checkpoint.checkpointId === command.checkpoint.checkpointId,
@@ -1428,6 +1617,13 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
             "Checkpoint event cursor does not match the durable projection",
           );
         }
+        const latestCheckpoint = current.checkpoints.at(-1);
+        if (
+          latestCheckpoint !== undefined &&
+          Date.parse(command.checkpoint.createdAt) < Date.parse(latestCheckpoint.createdAt)
+        ) {
+          throw new WorkflowTransitionError("Checkpoint time cannot move backwards");
+        }
         if (command.checkpoint.attemptId !== undefined) {
           this.#requireAttempt(current, command.checkpoint.attemptId);
         }
@@ -1437,6 +1633,7 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           type: "CHECKPOINT_RECORDED",
           checkpoint: command.checkpoint,
         });
+      }
     }
   }
 

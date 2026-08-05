@@ -2,15 +2,22 @@ import { z } from "zod";
 
 import {
   attemptIdSchema,
+  archiveIdSchema,
   attemptSchema,
   checkpointIdSchema,
   checkpointSchema,
   checkIdSchema,
+  distributionReleaseIdSchema,
+  engineReleaseIdSchema,
   evidenceIdSchema,
+  externalReferenceSchema,
   fingerprintSchema,
   humanReceiptSchema,
   managedChangeSchema,
   observationSchema,
+  operationReconciliationReceiptSchema,
+  operationIdSchema,
+  operationReceiptIdSchema,
   planRevisionSchema,
   reviewReceiptSchema,
   resourceUsageSchema,
@@ -19,6 +26,7 @@ import {
   schemaVersionSchema,
   timestampSchema,
   verificationReceiptSchema,
+  workspaceIdSchema,
   type CheckpointId,
 } from "@hunter-pi/domain";
 
@@ -80,10 +88,47 @@ export const retryAttemptCommandSchema = z.strictObject({
   startedAt: timestampSchema,
 });
 
+export const recoverAttemptCommandSchema = z.strictObject({
+  ...workflowCommandVersionShape,
+  type: z.literal("RECOVER_ATTEMPT"),
+  runId: runIdSchema,
+  previousAttemptId: attemptIdSchema,
+  attemptId: attemptIdSchema,
+  checkpointId: checkpointIdSchema,
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  failureEvidenceIds: z.array(evidenceIdSchema).min(1),
+  failureFingerprint: fingerprintSchema,
+  reason: z.string().trim().min(1).max(4_096),
+  elapsedMs: z.number().int().nonnegative(),
+  consumedResources: resourceUsageSchema,
+  userInputRequired: z.boolean(),
+  workspaceDriftDetected: z.boolean(),
+  startedAt: timestampSchema,
+});
+
 export const recordCheckpointCommandSchema = z.strictObject({
   ...workflowCommandVersionShape,
   type: z.literal("RECORD_CHECKPOINT"),
   checkpoint: checkpointSchema,
+});
+
+export const cancelRunCommandSchema = z.strictObject({
+  ...workflowCommandVersionShape,
+  type: z.literal("CANCEL_RUN"),
+  runId: runIdSchema,
+  reason: z.string().trim().min(1).max(4_096),
+  endedAt: timestampSchema,
+});
+
+export const archiveRunCommandSchema = z.strictObject({
+  ...workflowCommandVersionShape,
+  type: z.literal("ARCHIVE_RUN"),
+  runId: runIdSchema,
+  archiveId: archiveIdSchema,
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  archivedAt: timestampSchema,
 });
 
 export const workflowCommandSchema = z.discriminatedUnion("type", [
@@ -94,7 +139,10 @@ export const workflowCommandSchema = z.discriminatedUnion("type", [
   recordHumanReceiptCommandSchema,
   recordReviewReceiptCommandSchema,
   retryAttemptCommandSchema,
+  recoverAttemptCommandSchema,
   recordCheckpointCommandSchema,
+  cancelRunCommandSchema,
+  archiveRunCommandSchema,
 ]);
 export type WorkflowCommand = z.infer<typeof workflowCommandSchema>;
 
@@ -142,6 +190,24 @@ export const workflowEventSchema = z.discriminatedUnion("type", [
     cursor: z.number().int().positive(),
     type: z.literal("CHECKPOINT_RECORDED"),
     checkpoint: checkpointSchema,
+  }),
+  z.strictObject({
+    schemaVersion: schemaVersionSchema,
+    cursor: z.number().int().positive(),
+    type: z.literal("RUN_CANCELLED"),
+    runId: runIdSchema,
+    reason: z.string().trim().min(1).max(4_096),
+    endedAt: timestampSchema,
+  }),
+  z.strictObject({
+    schemaVersion: schemaVersionSchema,
+    cursor: z.number().int().positive(),
+    type: z.literal("RUN_ARCHIVED"),
+    runId: runIdSchema,
+    archiveId: archiveIdSchema,
+    operationId: operationIdSchema,
+    operationFingerprint: fingerprintSchema,
+    archivedAt: timestampSchema,
   }),
 ]);
 export type WorkflowEvent = z.infer<typeof workflowEventSchema>;
@@ -203,11 +269,79 @@ export const recoveryReasonSchema = z.enum([
   "DISTRIBUTION_RELEASE_NOT_REVALIDATED",
   "WORKSPACE_NOT_REVALIDATED",
   "ENGINE_STATE_NOT_RECONCILED",
+  "ACTIVE_OPERATIONS_NOT_RECONCILED",
   "CHECKPOINT_ID_AMBIGUOUS",
 ]);
 export type RecoveryReason = z.infer<typeof recoveryReasonSchema>;
 
+export const recoveryIdentitySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("DISTRIBUTION_RELEASE"),
+    distributionReleaseId: distributionReleaseIdSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("WORKSPACE"),
+    workspaceId: workspaceIdSchema,
+    repositoryFingerprint: fingerprintSchema,
+    workspaceFingerprint: fingerprintSchema,
+    sourceFingerprint: fingerprintSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("ENGINE"),
+    engineReleaseId: engineReleaseIdSchema,
+    engineReleaseFingerprint: fingerprintSchema,
+    sessionReference: externalReferenceSchema.optional(),
+  }),
+]);
+export type RecoveryIdentity = z.infer<typeof recoveryIdentitySchema>;
+
+export const recoveryReconciliationSchema = z
+  .strictObject({
+    schemaVersion: schemaVersionSchema,
+    distributionRelease: z.literal("PASS"),
+    distributionIdentity: recoveryIdentitySchema,
+    workspace: z.literal("PASS"),
+    workspaceIdentity: recoveryIdentitySchema,
+    activeOperationReceiptIds: z.array(operationReceiptIdSchema),
+    unknownOperationIds: z.array(operationIdSchema),
+    operations: z.array(operationReconciliationReceiptSchema),
+    engine: z.literal("PASS"),
+    engineIdentity: recoveryIdentitySchema,
+  })
+  .superRefine((reconciliation, context) => {
+    if (reconciliation.distributionIdentity.kind !== "DISTRIBUTION_RELEASE") {
+      context.addIssue({
+        code: "custom",
+        path: ["distributionIdentity"],
+        message: "distribution reconciliation must bind a Distribution Release identity",
+      });
+    }
+    if (reconciliation.workspaceIdentity.kind !== "WORKSPACE") {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceIdentity"],
+        message: "workspace reconciliation must bind a Workspace identity",
+      });
+    }
+    if (reconciliation.engineIdentity.kind !== "ENGINE") {
+      context.addIssue({
+        code: "custom",
+        path: ["engineIdentity"],
+        message: "engine reconciliation must bind an Engine identity",
+      });
+    }
+  });
+export type RecoveryReconciliation = z.infer<typeof recoveryReconciliationSchema>;
+
 export const recoveryDecisionSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    schemaVersion: schemaVersionSchema,
+    status: z.literal("RECOVERED"),
+    checkpoint: checkpointSchema,
+    recoveryAttemptId: attemptIdSchema,
+    reconciliation: recoveryReconciliationSchema,
+    projection: runProjectionSchema,
+  }),
   z.strictObject({
     schemaVersion: schemaVersionSchema,
     status: z.literal("NOT_PROVEN"),

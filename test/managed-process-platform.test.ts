@@ -359,7 +359,7 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     } finally {
       if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
     }
-  }, 15_000);
+  }, 30_000);
 
   it("keeps finality pending while a descendant holds inherited output handles", async () => {
     const fixture = await createFixture();

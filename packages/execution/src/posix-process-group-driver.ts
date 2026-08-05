@@ -32,7 +32,7 @@ const protocolEventSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("state"),
-    phase: z.enum(["RUNNING", "EXITED"]),
+    phase: z.enum(["RUNNING", "EXITED", "TERMINATING"]),
     exitCode: z.number().int().nullable(),
     treeState: z.enum(["ACTIVE", "EMPTY"]),
     stdoutState: z.enum(["OPEN", "CLOSED"]),
@@ -149,7 +149,8 @@ class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
   readonly #timeoutMs: number;
   readonly #readyPromise: Promise<void>;
   readonly #settlementPromise: Promise<DriverSnapshot>;
-  readonly #ackWaiters: ((cause: "CANCEL" | "TIMEOUT" | undefined) => void)[] = [];
+  readonly #ackWaiters: ((response: "CANCEL" | "TIMEOUT" | "NOT_APPLIED" | undefined) => void)[] =
+    [];
   readonly #decoder = new StringDecoder("utf8");
   #resolveReady: (() => void) | undefined;
   #rejectReady: ((error: Error) => void) | undefined;
@@ -328,9 +329,11 @@ class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
       ) {
         return false;
       }
-      const acknowledgement = new Promise<"CANCEL" | "TIMEOUT" | undefined>((resolve) => {
-        this.#ackWaiters.push(resolve);
-      });
+      const acknowledgement = new Promise<"CANCEL" | "TIMEOUT" | "NOT_APPLIED" | undefined>(
+        (resolve) => {
+          this.#ackWaiters.push(resolve);
+        },
+      );
       const written = await new Promise<boolean>((resolve) => {
         this.#stdin.write(`${JSON.stringify({ type: "terminate", cause })}\n`, "utf8", (error) => {
           resolve(error === null || error === undefined);
@@ -347,6 +350,7 @@ class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
         timer.unref();
       });
       const acknowledgedCause = await Promise.race([acknowledgement, acknowledgementTimeout]);
+      if (acknowledgedCause === "NOT_APPLIED") return false;
       if (acknowledgedCause !== cause) {
         if (acknowledgedCause === undefined && !this.#protocolFailed) {
           this.#failProtocol("TERMINATION_NOT_ACKNOWLEDGED");
@@ -423,7 +427,7 @@ class LinuxSubreaperProcessTreeSession implements ManagedProcessDriverSession {
       return;
     }
     if (event.type === "terminationNotApplied") {
-      for (const resolve of this.#ackWaiters.splice(0)) resolve(undefined);
+      for (const resolve of this.#ackWaiters.splice(0)) resolve("NOT_APPLIED");
       return;
     }
     this.#failProtocol(event.code);

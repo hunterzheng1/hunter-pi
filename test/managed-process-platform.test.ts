@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -120,6 +120,30 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+async function readLinuxProcIdentity(
+  pid: number,
+): Promise<{ readonly parentPid: number; readonly state: string } | undefined> {
+  try {
+    const value = await readFile(`/proc/${String(pid)}/stat`, "utf8");
+    const end = value.lastIndexOf(")");
+    if (end < 0) throw new Error("invalid Linux fixture process identity");
+    const fields = value
+      .slice(end + 2)
+      .trim()
+      .split(/\s+/u);
+    const state = fields[0];
+    const parentPid = Number(fields[1]);
+    if (state === undefined || !Number.isSafeInteger(parentPid)) {
+      throw new Error("incomplete Linux fixture process identity");
+    }
+    return { parentPid, state };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return undefined;
+    throw error;
+  }
+}
+
 function nestedProcessSource(): string {
   const grandchild = "setInterval(() => {}, 1000);";
   const child = [
@@ -134,6 +158,43 @@ function nestedProcessSource(): string {
     "process.stdout.write(`ROOT:${process.pid}:${child.pid}\\n`);",
     "setInterval(() => {}, 1000);",
   ].join("\n");
+}
+
+function detachedClosedStdioProcessSource(): string {
+  const child = "setInterval(() => {}, 1000);";
+  return [
+    "const { spawn } = require('node:child_process');",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { detached: true, env: process.env, stdio: 'ignore' });`,
+    "child.once('error', () => { process.stderr.write('CHILD_SPAWN_FAILED'); process.exit(2); });",
+    "child.once('spawn', () => {",
+    "  child.unref();",
+    "  process.stdout.write(`DETACHED:${child.pid}\\n`, () => process.exit(0));",
+    "});",
+  ].join("\n");
+}
+
+async function waitForDetachedPid(host: ManagedProcessHost): Promise<number> {
+  return waitUntil(async () => {
+    const { stdout } = await readText(host);
+    const match = /DETACHED:(\d+)/u.exec(stdout);
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+  });
+}
+
+async function waitForDetachedClosedStdioPending(
+  host: ManagedProcessHost,
+  detachedPid: number,
+): Promise<void> {
+  await waitUntil(async () => {
+    const heartbeat = await host.heartbeat(sessionId);
+    return heartbeat.receipt.state === "EXITED" &&
+      heartbeat.receipt.processTreeState === "ACTIVE" &&
+      heartbeat.receipt.outputState === "CLOSED" &&
+      heartbeat.receipt.terminalFinality === "PENDING" &&
+      isProcessAlive(detachedPid)
+      ? true
+      : undefined;
+  });
 }
 
 async function waitForNestedPids(host: ManagedProcessHost): Promise<number[]> {
@@ -226,7 +287,40 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     });
     expect(pids).toHaveLength(3);
     expect(pids.every((pid) => !isProcessAlive(pid))).toBe(true);
-  });
+
+    const detachedFixture = await createFixture();
+    await detachedFixture.host.start(
+      startRequest(detachedFixture.cwd, ["-e", detachedClosedStdioProcessSource()]),
+    );
+    const detachedPid = await waitForDetachedPid(detachedFixture.host);
+    try {
+      await waitForDetachedClosedStdioPending(detachedFixture.host, detachedPid);
+      const detachedCancelled = await detachedFixture.host.cancel(
+        managedProcessCancelRequestSchema.parse({
+          schemaVersion: "hpi-process-cancel.v1",
+          operationId: "op_platform-cancel",
+          operationFingerprint: fingerprint("operation:platform-cancel"),
+          sessionId,
+          reason: "USER_REQUEST",
+        }),
+      );
+      expect(detachedCancelled.receipt).toMatchObject({
+        outcome: "ACKNOWLEDGED",
+        terminalFinality: "PENDING",
+      });
+      await expect(detachedFixture.host.awaitFinal(sessionId)).resolves.toMatchObject({
+        receipt: {
+          executionObservation: "CANCELLED",
+          processTreeState: "EMPTY",
+          outputState: "CLOSED",
+          terminalFinality: "FINAL",
+        },
+      });
+      expect(isProcessAlive(detachedPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
+    }
+  }, 15_000);
 
   it("times out and reconciles the exact nested process tree", async () => {
     const fixture = await createFixture();
@@ -243,7 +337,29 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       reasonCodes: [],
     });
     expect(pids.every((pid) => !isProcessAlive(pid))).toBe(true);
-  });
+
+    const detachedFixture = await createFixture();
+    await detachedFixture.host.start(
+      startRequest(detachedFixture.cwd, ["-e", detachedClosedStdioProcessSource()], {
+        timeoutMs: 3_000,
+      }),
+    );
+    const detachedPid = await waitForDetachedPid(detachedFixture.host);
+    try {
+      await waitForDetachedClosedStdioPending(detachedFixture.host, detachedPid);
+      await expect(detachedFixture.host.awaitFinal(sessionId)).resolves.toMatchObject({
+        receipt: {
+          executionObservation: "TIMED_OUT",
+          processTreeState: "EMPTY",
+          outputState: "CLOSED",
+          terminalFinality: "FINAL",
+        },
+      });
+      expect(isProcessAlive(detachedPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
+    }
+  }, 15_000);
 
   it("keeps finality pending while a descendant holds inherited output handles", async () => {
     const fixture = await createFixture();
@@ -305,10 +421,12 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
 
   it("keeps a detached closed-stdio descendant inside the reconciled process tree", async () => {
     const fixture = await createFixture();
-    const releasePath = join(fixture.cwd, "release-detached-child");
-    const child = [
+    const childReleasePath = join(fixture.cwd, "release-detached-child");
+    const grandchildReleasePath = join(fixture.cwd, "release-detached-grandchild");
+    const identityPath = join(fixture.cwd, "detached-identities");
+    const grandchild = [
       "const { existsSync } = require('node:fs');",
-      `const releasePath = ${JSON.stringify(releasePath)};`,
+      `const releasePath = ${JSON.stringify(grandchildReleasePath)};`,
       "const deadline = Date.now() + 10000;",
       "const waitForRelease = () => {",
       "  if (existsSync(releasePath)) process.exit(0);",
@@ -316,6 +434,25 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       "  setTimeout(waitForRelease, 25);",
       "};",
       "waitForRelease();",
+    ].join("\n");
+    const child = [
+      "const { existsSync, writeFileSync } = require('node:fs');",
+      "const { spawn } = require('node:child_process');",
+      `const releasePath = ${JSON.stringify(childReleasePath)};`,
+      `const identityPath = ${JSON.stringify(identityPath)};`,
+      `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { detached: true, env: process.env, stdio: 'ignore' });`,
+      "const deadline = Date.now() + 10000;",
+      "const waitForRelease = () => {",
+      "  if (existsSync(releasePath)) process.exit(0);",
+      "  if (Date.now() >= deadline) process.exit(3);",
+      "  setTimeout(waitForRelease, 25);",
+      "};",
+      "grandchild.once('error', () => process.exit(4));",
+      "grandchild.once('spawn', () => {",
+      "  grandchild.unref();",
+      "  writeFileSync(identityPath, `${process.pid}:${grandchild.pid}\\n`, 'utf8');",
+      "  waitForRelease();",
+      "});",
     ].join("\n");
     const root = [
       "const { spawn } = require('node:child_process');",
@@ -332,6 +469,20 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       const match = /DETACHED:(\d+)/u.exec(stdout);
       return match?.[1] === undefined ? undefined : Number(match[1]);
     });
+    const identities = await waitUntil(async () => {
+      try {
+        const value = await readFile(identityPath, "utf8");
+        const match = /^(\d+):(\d+)\n$/u.exec(value);
+        return match?.[1] === undefined || match[2] === undefined
+          ? undefined
+          : ([Number(match[1]), Number(match[2])] as const);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    });
+    const [childPid, grandchildPid] = identities;
+    expect(childPid).toBe(detachedPid);
 
     try {
       const pending = await waitUntil(async () => {
@@ -340,7 +491,8 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
           heartbeat.receipt.processTreeState === "ACTIVE" &&
           heartbeat.receipt.outputState === "CLOSED" &&
           heartbeat.receipt.terminalFinality === "PENDING" &&
-          isProcessAlive(detachedPid)
+          isProcessAlive(childPid) &&
+          isProcessAlive(grandchildPid)
           ? heartbeat.receipt
           : undefined;
       });
@@ -351,7 +503,40 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
         terminalFinality: "PENDING",
       });
       const finalPromise = fixture.host.awaitFinal(sessionId);
-      await writeFile(releasePath, "RELEASE\n", "utf8");
+      await writeFile(childReleasePath, "RELEASE\n", "utf8");
+      const reparentedPending = await waitUntil(async () => {
+        const heartbeat = await fixture.host.heartbeat(sessionId);
+        if (
+          heartbeat.receipt.state !== "EXITED" ||
+          heartbeat.receipt.processTreeState !== "ACTIVE" ||
+          heartbeat.receipt.outputState !== "CLOSED" ||
+          heartbeat.receipt.terminalFinality !== "PENDING" ||
+          !isProcessAlive(grandchildPid)
+        ) {
+          return undefined;
+        }
+        if (process.platform === "linux") {
+          const [childIdentity, grandchildIdentity] = await Promise.all([
+            readLinuxProcIdentity(childPid),
+            readLinuxProcIdentity(grandchildPid),
+          ]);
+          const childExited =
+            childIdentity === undefined ||
+            childIdentity.state === "Z" ||
+            childIdentity.state === "X";
+          return childExited &&
+            grandchildIdentity !== undefined &&
+            grandchildIdentity.parentPid !== childPid
+            ? heartbeat.receipt
+            : undefined;
+        }
+        return !isProcessAlive(childPid) ? heartbeat.receipt : undefined;
+      });
+      expect(reparentedPending).toMatchObject({
+        processTreeState: "ACTIVE",
+        terminalFinality: "PENDING",
+      });
+      await writeFile(grandchildReleasePath, "RELEASE\n", "utf8");
       await expect(finalPromise).resolves.toMatchObject({
         receipt: {
           executionObservation: "EXITED",
@@ -361,10 +546,15 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
           terminalFinality: "FINAL",
         },
       });
-      expect(isProcessAlive(detachedPid)).toBe(false);
+      expect(isProcessAlive(childPid)).toBe(false);
+      expect(isProcessAlive(grandchildPid)).toBe(false);
     } finally {
-      await writeFile(releasePath, "RELEASE\n", "utf8").catch(() => undefined);
-      if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
+      await Promise.all([
+        writeFile(childReleasePath, "RELEASE\n", "utf8").catch(() => undefined),
+        writeFile(grandchildReleasePath, "RELEASE\n", "utf8").catch(() => undefined),
+      ]);
+      if (isProcessAlive(childPid)) process.kill(childPid, "SIGKILL");
+      if (isProcessAlive(grandchildPid)) process.kill(grandchildPid, "SIGKILL");
     }
   }, 12_000);
 

@@ -59,6 +59,18 @@ finally:
     os.close(pidfd)
 `;
 
+export type LinuxCompleteTreeScanObservation = "ACTIVE" | "BOUNDARY" | "EMPTY";
+
+export function nextLinuxCompleteEmptyScanCount(
+  current: number,
+  observation: LinuxCompleteTreeScanObservation,
+): number {
+  if (observation !== "EMPTY") return 0;
+  return Math.min(current + 1, 2);
+}
+
+const linuxCompleteEmptyScanTransitionSource = nextLinuxCompleteEmptyScanCount.toString();
+
 export const linuxSubreaperProcessTreeHelperSource = String.raw`
 import { readdir, readFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
@@ -72,6 +84,7 @@ const send = (value) => {
 
 const ignoredProcErrors = new Set(["ENOENT", "ESRCH"]);
 const infrastructurePids = new Set();
+const nextLinuxCompleteEmptyScanCount = (${linuxCompleteEmptyScanTransitionSource});
 const pidfdSignalerPath = process.argv[2];
 if (typeof pidfdSignalerPath !== "string" || pidfdSignalerPath.length === 0) {
   throw new Error("PIDFD_SIGNALER_UNAVAILABLE");
@@ -145,6 +158,57 @@ const liveDescendants = async () => {
   return descendants;
 };
 
+const readDirectLiveChildPids = async () => {
+  const taskEntries = await readdir("/proc/" + String(process.pid) + "/task", {
+    withFileTypes: true,
+  });
+  const directLiveChildPids = new Set();
+  for (const taskEntry of taskEntries) {
+    if (!taskEntry.isDirectory() || !/^\d+$/u.test(taskEntry.name)) continue;
+    let value;
+    try {
+      value = await readFile(
+        "/proc/" + String(process.pid) + "/task/" + taskEntry.name + "/children",
+        "utf8",
+      );
+    } catch (error) {
+      if (ignoredProcErrors.has(error?.code)) continue;
+      throw error;
+    }
+    for (const token of value.trim().split(/\s+/u)) {
+      if (!/^\d+$/u.test(token)) continue;
+      const pid = Number(token);
+      if (infrastructurePids.has(pid)) continue;
+      try {
+        const identity = await parseProcIdentity(pid);
+        if (identity.state !== "Z" && identity.state !== "X") {
+          directLiveChildPids.add(pid);
+        }
+      } catch (error) {
+        if (!ignoredProcErrors.has(error?.code)) throw error;
+        // The kernel listed this child during the scan. Treat a concurrent
+        // disappearance as active for this observation so it invalidates any
+        // earlier empty candidate.
+        directLiveChildPids.add(pid);
+      }
+    }
+  }
+  return directLiveChildPids;
+};
+
+const scanOwnedTree = async () => {
+  const directChildrenBefore = await readDirectLiveChildPids();
+  const descendants = await liveDescendants();
+  const directChildrenAfter = await readDirectLiveChildPids();
+  return {
+    descendants,
+    active:
+      descendants.length > 0 ||
+      directChildrenBefore.size > 0 ||
+      directChildrenAfter.size > 0,
+  };
+};
+
 const signalIdentityWithPidfd = (identity) =>
   new Promise((resolve, reject) => {
     const signaler = spawn(
@@ -156,8 +220,12 @@ const signalIdentityWithPidfd = (identity) =>
     signaler.once("error", reject);
     signaler.once("close", (code) => {
       if (signaler.pid !== undefined) infrastructurePids.delete(signaler.pid);
-      if (code === 0 || code === 3) {
-        resolve();
+      if (code === 0) {
+        resolve(true);
+        return;
+      }
+      if (code === 3) {
+        resolve(false);
         return;
       }
       reject(new Error(code === 42 ? "PROCESS_IDENTITY_CHANGED" : "PIDFD_SIGNAL_FAILED"));
@@ -165,9 +233,11 @@ const signalIdentityWithPidfd = (identity) =>
   });
 
 const killIdentified = async (identities) => {
+  let signaled = false;
   for (const identity of identities) {
-    await signalIdentityWithPidfd(identity);
+    signaled = (await signalIdentityWithPidfd(identity)) || signaled;
   }
+  return signaled;
 };
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -183,9 +253,8 @@ let targetExitCode = null;
 let targetSignal = null;
 let terminationCause = "NONE";
 let terminationAcknowledged = false;
-let terminationInFlight = false;
 let lastState = "";
-let consecutiveEmptyScans = 0;
+let consecutiveCompleteEmptyScans = 0;
 
 const fail = (code) => {
   if (fatal) return;
@@ -197,33 +266,22 @@ const fail = (code) => {
   }
 };
 
-const beginTermination = async (cause) => {
+const requestTermination = (cause) => {
   if (fatal || finished) return;
   if (terminationCause !== "NONE" && terminationCause !== cause) {
     fail("TERMINATION_CAUSE_CONFLICT");
     return;
   }
-  terminationCause = cause;
-  if (terminationAcknowledged || terminationInFlight) {
-    if (terminationAcknowledged) send({ type: "terminationAcknowledged", cause });
+  if (terminationAcknowledged) {
+    send({ type: "terminationAcknowledged", cause });
     return;
   }
-  terminationInFlight = true;
-  try {
-    const descendants = await liveDescendants();
-    if (descendants.length === 0) {
-      terminationCause = "NONE";
-      send({ type: "terminationNotApplied", cause });
-      return;
-    }
-    await killIdentified(descendants);
-    terminationAcknowledged = true;
-    send({ type: "terminationAcknowledged", cause });
-  } catch {
-    fail("TREE_TERMINATION_FAILED");
-  } finally {
-    terminationInFlight = false;
-  }
+  if (terminationCause === cause) return;
+  terminationCause = cause;
+  consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
+    consecutiveCompleteEmptyScans,
+    "BOUNDARY",
+  );
 };
 
 const startTarget = async (line) => {
@@ -236,7 +294,7 @@ const startTarget = async (line) => {
     ) {
       throw new Error("SUBREAPER_NOT_ESTABLISHED");
     }
-    await liveDescendants();
+    await scanOwnedTree();
     const request = JSON.parse(line);
     target = spawn(request.executable, request.argv, {
       cwd: request.cwd,
@@ -287,7 +345,7 @@ input.on("line", (line) => {
     ) {
       throw new Error("CONTROL_INVALID");
     }
-    void beginTermination(command.cause);
+    requestTermination(command.cause);
   } catch {
     fail("CONTROL_INVALID");
   }
@@ -310,18 +368,45 @@ const poll = async () => {
       setTimeout(() => void poll(), 20).unref();
       return;
     }
-    let descendants = await liveDescendants();
-    if (fatal || inputClosed || terminationAcknowledged) {
-      await killIdentified(descendants);
-      descendants = await liveDescendants();
+    let treeScan = await scanOwnedTree();
+    consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
+      consecutiveCompleteEmptyScans,
+      treeScan.active ? "ACTIVE" : "EMPTY",
+    );
+    let treeEmpty = consecutiveCompleteEmptyScans >= 2;
+    const terminationPending = terminationCause !== "NONE" && !terminationAcknowledged;
+    if (
+      (fatal || inputClosed || terminationPending || terminationAcknowledged) &&
+      treeScan.descendants.length > 0
+    ) {
+      const signaled = await killIdentified(treeScan.descendants);
+      if (terminationPending && signaled) {
+        terminationAcknowledged = true;
+        consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
+          consecutiveCompleteEmptyScans,
+          "BOUNDARY",
+        );
+        send({ type: "terminationAcknowledged", cause: terminationCause });
+      }
+      treeScan = await scanOwnedTree();
+      consecutiveCompleteEmptyScans = nextLinuxCompleteEmptyScanCount(
+        consecutiveCompleteEmptyScans,
+        treeScan.active ? "ACTIVE" : "EMPTY",
+      );
+      treeEmpty = consecutiveCompleteEmptyScans >= 2;
     }
-    // A /proc table scan is not atomic across orphan reparenting. The first
-    // empty result is only a candidate; a later complete scan must confirm it.
-    consecutiveEmptyScans = descendants.length === 0 ? consecutiveEmptyScans + 1 : 0;
-    const treeEmpty = consecutiveEmptyScans >= 2;
+    if (terminationPending && !terminationAcknowledged && treeEmpty) {
+      const notAppliedCause = terminationCause;
+      terminationCause = "NONE";
+      send({ type: "terminationNotApplied", cause: notAppliedCause });
+    }
+    // Every complete scan, including the pre-signal scan, participates in the
+    // same serialized sequence. A direct-child snapshot sandwiches the
+    // non-atomic whole-/proc traversal, and any active observation or control
+    // boundary invalidates the earlier empty candidate.
     const treeState = treeEmpty ? "EMPTY" : "ACTIVE";
     const phase =
-      terminationAcknowledged && descendants.length > 0
+      terminationAcknowledged && !treeEmpty
         ? "TERMINATING"
         : targetExited
           ? "EXITED"

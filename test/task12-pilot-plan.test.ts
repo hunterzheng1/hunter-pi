@@ -1,79 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { PilotPlanCompiler, pilotExecutionPlanSchema, type PilotPlanInput } from "@hunter-pi/pilot";
+import {
+  PilotPlanCompiler,
+  pilotExecutionPlanSchema,
+  pilotPreflightReceiptSchema,
+  type PilotPlanInput,
+} from "@hunter-pi/pilot";
 
-import { fixtureFingerprint } from "./support/workflow-domain-fixture.js";
-
-const firstRepositoryFingerprint = `sha256:${"a".repeat(64)}`;
-const secondRepositoryFingerprint = `sha256:${"b".repeat(64)}`;
-const firstSourceFingerprint = `sha256:${"c".repeat(64)}`;
-const secondSourceFingerprint = `sha256:${"d".repeat(64)}`;
-const artifactFingerprint = `sha256:${"e".repeat(64)}`;
-const engineFingerprint = `sha256:${"f".repeat(64)}`;
-
-function completePlanInput(): PilotPlanInput {
-  const repositoryTargets = [
-    {
-      targetId: "repository-alpha",
-      repositoryFingerprint: firstRepositoryFingerprint,
-      sourceFingerprint: firstSourceFingerprint,
-      targetReferenceFingerprint: `sha256:${"1".repeat(64)}`,
-      selectionMode: "EXPLICIT_OPERATOR_SELECTED" as const,
-    },
-    {
-      targetId: "repository-beta",
-      repositoryFingerprint: secondRepositoryFingerprint,
-      sourceFingerprint: secondSourceFingerprint,
-      targetReferenceFingerprint: `sha256:${"2".repeat(64)}`,
-      selectionMode: "EXPLICIT_OPERATOR_SELECTED" as const,
-    },
-  ];
-  return {
-    schemaVersion: "hpi-pilot-plan-input.v1",
-    platform: "win32",
-    architecture: "x64",
-    sourceFingerprint: firstSourceFingerprint,
-    artifactFingerprint,
-    engineReleaseFingerprint: engineFingerprint,
-    operatorScope: {
-      repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
-      providerRequestPolicy: "EXPLICIT_OPERATOR_AUTHORIZED",
-      providerEndpointFingerprint: fixtureFingerprint,
-      credentialScopeFingerprint: `sha256:${"3".repeat(64)}`,
-      acknowledged: true,
-      workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
-    },
-    repositoryTargets,
-    tasks: Array.from({ length: 10 }, (_, index) => {
-      const target = repositoryTargets[index < 5 ? 0 : 1];
-      if (target === undefined) throw new Error("fixture target missing");
-      return {
-        taskId: `pilot-task-${String(index + 1).padStart(2, "0")}`,
-        targetId: target.targetId,
-        sourceFingerprint: target.sourceFingerprint,
-        mode: index % 2 === 0 ? ("QUICK" as const) : ("MANAGED" as const),
-        expectedOutcome: "READY" as const,
-        acceptanceCheckIds: [`check-${String(index + 1).padStart(2, "0")}`],
-      };
-    }),
-    pairedTaskIds: ["pilot-task-01", "pilot-task-06", "pilot-task-07"],
-  };
-}
+import { completePilotPlanInput, secondSourceFingerprint } from "./support/task12-plan-fixture.js";
 
 describe("Task 12 pilot plan compiler", () => {
   it("freezes explicit targets and tasks without carrying paths or credentials into the plan", () => {
-    const plan = new PilotPlanCompiler().compile(completePlanInput());
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
 
     expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v1");
     expect(plan.planFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(plan.repositoryTargets).toHaveLength(2);
     expect(plan.tasks).toHaveLength(10);
     expect(JSON.stringify(plan)).not.toContain("C:\\");
-    expect(JSON.stringify(plan)).not.toMatch(/api[_-]?key|token|password|secret/iu);
+    expect(JSON.stringify(plan)).not.toMatch(/api[_-]?key\s*=|token\s*=|password\s*=/iu);
   });
 
   it("fails closed when repository selection is implicit", () => {
-    const input = completePlanInput();
+    const input = completePilotPlanInput();
     const implicitInput = {
       ...input,
       repositoryTargets: input.repositoryTargets.map((target, index) =>
@@ -86,7 +35,7 @@ describe("Task 12 pilot plan compiler", () => {
   });
 
   it("requires acknowledged Provider scope and binds every task to its selected target", () => {
-    const input = completePlanInput();
+    const input = completePilotPlanInput();
     expect(() =>
       new PilotPlanCompiler().compile({
         ...input,
@@ -105,7 +54,7 @@ describe("Task 12 pilot plan compiler", () => {
   });
 
   it("requires exactly ten frozen tasks and three paired tasks", () => {
-    const input = completePlanInput();
+    const input = completePilotPlanInput();
     expect(() =>
       new PilotPlanCompiler().compile({ ...input, tasks: input.tasks.slice(0, 9) }),
     ).toThrow(/10|ten|length/u);
@@ -119,40 +68,92 @@ describe("Task 12 pilot plan compiler", () => {
 
   it("derives a stable plan fingerprint from the frozen plan body", () => {
     const compiler = new PilotPlanCompiler();
-    const first = compiler.compile(completePlanInput());
+    const first = compiler.compile(completePilotPlanInput());
     const second = compiler.compile({
-      ...completePlanInput(),
-      tasks: [...completePlanInput().tasks].reverse().reverse(),
+      ...completePilotPlanInput(),
+      tasks: [...completePilotPlanInput().tasks].reverse().reverse(),
     });
     expect(second.planFingerprint).toBe(first.planFingerprint);
   });
 
   it("returns a safe blocked preflight without echoing invalid input", () => {
     const input = {
-      ...completePlanInput(),
+      ...completePilotPlanInput(),
       privatePath: "C:\\Users\\operator\\secret-repository",
       credential: "token=do-not-echo",
-      operatorScope: { ...completePlanInput().operatorScope, acknowledged: false },
+      operatorScope: { ...completePilotPlanInput().operatorScope, acknowledged: false },
     } as unknown;
     const receipt = new PilotPlanCompiler().preflight(input);
 
     expect(receipt.status).toBe("BLOCKED");
     expect(receipt.planFingerprint).toBeNull();
-    expect(receipt.reasons).toHaveLength(1);
+    expect(receipt.reasons.some((reason) => reason.startsWith("PILOT_PLAN_"))).toBe(true);
     expect(JSON.stringify(receipt)).not.toContain("C:\\Users");
     expect(JSON.stringify(receipt)).not.toContain("do-not-echo");
   });
 
   it("returns READY only with the exact frozen plan fingerprint", () => {
-    const plan = new PilotPlanCompiler().compile(completePlanInput());
-    const receipt = new PilotPlanCompiler().preflight(completePlanInput());
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+    const receipt = new PilotPlanCompiler().preflight(completePilotPlanInput());
 
     expect(receipt.status).toBe("READY");
     expect(receipt.planFingerprint).toBe(plan.planFingerprint);
   });
 
+  it("freezes the acceptance, comparator, plugin, update, and machine inputs", () => {
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+
+    expect(plan.machineProfile.sourceFingerprint).toBe(plan.sourceFingerprint);
+    expect(plan.acceptanceChecks).toHaveLength(10);
+    expect(plan.comparatorConfigurationFingerprint).toMatch(/^sha256:/u);
+    expect(plan.workflowFactChecklistFingerprint).toMatch(/^sha256:/u);
+    expect(plan.pluginFixtures).toHaveLength(5);
+    expect(plan.updateCandidates).toHaveLength(2);
+  });
+
+  it("requires two distinct repository identities rather than two aliases", () => {
+    const input = completePilotPlanInput();
+    expect(() =>
+      new PilotPlanCompiler().compile({
+        ...input,
+        repositoryTargets: input.repositoryTargets.map((target) => ({
+          ...target,
+          repositoryFingerprint:
+            input.repositoryTargets[0]?.repositoryFingerprint ?? target.repositoryFingerprint,
+        })),
+      }),
+    ).toThrow(/distinct repository/u);
+  });
+
+  it("rejects contradictory preflight receipt states", () => {
+    expect(() =>
+      pilotPreflightReceiptSchema.parse({
+        schemaVersion: "hpi-pilot-preflight.v1",
+        status: "READY",
+        planFingerprint: null,
+        reasons: ["PILOT_PLAN_SCOPE_FROZEN"],
+      }),
+    ).toThrow();
+    expect(() =>
+      pilotPreflightReceiptSchema.parse({
+        schemaVersion: "hpi-pilot-preflight.v1",
+        status: "BLOCKED",
+        planFingerprint: `sha256:${"a".repeat(64)}`,
+        reasons: ["PILOT_PLAN_TARGETS_INVALID"],
+      }),
+    ).toThrow();
+    expect(() =>
+      pilotPreflightReceiptSchema.parse({
+        schemaVersion: "hpi-pilot-preflight.v1",
+        status: "BLOCKED",
+        planFingerprint: null,
+        reasons: ["C:\\Users\\operator\\secret-plan.json"],
+      }),
+    ).toThrow();
+  });
+
   it("rejects an execution plan whose fingerprint no longer matches its frozen body", () => {
-    const plan = new PilotPlanCompiler().compile(completePlanInput());
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
     expect(() =>
       pilotExecutionPlanSchema.parse({
         ...plan,

@@ -8,53 +8,57 @@ import {
 } from "@hunter-pi/pilot";
 
 import { fixtureFingerprint, fixtureTimestamp } from "./support/workflow-domain-fixture.js";
-
-const secondRepositoryFingerprint = `sha256:${"b".repeat(64)}`;
-const firstSourceFingerprint = `sha256:${"c".repeat(64)}`;
-const secondSourceFingerprint = `sha256:${"d".repeat(64)}`;
+import {
+  completePilotExecutionPlan,
+  firstSourceFingerprint,
+  secondRepositoryFingerprint,
+  secondSourceFingerprint,
+} from "./support/task12-plan-fixture.js";
 
 function completeEvidence(): PilotEvidence {
-  const taskOracles = Array.from({ length: 10 }, (_, index) => ({
-    taskId: `pilot-task-${String(index + 1).padStart(2, "0")}`,
-    repositoryFingerprint: index < 5 ? fixtureFingerprint : secondRepositoryFingerprint,
-    sourceFingerprint: index < 5 ? firstSourceFingerprint : secondSourceFingerprint,
-    mode: index % 2 === 0 ? ("QUICK" as const) : ("MANAGED" as const),
-    expectedOutcome: "READY" as const,
-    acceptanceCheckIds: [`check-${String(index + 1).padStart(2, "0")}`],
-  }));
+  const plan = completePilotExecutionPlan();
+  const targetById = new Map(plan.repositoryTargets.map((target) => [target.targetId, target]));
+  const acceptanceCheckById = new Map(
+    plan.acceptanceChecks.map((check) => [check.checkId, check.definitionFingerprint]),
+  );
+  const taskOracles = plan.tasks.map((task) => {
+    const target = targetById.get(task.targetId);
+    if (target === undefined) throw new Error("fixture target missing");
+    return {
+      taskId: task.taskId,
+      repositoryFingerprint: target.repositoryFingerprint,
+      targetReferenceFingerprint: target.targetReferenceFingerprint,
+      sourceFingerprint: task.sourceFingerprint,
+      mode: task.mode,
+      expectedOutcome: task.expectedOutcome,
+      acceptanceCheckIds: task.acceptanceCheckIds,
+      acceptanceCheckDefinitionFingerprints: task.acceptanceCheckIds.map((checkId) => {
+        const fingerprint = acceptanceCheckById.get(checkId);
+        if (fingerprint === undefined) throw new Error("fixture acceptance check missing");
+        return fingerprint;
+      }),
+    };
+  });
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v2",
-    machine: {
-      schemaVersion: "hpi-pilot-machine.v2",
-      platform: "win32",
-      architecture: "x64",
-      osBuild: "fixture-windows-build",
-      cpuModel: "fixture-cpu",
-      logicalCores: 8,
-      memoryMiB: 32_768,
-      storage: "SSD",
-      terminal: "PowerShell",
-      gitVersion: "2.49.0",
-      securitySoftwareState: "FIXTURE_DECLARED",
-      powerMode: "BALANCED",
-      networkCondition: "FIXTURE_CONTROLLED",
-      sourceFingerprint: firstSourceFingerprint,
-      hunterReleaseFingerprint: fixtureFingerprint,
-      engineReleaseFingerprint: fixtureFingerprint,
-    },
+    schemaVersion: "hpi-pilot-evidence.v3",
+    planFingerprint: plan.planFingerprint,
+    operatorScope: plan.operatorScope,
+    machine: plan.machineProfile,
     installation: {
       status: "PASS",
-      sourceFingerprint: firstSourceFingerprint,
-      artifactFingerprint: fixtureFingerprint,
+      sourceFingerprint: plan.sourceFingerprint,
+      artifactFingerprint: plan.artifactFingerprint,
       cleanProfileFingerprint: fixtureFingerprint,
     },
     taskOracles,
     taskResults: taskOracles.map((oracle) => ({
       taskId: oracle.taskId,
       repositoryFingerprint: oracle.repositoryFingerprint,
+      targetReferenceFingerprint: oracle.targetReferenceFingerprint,
       sourceFingerprint: oracle.sourceFingerprint,
       mode: oracle.mode,
       acceptanceCheckIds: oracle.acceptanceCheckIds,
+      acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
       terminalOutcome: "READY" as const,
       oracleOutcome: oracle.expectedOutcome,
       correct: true,
@@ -81,6 +85,10 @@ function completeEvidence(): PilotEvidence {
     acknowledgementSamplesMs: Array.from({ length: 30 }, () => 100),
     updateRollbackCycles: Array.from({ length: 2 }, (_, index) => ({
       cycleId: `pilot-update-cycle-${String(index + 1)}`,
+      candidateId: plan.updateCandidates[index]?.candidateId ?? "release-candidate-01",
+      artifactFingerprint: plan.updateCandidates[index]?.artifactFingerprint ?? fixtureFingerprint,
+      qualificationFingerprint:
+        plan.updateCandidates[index]?.qualificationFingerprint ?? fixtureFingerprint,
       applyOutcome: "APPLIED" as const,
       rollbackOutcome: "APPLIED" as const,
       statePreserved: true,
@@ -99,6 +107,9 @@ function completeEvidence(): PilotEvidence {
         | "BUILTIN_OVERRIDE"
         | "SECRET_PATH_LEAKAGE"
         | "OVERSIZED_OUTPUT",
+      definitionFingerprint:
+        plan.pluginFixtures.find((fixture) => fixture.fixtureId === fixtureId)
+          ?.definitionFingerprint ?? fixtureFingerprint,
       safeMode: true,
       userCodeEvaluated: false,
     })),
@@ -110,6 +121,7 @@ function completeEvidence(): PilotEvidence {
     ci: {
       sourceFingerprint: firstSourceFingerprint,
       windows: {
+        platform: "WINDOWS" as const,
         status: "PASS",
         sourceFingerprint: firstSourceFingerprint,
         runFingerprint: fixtureFingerprint,
@@ -117,19 +129,24 @@ function completeEvidence(): PilotEvidence {
         engineReleaseFingerprint: fixtureFingerprint,
       },
       ubuntu: {
+        platform: "UBUNTU" as const,
         status: "PASS",
         sourceFingerprint: firstSourceFingerprint,
-        runFingerprint: fixtureFingerprint,
+        runFingerprint: secondRepositoryFingerprint,
         artifactFingerprint: fixtureFingerprint,
         engineReleaseFingerprint: fixtureFingerprint,
       },
     },
-    pairedComparators: Array.from({ length: 3 }, (_, index) => ({
-      taskId: taskOracles[index]?.taskId ?? "pilot-task-01",
-      repositoryFingerprint: taskOracles[index]?.repositoryFingerprint ?? fixtureFingerprint,
-      sourceFingerprint: taskOracles[index]?.sourceFingerprint ?? firstSourceFingerprint,
-      mode: taskOracles[index]?.mode ?? "QUICK",
-      acceptanceCheckIds: taskOracles[index]?.acceptanceCheckIds ?? ["check-01"],
+    pairedComparators: [0, 5, 6].map((taskIndex) => ({
+      taskId: taskOracles[taskIndex]?.taskId ?? "pilot-task-01",
+      repositoryFingerprint: taskOracles[taskIndex]?.repositoryFingerprint ?? fixtureFingerprint,
+      targetReferenceFingerprint:
+        taskOracles[taskIndex]?.targetReferenceFingerprint ?? fixtureFingerprint,
+      sourceFingerprint: taskOracles[taskIndex]?.sourceFingerprint ?? firstSourceFingerprint,
+      mode: taskOracles[taskIndex]?.mode ?? "QUICK",
+      acceptanceCheckIds: taskOracles[taskIndex]?.acceptanceCheckIds ?? ["check-01"],
+      acceptanceCheckDefinitionFingerprints: taskOracles[taskIndex]
+        ?.acceptanceCheckDefinitionFingerprints ?? [fixtureFingerprint],
       applicableFactCount: 20,
       rawPiCapturedFactCount: 15,
       hunterCapturedFactCount: 20,
@@ -145,7 +162,10 @@ function completeEvidence(): PilotEvidence {
 describe("Task 12 Windows daily-use pilot evaluator", () => {
   it("uses nearest-rank p95 and returns GO only for a complete passing evidence set", () => {
     expect(nearestRank([3, 1, 2], 2)).toBe(2);
-    const decision = new PilotEvaluator().evaluate(completeEvidence());
+    const decision = new PilotEvaluator().evaluate(
+      completeEvidence(),
+      completePilotExecutionPlan(),
+    );
     expect(decision.outcome).toBe("GO");
     expect(decision.metrics).toMatchObject({
       taskCount: 10,
@@ -159,26 +179,32 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
 
   it("fails closed as NOT_PROVEN when the real-use or remote evidence is incomplete", () => {
     const evidence = completeEvidence();
-    const decision = new PilotEvaluator().evaluate({
-      ...evidence,
-      ci: {
-        ...evidence.ci,
-        ubuntu: { ...evidence.ci.ubuntu, status: "PENDING" },
+    const decision = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        ci: {
+          ...evidence.ci,
+          ubuntu: { ...evidence.ci.ubuntu, status: "PENDING" },
+        },
+        providerLatencySeparated: false,
       },
-      providerLatencySeparated: false,
-    });
+      completePilotExecutionPlan(),
+    );
     expect(decision.outcome).toBe("NOT_PROVEN");
     expect(decision.reasons.join(" ")).toMatch(/CI|latency|Provider/u);
   });
 
   it("returns STOP for an observed zero-tolerance source-loss failure", () => {
     const evidence = completeEvidence();
-    const decision = new PilotEvaluator().evaluate({
-      ...evidence,
-      taskResults: evidence.taskResults.map((result, index) =>
-        index === 0 ? { ...result, sourcePreserved: false } : result,
-      ),
-    });
+    const decision = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        taskResults: evidence.taskResults.map((result, index) =>
+          index === 0 ? { ...result, sourcePreserved: false } : result,
+        ),
+      },
+      completePilotExecutionPlan(),
+    );
     expect(decision.outcome).toBe("STOP");
     expect(decision.reasons.join(" ")).toMatch(/source|zero-tolerance/u);
   });
@@ -199,7 +225,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
           : comparator,
       ),
     };
-    const decision = new PilotEvaluator().evaluate(forged);
+    const decision = new PilotEvaluator().evaluate(forged, completePilotExecutionPlan());
     expect(decision.outcome).toBe("STOP");
     expect(decision.reasons.join(" ")).toMatch(/strict identity|consistency/u);
   });
@@ -266,32 +292,42 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
 
   it("requires intervention reduction or contained ambiguity and never waives overhead", () => {
     const evidence = completeEvidence();
-    const noComparatorValue = new PilotEvaluator().evaluate({
-      ...evidence,
-      taskResults: evidence.taskResults.map((result, index) =>
-        index < 3 ? { ...result, manualInterventions: 1, rawPiManualInterventions: 1 } : result,
-      ),
-      pairedComparators: evidence.pairedComparators.map((comparator) => ({
-        ...comparator,
-        rawPiManualInterventions: 1,
-        hunterManualInterventions: 1,
-        containedFalseCompletion: false,
-      })),
-    });
+    const noComparatorValue = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        taskResults: evidence.taskResults.map((result, index) =>
+          [0, 5, 6].includes(index)
+            ? { ...result, manualInterventions: 1, rawPiManualInterventions: 1 }
+            : result,
+        ),
+        pairedComparators: evidence.pairedComparators.map((comparator) => ({
+          ...comparator,
+          rawPiManualInterventions: 1,
+          hunterManualInterventions: 1,
+          containedFalseCompletion: false,
+        })),
+      },
+      completePilotExecutionPlan(),
+    );
     expect(noComparatorValue.outcome).toBe("STOP");
-    const overheadMiss = new PilotEvaluator().evaluate({
-      ...evidence,
-      taskResults: evidence.taskResults.map((result, index) =>
-        index < 3 ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 } : result,
-      ),
-      pairedComparators: evidence.pairedComparators.map((comparator) => ({
-        ...comparator,
-        rawPiManualInterventions: 3,
-        hunterManualInterventions: 3,
-        hunterAdditionalOverheadMinutes: 11,
-        containedFalseCompletion: true,
-      })),
-    });
+    const overheadMiss = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        taskResults: evidence.taskResults.map((result, index) =>
+          [0, 5, 6].includes(index)
+            ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 }
+            : result,
+        ),
+        pairedComparators: evidence.pairedComparators.map((comparator) => ({
+          ...comparator,
+          rawPiManualInterventions: 3,
+          hunterManualInterventions: 3,
+          hunterAdditionalOverheadMinutes: 11,
+          containedFalseCompletion: true,
+        })),
+      },
+      completePilotExecutionPlan(),
+    );
     expect(overheadMiss.outcome).toBe("REVISE");
     expect(overheadMiss.reasons.join(" ")).toMatch(/overhead/u);
   });
@@ -341,5 +377,119 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         ),
       }),
     ).toThrow(/comparator.*frozen.*source|acceptance/u);
+  });
+
+  it("does not produce GO when Evidence is bound to a different frozen plan", () => {
+    const evidence = completeEvidence();
+    const plan = completePilotExecutionPlan();
+    const decision = new PilotEvaluator().evaluate(
+      { ...evidence, planFingerprint: `sha256:${"f".repeat(64)}` },
+      plan,
+    );
+
+    expect(decision.outcome).toBe("NOT_PROVEN");
+    expect(decision.reasons.join(" ")).toMatch(/plan|fingerprint/u);
+  });
+
+  it("binds Plugin and update observations to the frozen definition fingerprints", () => {
+    const evidence = completeEvidence();
+    const plan = completePilotExecutionPlan();
+    const pluginMismatch = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        pluginFixtures: evidence.pluginFixtures.map((fixture, index) =>
+          index === 0
+            ? { ...fixture, definitionFingerprint: secondRepositoryFingerprint }
+            : fixture,
+        ),
+      },
+      plan,
+    );
+    const updateMismatch = new PilotEvaluator().evaluate(
+      {
+        ...evidence,
+        updateRollbackCycles: evidence.updateRollbackCycles.map((cycle, index) =>
+          index === 0 ? { ...cycle, artifactFingerprint: secondRepositoryFingerprint } : cycle,
+        ),
+      },
+      plan,
+    );
+
+    expect(pluginMismatch.outcome).toBe("NOT_PROVEN");
+    expect(pluginMismatch.reasons.join(" ")).toMatch(/Plugin|fixture/u);
+    expect(updateMismatch.outcome).toBe("NOT_PROVEN");
+    expect(updateMismatch.reasons.join(" ")).toMatch(/update|candidate/u);
+  });
+
+  it("binds task observations to the frozen target reference and check definitions", () => {
+    const evidence = completeEvidence();
+    const plan = completePilotExecutionPlan();
+    const forged = {
+      ...evidence,
+      taskOracles: evidence.taskOracles.map((oracle, index) =>
+        index === 0
+          ? {
+              ...oracle,
+              targetReferenceFingerprint: secondRepositoryFingerprint,
+              acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
+            }
+          : oracle,
+      ),
+      taskResults: evidence.taskResults.map((result, index) =>
+        index === 0
+          ? {
+              ...result,
+              targetReferenceFingerprint: secondRepositoryFingerprint,
+              acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
+            }
+          : result,
+      ),
+      pairedComparators: evidence.pairedComparators.map((comparator, index) =>
+        index === 0
+          ? {
+              ...comparator,
+              targetReferenceFingerprint: secondRepositoryFingerprint,
+              acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
+            }
+          : comparator,
+      ),
+    };
+
+    const decision = new PilotEvaluator().evaluate(forged, plan);
+    expect(decision.outcome).toBe("NOT_PROVEN");
+    expect(decision.reasons.join(" ")).toMatch(/task|oracle/u);
+  });
+
+  it("requires platform-specific and distinct Windows/Ubuntu CI receipts", () => {
+    const evidence = completeEvidence();
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        ci: {
+          ...evidence.ci,
+          ubuntu: { ...evidence.ci.ubuntu, platform: "WINDOWS" as const },
+        },
+      }),
+    ).toThrow(/CI|source/u);
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        ci: {
+          ...evidence.ci,
+          ubuntu: { ...evidence.ci.ubuntu, runFingerprint: evidence.ci.windows.runFingerprint },
+        },
+      }),
+    ).toThrow(/CI|source/u);
+  });
+
+  it("fails closed for malformed Evidence without fingerprinting arbitrary input", () => {
+    expect(() =>
+      new PilotEvaluator().evaluate(undefined, completePilotExecutionPlan()),
+    ).not.toThrow();
+    const decision = new PilotEvaluator().evaluate(undefined, completePilotExecutionPlan());
+
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.evidenceFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(decision.reasons.join(" ")).toMatch(/strict|validation/u);
   });
 });

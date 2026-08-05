@@ -49,20 +49,75 @@ export const pilotProviderRequestPolicySchema = z.enum([
 
 export const pilotRepositorySelectionModeSchema = z.literal("EXPLICIT_OPERATOR_SELECTED");
 
+export const pilotOperatorScopeSchema = z.strictObject({
+  repositorySelection: z.literal("EXPLICIT_OPERATOR_SELECTED"),
+  providerRequestPolicy: pilotProviderRequestPolicySchema,
+  providerEndpointFingerprint: fingerprintSchema.nullable(),
+  credentialScopeFingerprint: fingerprintSchema.nullable(),
+  acknowledged: z.boolean(),
+  workspacePolicy: z.literal("DISPOSABLE_PILOT_WORKTREES"),
+});
+export type PilotOperatorScope = z.infer<typeof pilotOperatorScopeSchema>;
+
+export const pilotPlanAcceptanceCheckSchema = z.strictObject({
+  checkId: stableIdSchema,
+  definitionFingerprint: fingerprintSchema,
+});
+export type PilotPlanAcceptanceCheck = z.infer<typeof pilotPlanAcceptanceCheckSchema>;
+
+export const pilotPlanPluginFixtureIdSchema = z.enum([
+  "THROWING_INITIALIZATION",
+  "RESERVED_COLLISION",
+  "BUILTIN_OVERRIDE",
+  "SECRET_PATH_LEAKAGE",
+  "OVERSIZED_OUTPUT",
+]);
+
+export const pilotPlanPluginFixtureSchema = z.strictObject({
+  fixtureId: pilotPlanPluginFixtureIdSchema,
+  definitionFingerprint: fingerprintSchema,
+});
+export type PilotPlanPluginFixture = z.infer<typeof pilotPlanPluginFixtureSchema>;
+
+export const pilotPlanUpdateCandidateSchema = z.strictObject({
+  candidateId: stableIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  qualificationFingerprint: fingerprintSchema,
+});
+export type PilotPlanUpdateCandidate = z.infer<typeof pilotPlanUpdateCandidateSchema>;
+
+export const pilotPreflightReasonSchema = z.enum([
+  "PILOT_PLAN_SCOPE_FROZEN",
+  "PILOT_PLAN_FILE_UNREADABLE",
+  "PILOT_PLAN_JSON_INVALID",
+  "PILOT_PLAN_VERSION_INVALID",
+  "PILOT_PLAN_MACHINE_PROFILE_INVALID",
+  "PILOT_PLAN_COMPARATOR_CONFIG_INVALID",
+  "PILOT_PLAN_WORKFLOW_CHECKLIST_INVALID",
+  "PILOT_PLAN_ACCEPTANCE_CHECKS_INVALID",
+  "PILOT_PLAN_PROVIDER_SCOPE_INVALID",
+  "PILOT_PLAN_TARGETS_INVALID",
+  "PILOT_PLAN_TASKS_INVALID",
+  "PILOT_PLAN_PLUGIN_FIXTURES_INVALID",
+  "PILOT_PLAN_UPDATE_CANDIDATES_INVALID",
+  "PILOT_PLAN_PAIRED_TASKS_INVALID",
+  "PILOT_PLAN_FIELDS_INVALID",
+  "PILOT_PLAN_SCHEMA_INVALID",
+  "PILOT_PLAN_COMPILATION_FAILED",
+]);
+export type PilotPreflightReason = z.infer<typeof pilotPreflightReasonSchema>;
+
 const pilotPlanBodyShape = {
   platform: z.literal("win32"),
   architecture: z.literal("x64"),
   sourceFingerprint: fingerprintSchema,
   artifactFingerprint: fingerprintSchema,
   engineReleaseFingerprint: fingerprintSchema,
-  operatorScope: z.strictObject({
-    repositorySelection: z.literal("EXPLICIT_OPERATOR_SELECTED"),
-    providerRequestPolicy: pilotProviderRequestPolicySchema,
-    providerEndpointFingerprint: fingerprintSchema.nullable(),
-    credentialScopeFingerprint: fingerprintSchema.nullable(),
-    acknowledged: z.boolean(),
-    workspacePolicy: z.literal("DISPOSABLE_PILOT_WORKTREES"),
-  }),
+  machineProfile: pilotMachineProfileSchema,
+  comparatorConfigurationFingerprint: fingerprintSchema,
+  workflowFactChecklistFingerprint: fingerprintSchema,
+  acceptanceChecks: z.array(pilotPlanAcceptanceCheckSchema).min(1),
+  operatorScope: pilotOperatorScopeSchema,
   repositoryTargets: z.array(
     z.strictObject({
       targetId: stableIdSchema,
@@ -84,6 +139,8 @@ const pilotPlanBodyShape = {
       }),
     )
     .length(10),
+  pluginFixtures: z.array(pilotPlanPluginFixtureSchema).length(5),
+  updateCandidates: z.array(pilotPlanUpdateCandidateSchema).length(2),
   pairedTaskIds: z.array(stableIdSchema).length(3),
 } as const;
 
@@ -107,6 +164,13 @@ function validatePilotPlanBody(
       message: "pilot requires at least two explicitly selected repositories",
     });
   }
+  if (new Set(body.repositoryTargets.map((target) => target.repositoryFingerprint)).size < 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["repositoryTargets"],
+      message: "pilot requires at least two distinct repository identities",
+    });
+  }
   if (new Set(taskIds).size !== taskIds.length) {
     context.addIssue({
       code: "custom",
@@ -115,6 +179,15 @@ function validatePilotPlanBody(
     });
   }
   const targetById = new Map(body.repositoryTargets.map((target) => [target.targetId, target]));
+  const acceptanceCheckIds = body.acceptanceChecks.map((check) => check.checkId);
+  if (new Set(acceptanceCheckIds).size !== acceptanceCheckIds.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["acceptanceChecks"],
+      message: "pilot acceptance check identities must be unique",
+    });
+  }
+  const acceptanceCheckIdSet = new Set(acceptanceCheckIds);
   for (const task of body.tasks) {
     const target = targetById.get(task.targetId);
     if (task.sourceFingerprint !== target?.sourceFingerprint) {
@@ -124,8 +197,18 @@ function validatePilotPlanBody(
         message: "each pilot task must bind the selected target and its exact source",
       });
     }
+    if (task.acceptanceCheckIds.some((checkId) => !acceptanceCheckIdSet.has(checkId))) {
+      context.addIssue({
+        code: "custom",
+        path: ["tasks"],
+        message: "each pilot task must bind declared acceptance checks",
+      });
+    }
   }
-  if (new Set(body.tasks.map((task) => task.targetId)).size < 2) {
+  if (
+    new Set(body.tasks.map((task) => targetById.get(task.targetId)?.repositoryFingerprint ?? null))
+      .size < 2
+  ) {
     context.addIssue({
       code: "custom",
       path: ["tasks"],
@@ -161,6 +244,31 @@ function validatePilotPlanBody(
       code: "custom",
       path: ["pairedTaskIds"],
       message: "pilot must declare three existing paired tasks",
+    });
+  }
+  if (new Set(body.pluginFixtures.map((fixture) => fixture.fixtureId)).size !== 5) {
+    context.addIssue({
+      code: "custom",
+      path: ["pluginFixtures"],
+      message: "pilot plugin fixture identities must be unique",
+    });
+  }
+  if (new Set(body.updateCandidates.map((candidate) => candidate.candidateId)).size !== 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["updateCandidates"],
+      message: "pilot update candidate identities must be unique",
+    });
+  }
+  if (
+    body.machineProfile.sourceFingerprint !== body.sourceFingerprint ||
+    body.machineProfile.hunterReleaseFingerprint !== body.artifactFingerprint ||
+    body.machineProfile.engineReleaseFingerprint !== body.engineReleaseFingerprint
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["machineProfile"],
+      message: "pilot machine profile must bind the exact source, artifact, and Engine release",
     });
   }
   const providerScope = body.operatorScope;
@@ -221,9 +329,15 @@ export const pilotExecutionPlanSchema = z
       sourceFingerprint: plan.sourceFingerprint,
       artifactFingerprint: plan.artifactFingerprint,
       engineReleaseFingerprint: plan.engineReleaseFingerprint,
+      machineProfile: plan.machineProfile,
+      comparatorConfigurationFingerprint: plan.comparatorConfigurationFingerprint,
+      workflowFactChecklistFingerprint: plan.workflowFactChecklistFingerprint,
+      acceptanceChecks: plan.acceptanceChecks,
       operatorScope: plan.operatorScope,
       repositoryTargets: plan.repositoryTargets,
       tasks: plan.tasks,
+      pluginFixtures: plan.pluginFixtures,
+      updateCandidates: plan.updateCandidates,
       pairedTaskIds: plan.pairedTaskIds,
     };
     validatePilotPlanBody(body, context);
@@ -237,21 +351,34 @@ export const pilotExecutionPlanSchema = z
   });
 export type PilotExecutionPlan = z.infer<typeof pilotExecutionPlanSchema>;
 
-export const pilotPreflightReceiptSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-pilot-preflight.v1"),
-  status: z.enum(["READY", "BLOCKED"]),
-  planFingerprint: fingerprintSchema.nullable(),
-  reasons: z.array(nonEmptyTextSchema).min(1),
-});
+export const pilotPreflightReceiptSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-preflight.v1"),
+    status: z.enum(["READY", "BLOCKED"]),
+    planFingerprint: fingerprintSchema.nullable(),
+    reasons: z.array(pilotPreflightReasonSchema).min(1),
+  })
+  .superRefine((receipt, context) => {
+    if ((receipt.status === "READY") !== (receipt.planFingerprint !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["planFingerprint"],
+        message:
+          "READY preflight receipts require a fingerprint and BLOCKED receipts cannot carry one",
+      });
+    }
+  });
 export type PilotPreflightReceipt = z.infer<typeof pilotPreflightReceiptSchema>;
 
 export const pilotTaskOracleSchema = z.strictObject({
   taskId: stableIdSchema,
   repositoryFingerprint: fingerprintSchema,
+  targetReferenceFingerprint: fingerprintSchema,
   sourceFingerprint: fingerprintSchema,
   mode: pilotModeSchema,
   expectedOutcome: pilotOutcomeSchema,
   acceptanceCheckIds: z.array(stableIdSchema).min(1),
+  acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
 });
 export type PilotTaskOracle = z.infer<typeof pilotTaskOracleSchema>;
 
@@ -259,9 +386,11 @@ export const pilotTaskResultSchema = z
   .strictObject({
     taskId: stableIdSchema,
     repositoryFingerprint: fingerprintSchema,
+    targetReferenceFingerprint: fingerprintSchema,
     sourceFingerprint: fingerprintSchema,
     mode: pilotModeSchema,
     acceptanceCheckIds: z.array(stableIdSchema).min(1),
+    acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
     terminalOutcome: pilotOutcomeSchema,
     oracleOutcome: pilotOutcomeSchema,
     correct: z.boolean(),
@@ -313,6 +442,9 @@ export type PilotInterruption = z.infer<typeof pilotInterruptionSchema>;
 
 export const pilotUpdateRollbackCycleSchema = z.strictObject({
   cycleId: stableIdSchema,
+  candidateId: stableIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  qualificationFingerprint: fingerprintSchema,
   applyOutcome: z.enum(["APPLIED", "FAILED", "BLOCKED"]),
   rollbackOutcome: z.enum(["APPLIED", "FAILED", "BLOCKED"]),
   statePreserved: z.boolean(),
@@ -321,13 +453,8 @@ export const pilotUpdateRollbackCycleSchema = z.strictObject({
 export type PilotUpdateRollbackCycle = z.infer<typeof pilotUpdateRollbackCycleSchema>;
 
 export const pilotPluginFixtureSchema = z.strictObject({
-  fixtureId: z.enum([
-    "THROWING_INITIALIZATION",
-    "RESERVED_COLLISION",
-    "BUILTIN_OVERRIDE",
-    "SECRET_PATH_LEAKAGE",
-    "OVERSIZED_OUTPUT",
-  ]),
+  fixtureId: pilotPlanPluginFixtureIdSchema,
+  definitionFingerprint: fingerprintSchema,
   safeMode: z.boolean(),
   userCodeEvaluated: z.boolean(),
 });
@@ -337,9 +464,11 @@ export const pilotComparatorSchema = z
   .strictObject({
     taskId: stableIdSchema,
     repositoryFingerprint: fingerprintSchema,
+    targetReferenceFingerprint: fingerprintSchema,
     sourceFingerprint: fingerprintSchema,
     mode: pilotModeSchema,
     acceptanceCheckIds: z.array(stableIdSchema).min(1),
+    acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
     applicableFactCount: z.number().int().positive(),
     rawPiCapturedFactCount: nonnegativeIntegerSchema,
     hunterCapturedFactCount: nonnegativeIntegerSchema,
@@ -368,6 +497,7 @@ export type PilotComparator = z.infer<typeof pilotComparatorSchema>;
 
 export const pilotCiStatusSchema = z.enum(["PASS", "FAIL", "PENDING"]);
 export const pilotCiReceiptSchema = z.strictObject({
+  platform: z.enum(["WINDOWS", "UBUNTU"]),
   status: pilotCiStatusSchema,
   sourceFingerprint: fingerprintSchema,
   runFingerprint: fingerprintSchema,
@@ -378,7 +508,9 @@ export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
 export const pilotEvidenceSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-evidence.v2"),
+    schemaVersion: z.literal("hpi-pilot-evidence.v3"),
+    planFingerprint: fingerprintSchema,
+    operatorScope: pilotOperatorScopeSchema,
     machine: pilotMachineProfileSchema,
     installation: pilotInstallationSchema,
     taskOracles: z.array(pilotTaskOracleSchema).length(10),
@@ -448,6 +580,16 @@ export const pilotEvidenceSchema = z
       });
     }
     if (
+      new Set(evidence.updateRollbackCycles.map((item) => item.candidateId)).size !==
+      evidence.updateRollbackCycles.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["updateRollbackCycles"],
+        message: "update rollback candidate identities must be unique",
+      });
+    }
+    if (
       new Set(evidence.pluginFixtures.map((item) => item.fixtureId)).size !==
       evidence.pluginFixtures.length
     ) {
@@ -464,10 +606,13 @@ export const pilotEvidenceSchema = z
         if (oracle === undefined) return true;
         return (
           result.repositoryFingerprint !== oracle.repositoryFingerprint ||
+          result.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
           result.sourceFingerprint !== oracle.sourceFingerprint ||
           result.mode !== oracle.mode ||
           result.oracleOutcome !== oracle.expectedOutcome ||
-          JSON.stringify(result.acceptanceCheckIds) !== JSON.stringify(oracle.acceptanceCheckIds)
+          JSON.stringify(result.acceptanceCheckIds) !== JSON.stringify(oracle.acceptanceCheckIds) ||
+          JSON.stringify(result.acceptanceCheckDefinitionFingerprints) !==
+            JSON.stringify(oracle.acceptanceCheckDefinitionFingerprints)
         );
       }) ||
       oracleIds.some((taskId) => !resultIds.includes(taskId))
@@ -484,10 +629,13 @@ export const pilotEvidenceSchema = z
         if (oracle === undefined) return true;
         return (
           comparator.repositoryFingerprint !== oracle.repositoryFingerprint ||
+          comparator.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
           comparator.sourceFingerprint !== oracle.sourceFingerprint ||
           comparator.mode !== oracle.mode ||
           JSON.stringify(comparator.acceptanceCheckIds) !==
             JSON.stringify(oracle.acceptanceCheckIds) ||
+          JSON.stringify(comparator.acceptanceCheckDefinitionFingerprints) !==
+            JSON.stringify(oracle.acceptanceCheckDefinitionFingerprints) ||
           (() => {
             const result = evidence.taskResults.find(
               (candidate) => candidate.taskId === comparator.taskId,
@@ -495,10 +643,13 @@ export const pilotEvidenceSchema = z
             if (result === undefined) return true;
             return (
               result.repositoryFingerprint !== comparator.repositoryFingerprint ||
+              result.targetReferenceFingerprint !== comparator.targetReferenceFingerprint ||
               result.sourceFingerprint !== comparator.sourceFingerprint ||
               result.mode !== comparator.mode ||
               JSON.stringify(result.acceptanceCheckIds) !==
                 JSON.stringify(comparator.acceptanceCheckIds) ||
+              JSON.stringify(result.acceptanceCheckDefinitionFingerprints) !==
+                JSON.stringify(comparator.acceptanceCheckDefinitionFingerprints) ||
               result.applicableFactCount !== comparator.applicableFactCount ||
               result.capturedFactCount !== comparator.hunterCapturedFactCount ||
               result.manualInterventions !== comparator.hunterManualInterventions ||
@@ -539,6 +690,9 @@ export const pilotEvidenceSchema = z
       evidence.ci.sourceFingerprint !== evidence.machine.sourceFingerprint ||
       evidence.ci.windows.sourceFingerprint !== evidence.ci.sourceFingerprint ||
       evidence.ci.ubuntu.sourceFingerprint !== evidence.ci.sourceFingerprint ||
+      evidence.ci.windows.platform !== "WINDOWS" ||
+      evidence.ci.ubuntu.platform !== "UBUNTU" ||
+      evidence.ci.windows.runFingerprint === evidence.ci.ubuntu.runFingerprint ||
       evidence.ci.windows.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
       evidence.ci.ubuntu.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
       evidence.ci.windows.engineReleaseFingerprint !== evidence.machine.engineReleaseFingerprint ||

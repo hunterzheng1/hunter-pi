@@ -40,7 +40,7 @@ import {
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
-import { PilotPlanCompiler } from "@hunter-pi/pilot";
+import { PilotPlanCompiler, type PilotPreflightFailure } from "@hunter-pi/pilot";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -946,14 +946,25 @@ async function pilotPreflightCommand(
   const planPath = optionValue(arguments_, "--plan");
   if (planPath === undefined) throw new HpiCliUsageError();
   let input: unknown;
+  let failure: PilotPreflightFailure | undefined;
+  let rawPlan: string;
   try {
-    input = JSON.parse(
-      await (dependencies.readTextFile ?? ((path: string) => readFile(path, "utf8")))(planPath),
-    ) as unknown;
+    rawPlan = await (dependencies.readTextFile ?? ((path: string) => readFile(path, "utf8")))(
+      planPath,
+    );
   } catch {
-    input = null;
+    rawPlan = "";
+    failure = "FILE_UNREADABLE";
   }
-  const receipt = new PilotPlanCompiler().preflight(input);
+  if (failure === undefined) {
+    try {
+      input = JSON.parse(rawPlan) as unknown;
+    } catch {
+      input = null;
+      failure = "INVALID_JSON";
+    }
+  }
+  const receipt = new PilotPlanCompiler().preflight(input, failure);
   line(dependencies.io, JSON.stringify(receipt));
   return receipt.status === "READY" ? 0 : 2;
 }

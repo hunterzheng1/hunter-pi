@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import {
   pilotDecisionSchema,
   pilotEvidenceSchema,
@@ -7,26 +5,7 @@ import {
   type PilotEvidence,
   type PilotMetrics,
 } from "./contracts.js";
-
-function canonicalJson(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  if (typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
-      .join(",")}}`;
-  }
-  return "null";
-}
-
-function evidenceFingerprint(evidence: unknown): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(canonicalJson(evidence), "utf8").digest("hex")}`;
-}
+import { pilotFingerprint } from "./serialization.js";
 
 export function nearestRank(samples: readonly number[], rank: number): number {
   if (!Number.isInteger(rank) || rank < 1 || rank > samples.length) {
@@ -132,7 +111,7 @@ export class PilotEvaluator {
     if (!parsed.success) {
       return pilotDecisionSchema.parse({
         schemaVersion: "hpi-pilot-decision.v2",
-        evidenceFingerprint: evidenceFingerprint(input),
+        evidenceFingerprint: pilotFingerprint(input),
         outcome: "STOP",
         reasons: ["pilot Evidence failed strict identity and consistency validation"],
         metrics: {
@@ -251,7 +230,7 @@ export class PilotEvaluator {
     if (decisionReasons.length === 0) decisionReasons.push("all frozen Task 12 gates passed");
     return pilotDecisionSchema.parse({
       schemaVersion: "hpi-pilot-decision.v2",
-      evidenceFingerprint: evidenceFingerprint(evidence),
+      evidenceFingerprint: pilotFingerprint(evidence),
       outcome,
       reasons: decisionReasons,
       metrics,

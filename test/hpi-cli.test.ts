@@ -140,7 +140,29 @@ describe("hpi command", () => {
       expect(await runHpiCli([helpArgument], dependencies)).toBe(0);
       expect(io.stdout.join("\n")).toContain("--model exact-id");
       expect(io.stdout.join("\n")).toContain("--permission safe|balanced|full-access");
+      expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
     }
+  });
+
+  it("runs only the safe pilot preflight and never echoes an invalid plan", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan.json");
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        credential: "token=do-not-echo",
+        privatePath: root,
+      }),
+      "utf8",
+    );
+
+    expect(
+      await runHpiCli(["pilot", "preflight", "--plan", planPath, "--json"], dependencies),
+    ).toBe(2);
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).toContain('"status":"BLOCKED"');
+    expect(output).not.toContain(root);
+    expect(output).not.toContain("do-not-echo");
   });
 
   it("rejects unknown commands and malformed options before confirmation or launch", async () => {

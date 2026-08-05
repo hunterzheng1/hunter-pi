@@ -48,7 +48,7 @@ const TASK7_VERIFIER_PATHSPEC_V2 = [
   "vitest.config.ts",
 ] as const;
 
-export const TASK7_VERIFIER_PATHSPEC = [
+const TASK7_VERIFIER_PATHSPEC_V3 = [
   ".github/workflows/ci.yml",
   ".gitattributes",
   ".gitignore",
@@ -68,6 +68,38 @@ export const TASK7_VERIFIER_PATHSPEC = [
   "test/posix-process-tree-finality.test.ts",
   "test/support/temporary-test-directory.ts",
   "test/task7-platform-evidence.test.ts",
+  "tools/compare-task7-platform-evidence.ts",
+  "tools/task7-platform-evidence.ts",
+  "tools/task7-platform-probe.ts",
+  "tools/tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+] as const;
+
+export const TASK7_VERIFIER_PATHSPEC = [
+  ".github/workflows/ci.yml",
+  ".gitattributes",
+  ".gitignore",
+  ".node-version",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierignore",
+  "eslint.config.mjs",
+  "package-lock.json",
+  "package.json",
+  "prettier.config.mjs",
+  "scripts/bundle-cli.mjs",
+  "test/file-lease-manager.test.ts",
+  "test/git-workspace-manager.test.ts",
+  "test/managed-process-host.test.ts",
+  "test/managed-process-platform.test.ts",
+  "test/posix-process-tree-finality.test.ts",
+  "test/support/temporary-test-directory.ts",
+  "test/support/vitest-resource-runtime.ts",
+  "test/task7-platform-evidence.test.ts",
+  "test/vitest.global-setup.ts",
   "tools/compare-task7-platform-evidence.ts",
   "tools/task7-platform-evidence.ts",
   "tools/task7-platform-probe.ts",
@@ -181,6 +213,10 @@ const verifierPathspecV2Schema = exactOrderedStrings(
   TASK7_VERIFIER_PATHSPEC_V2,
   "Task 7 v2 verifier pathspec",
 );
+const verifierPathspecV3Schema = exactOrderedStrings(
+  TASK7_VERIFIER_PATHSPEC_V3,
+  "Task 7 v3 verifier pathspec",
+);
 const verifierPathspecSchema = exactOrderedStrings(
   TASK7_VERIFIER_PATHSPEC,
   "Task 7 verifier pathspec",
@@ -273,7 +309,10 @@ const task7CheckResultSchema = z.strictObject({
 });
 
 function createTask7PlatformReceiptSchema(
-  schemaVersion: "hpi-task7-platform-receipt.v2" | "hpi-task7-platform-receipt.v3",
+  schemaVersion:
+    | "hpi-task7-platform-receipt.v2"
+    | "hpi-task7-platform-receipt.v3"
+    | "hpi-task7-platform-receipt.v4",
   exactVerifierPathspecSchema: ReturnType<typeof exactOrderedStrings>,
 ) {
   return z
@@ -363,8 +402,12 @@ export const task7PlatformReceiptV2Schema = createTask7PlatformReceiptSchema(
   "hpi-task7-platform-receipt.v2",
   verifierPathspecV2Schema,
 );
-export const task7PlatformReceiptSchema = createTask7PlatformReceiptSchema(
+export const task7PlatformReceiptV3Schema = createTask7PlatformReceiptSchema(
   "hpi-task7-platform-receipt.v3",
+  verifierPathspecV3Schema,
+);
+export const task7PlatformReceiptSchema = createTask7PlatformReceiptSchema(
+  "hpi-task7-platform-receipt.v4",
   verifierPathspecSchema,
 );
 export type Task7PlatformReceipt = z.infer<typeof task7PlatformReceiptSchema>;
@@ -423,8 +466,11 @@ function createTask7FailureSourceSchema(
 }
 
 function createTask7PlatformFailureReceiptSchema(
-  schemaVersion: "hpi-task7-platform-failure.v3" | "hpi-task7-platform-failure.v4",
-  verifierVersion: "task7-verifier.v3" | "task7-verifier.v4",
+  schemaVersion:
+    | "hpi-task7-platform-failure.v3"
+    | "hpi-task7-platform-failure.v4"
+    | "hpi-task7-platform-failure.v5",
+  verifierVersion: "task7-verifier.v3" | "task7-verifier.v4" | "task7-verifier.v5",
   sourceSchema: ReturnType<typeof createTask7FailureSourceSchema>,
 ) {
   return z
@@ -468,9 +514,14 @@ export const task7PlatformFailureReceiptV3Schema = createTask7PlatformFailureRec
   "task7-verifier.v3",
   createTask7FailureSourceSchema(verifierPathspecV2Schema),
 );
-export const task7PlatformFailureReceiptSchema = createTask7PlatformFailureReceiptSchema(
+export const task7PlatformFailureReceiptV4Schema = createTask7PlatformFailureReceiptSchema(
   "hpi-task7-platform-failure.v4",
   "task7-verifier.v4",
+  createTask7FailureSourceSchema(verifierPathspecV3Schema),
+);
+export const task7PlatformFailureReceiptSchema = createTask7PlatformFailureReceiptSchema(
+  "hpi-task7-platform-failure.v5",
+  "task7-verifier.v5",
   createTask7FailureSourceSchema(verifierPathspecSchema),
 );
 export type Task7PlatformFailureReceipt = z.infer<typeof task7PlatformFailureReceiptSchema>;

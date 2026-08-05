@@ -14,6 +14,7 @@ import {
   compareTask7PlatformEvidence,
   task7PlatformConsistencyV1Schema,
   task7PlatformConsistencyV2Schema,
+  task7PlatformConsistencyV3Schema,
   task7PlatformConsistencySchema,
 } from "../tools/compare-task7-platform-evidence.js";
 import {
@@ -29,17 +30,21 @@ import {
   task7PlatformFailureReceiptV1Schema,
   task7PlatformFailureReceiptV2Schema,
   task7PlatformFailureReceiptV3Schema,
+  task7PlatformFailureReceiptV4Schema,
   task7PlatformReceiptSchema,
   task7PlatformReceiptV1Schema,
   task7PlatformReceiptV2Schema,
+  task7PlatformReceiptV3Schema,
 } from "../tools/task7-platform-evidence.js";
 
 const digest = (character: string): `sha256:${string}` => `sha256:${character.repeat(64)}`;
 
 const cleanupRoots: string[] = [];
 
-it("binds the focused Linux finality verifier into the Task 7 verifier identity", () => {
+it("binds the focused Linux finality and active Vitest runtime into the verifier identity", () => {
   expect(TASK7_VERIFIER_PATHSPEC).toContain("test/posix-process-tree-finality.test.ts");
+  expect(TASK7_VERIFIER_PATHSPEC).toContain("test/support/vitest-resource-runtime.ts");
+  expect(TASK7_VERIFIER_PATHSPEC).toContain("test/vitest.global-setup.ts");
 });
 
 afterEach(async () => {
@@ -77,7 +82,7 @@ function receipt(platform: "win32" | "linux") {
   const expectedContainment =
     platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE";
   return task7PlatformReceiptSchema.parse({
-    schemaVersion: "hpi-task7-platform-receipt.v3",
+    schemaVersion: "hpi-task7-platform-receipt.v4",
     kind: "hunter-pi/task7-platform-receipt",
     observedAt: "2026-08-04T10:00:00.000Z",
     status: "PASS",
@@ -132,7 +137,7 @@ describe("Task 7 platform Evidence", () => {
 
   it("requires post-identity failure Evidence to bind the exact source and verifier", () => {
     const failure = {
-      schemaVersion: "hpi-task7-platform-failure.v4",
+      schemaVersion: "hpi-task7-platform-failure.v5",
       kind: "hunter-pi/task7-platform-failure",
       observedAt: "2026-08-04T10:00:00.000Z",
       status: "NOT_PROVEN",
@@ -144,7 +149,7 @@ describe("Task 7 platform Evidence", () => {
       stdoutDigest: digest("1"),
       stderrDigest: digest("2"),
       observedBytes: 42,
-      verifierVersion: "task7-verifier.v4",
+      verifierVersion: "task7-verifier.v5",
       fixturePolicy: "AUTOMATIC_TEMPORARY_ONLY",
       providerRequests: "NOT_RUN",
       realRepositories: "NOT_RUN",
@@ -196,7 +201,7 @@ describe("Task 7 platform Evidence", () => {
     const compared = compareTask7PlatformEvidence(windows, ubuntu, "2026-08-04T10:01:00.000Z");
 
     expect(compared).toMatchObject({
-      schemaVersion: "hpi-task7-platform-consistency.v3",
+      schemaVersion: "hpi-task7-platform-consistency.v4",
       status: "PASS",
       platforms: ["win32", "linux"],
       sourceCommit: "a".repeat(40),
@@ -402,18 +407,24 @@ describe("Task 7 platform Evidence", () => {
       } else if (schemaVersion === "hpi-task7-platform-failure.v3") {
         task7PlatformFailureReceiptV3Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-failure.v4") {
+        task7PlatformFailureReceiptV4Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-failure.v5") {
         task7PlatformFailureReceiptSchema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-receipt.v1") {
         task7PlatformReceiptV1Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-receipt.v2") {
         task7PlatformReceiptV2Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-receipt.v3") {
+        task7PlatformReceiptV3Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-receipt.v4") {
         task7PlatformReceiptSchema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-consistency.v1") {
         task7PlatformConsistencyV1Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-consistency.v2") {
         task7PlatformConsistencyV2Schema.parse(value);
       } else if (schemaVersion === "hpi-task7-platform-consistency.v3") {
+        task7PlatformConsistencyV3Schema.parse(value);
+      } else if (schemaVersion === "hpi-task7-platform-consistency.v4") {
         task7PlatformConsistencySchema.parse(value);
       } else {
         throw new Error(`unknown committed Task 7 Evidence schema in ${name}`);

@@ -54,7 +54,10 @@ export const task7PlatformConsistencyV1Schema = z.strictObject({
 export type Task7PlatformConsistencyV1 = z.infer<typeof task7PlatformConsistencyV1Schema>;
 
 function createTask7PlatformConsistencySchema(
-  schemaVersion: "hpi-task7-platform-consistency.v2" | "hpi-task7-platform-consistency.v3",
+  schemaVersion:
+    | "hpi-task7-platform-consistency.v2"
+    | "hpi-task7-platform-consistency.v3"
+    | "hpi-task7-platform-consistency.v4",
 ) {
   return z
     .strictObject({
@@ -106,8 +109,11 @@ function createTask7PlatformConsistencySchema(
 export const task7PlatformConsistencyV2Schema = createTask7PlatformConsistencySchema(
   "hpi-task7-platform-consistency.v2",
 );
-export const task7PlatformConsistencySchema = createTask7PlatformConsistencySchema(
+export const task7PlatformConsistencyV3Schema = createTask7PlatformConsistencySchema(
   "hpi-task7-platform-consistency.v3",
+);
+export const task7PlatformConsistencySchema = createTask7PlatformConsistencySchema(
+  "hpi-task7-platform-consistency.v4",
 );
 export type Task7PlatformConsistency = z.infer<typeof task7PlatformConsistencySchema>;
 
@@ -182,7 +188,7 @@ export function compareTask7PlatformEvidence(
     };
   });
   const result = task7PlatformConsistencySchema.parse({
-    schemaVersion: "hpi-task7-platform-consistency.v3",
+    schemaVersion: "hpi-task7-platform-consistency.v4",
     kind: "hunter-pi/task7-platform-consistency",
     observedAt,
     status: "PASS",

@@ -29,4 +29,13 @@ describe("Linux process-tree finality", () => {
   it("embeds the tested scan transition in the generated subreaper helper", () => {
     expect(linuxSubreaperProcessTreeHelperSource).toContain("nextLinuxCompleteEmptyScanCount");
   });
+
+  it("walks owned child links instead of enumerating unrelated proc entries", () => {
+    expect(linuxSubreaperProcessTreeHelperSource).toContain(
+      '"/proc/" + String(parentPid) + "/task"',
+    );
+    expect(linuxSubreaperProcessTreeHelperSource).not.toContain(
+      'readdir("/proc", { withFileTypes: true })',
+    );
+  });
 });

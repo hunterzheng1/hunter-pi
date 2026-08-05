@@ -14,7 +14,10 @@
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
       "@hunter-pi/managed-change": ["./packages/managed-change/src/index.ts"],
       "@hunter-pi/pi-host": ["./packages/pi-host/src/index.ts"],
+      "@hunter-pi/pilot": ["./packages/pilot/src/index.ts"],
+      "@hunter-pi/plugin-manager": ["./packages/plugin-manager/src/index.ts"],
       "@hunter-pi/testkit": ["./packages/testkit/src/index.ts"],
+      "@hunter-pi/updater": ["./packages/updater/src/index.ts"],
       "@hunter-pi/verification": ["./packages/verification/src/index.ts"],
       "@hunter-pi/workspace": ["./packages/workspace/src/index.ts"],
       "@hunter-pi/workflow-kernel": ["./packages/workflow-kernel/src/index.ts"]

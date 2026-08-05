@@ -26,6 +26,13 @@ export default defineConfig({
       "@hunter-pi/pi-host": fileURLToPath(
         new URL("./packages/pi-host/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/pilot": fileURLToPath(new URL("./packages/pilot/src/index.ts", import.meta.url)),
+      "@hunter-pi/plugin-manager": fileURLToPath(
+        new URL("./packages/plugin-manager/src/index.ts", import.meta.url),
+      ),
+      "@hunter-pi/updater": fileURLToPath(
+        new URL("./packages/updater/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/testkit": fileURLToPath(
         new URL("./packages/testkit/src/index.ts", import.meta.url),
       ),

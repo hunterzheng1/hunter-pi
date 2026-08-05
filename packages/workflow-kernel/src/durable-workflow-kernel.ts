@@ -24,6 +24,9 @@ function commandRunId(command: WorkflowCommand): RunId {
       return command.run.runId;
     case "START_ATTEMPT":
     case "RETRY_ATTEMPT":
+    case "RECOVER_ATTEMPT":
+    case "CANCEL_RUN":
+    case "ARCHIVE_RUN":
       return command.runId;
     case "RECORD_OBSERVATION":
       return command.observation.runId;

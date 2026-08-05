@@ -25,6 +25,7 @@
     "lint": "eslint . --max-warnings=0",
     "package-smoke": "npm run build && node scripts/package-smoke.mjs",
     "pack:preview": "npm run build && node scripts/pack-developer-preview.mjs",
+    "pack:windows-portable": "npm run build && node scripts/pack-windows-portable.mjs",
     "probe:pi": "npm run build && node dist/tools/pi-public-interface-probe.js",
     "probe:task7": "npm run build && node dist/tools/task7-platform-probe.js",
     "strict:check": "node scripts/strict-compiler-smoke.mjs",

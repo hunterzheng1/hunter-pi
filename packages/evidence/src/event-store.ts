@@ -14,7 +14,12 @@ import {
   type WorkflowEventStore,
 } from "@hunter-pi/workflow-kernel";
 
-import { writeImmutableAtomically, type AtomicWriteFaultInjector } from "./atomic-write.js";
+import {
+  assertSafeDirectoryPath,
+  withDurableMutationLock,
+  writeImmutableAtomically,
+  type AtomicWriteFaultInjector,
+} from "./atomic-write.js";
 import { DurableStoreError, isErrnoException, storeErrorFrom } from "./errors.js";
 import { canonicalJson, sha256Fingerprint } from "./serialization.js";
 import { LocalStorageController } from "./storage-policy.js";
@@ -70,6 +75,10 @@ function eventRunId(event: WorkflowEvent) {
       return event.receipt.runId;
     case "CHECKPOINT_RECORDED":
       return event.checkpoint.runId;
+    case "RUN_CANCELLED":
+      return event.runId;
+    case "RUN_ARCHIVED":
+      return event.runId;
   }
 }
 
@@ -92,6 +101,31 @@ function segmentFilename(segment: EventSegment): string {
 
 function sameEvents(left: readonly WorkflowEvent[], right: readonly WorkflowEvent[]): boolean {
   return canonicalJson(left) === canonicalJson(right);
+}
+
+const appendLocks = new Map<string, Promise<void>>();
+
+async function withAppendLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const predecessor = appendLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const turn = predecessor.then(operation);
+  void turn.then(
+    () => {
+      release();
+    },
+    () => {
+      release();
+    },
+  );
+  appendLocks.set(key, current);
+  try {
+    return await turn;
+  } finally {
+    if (appendLocks.get(key) === current) appendLocks.delete(key);
+  }
 }
 
 export interface FileWorkflowEventStoreOptions {
@@ -120,6 +154,16 @@ export class FileWorkflowEventStore implements WorkflowEventStore {
 
   public async append(request: WorkflowEventAppendRequest): Promise<WorkflowEventAppendReceipt> {
     const parsed = workflowEventAppendRequestSchema.parse(request);
+    return withAppendLock(`${this.#stateRoot}:${parsed.runId}`, () =>
+      withDurableMutationLock(join(this.#stateRoot, ".mutation-lock"), () =>
+        this.#appendParsed(parsed),
+      ),
+    );
+  }
+
+  async #appendParsed(
+    parsed: z.infer<typeof workflowEventAppendRequestSchema>,
+  ): Promise<WorkflowEventAppendReceipt> {
     const state = await this.#readState(parsed.runId);
     const currentCursor = state.events.at(-1)?.cursor ?? 0;
     const startCursor = parsed.events[0]?.cursor;
@@ -223,6 +267,7 @@ export class FileWorkflowEventStore implements WorkflowEventStore {
   public async listRunIds(): Promise<readonly z.infer<typeof runIdSchema>[]> {
     const eventsRoot = join(this.#stateRoot, "events");
     try {
+      await assertSafeDirectoryPath(eventsRoot);
       const entries = await readdir(eventsRoot, { withFileTypes: true });
       const parsed = entries.map((entry) => ({
         entry,
@@ -254,6 +299,8 @@ export class FileWorkflowEventStore implements WorkflowEventStore {
     const directory = this.#runDirectory(runId);
     let names: string[];
     try {
+      await assertSafeDirectoryPath(join(this.#stateRoot, "events"));
+      await assertSafeDirectoryPath(directory);
       const entries = await readdir(directory, { withFileTypes: true });
       const unexpected = entries.filter(
         (entry) =>

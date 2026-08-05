@@ -18,6 +18,7 @@ import {
 } from "@hunter-pi/domain";
 import {
   InMemoryWorkflowKernel as ProductionWorkflowKernel,
+  archiveRunCommandSchema,
   workflowDecisionSchema,
   type WorkflowCommand,
   type WorkflowDecision,
@@ -213,6 +214,35 @@ describe("in-memory Workflow Kernel", () => {
     expect(
       workflowDecisionSchema.safeParse({ ...decision, privateSessionId: "private" }).success,
     ).toBe(false);
+  });
+
+  it("binds Archive transitions to an operation fingerprint and rejects archived creation", async () => {
+    const fixture = createFixture();
+    const kernel = new ProductionWorkflowKernel();
+    const archivedRun = runSchema.parse({
+      ...fixture.run,
+      archiveStatus: "ARCHIVED",
+      archiveId: "archive_kernel-illegal-create",
+    });
+
+    await expect(
+      kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "CREATE_RUN",
+        ...fixture,
+        run: archivedRun,
+      }),
+    ).rejects.toThrow(/new Run|archive/u);
+    expect(() =>
+      archiveRunCommandSchema.parse({
+        schemaVersion: "1.0.0",
+        type: "ARCHIVE_RUN",
+        runId: fixture.run.runId,
+        archiveId: "archive_kernel",
+        operationId: "op_archive_kernel",
+        archivedAt: timestamp,
+      }),
+    ).toThrow(/operationFingerprint/u);
   });
 
   it("keeps stored events isolated from returned decision objects", async () => {

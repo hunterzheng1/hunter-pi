@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   attemptIdSchema,
+  observationIdSchema,
   managedChangeSchema,
   planRevisionSchema,
   runSchema,
@@ -202,6 +203,83 @@ describe("append-only FileWorkflowEventStore", () => {
         ],
       }),
     ).rejects.toMatchObject({ code: "CURSOR_CONFLICT" });
+  });
+
+  it("serializes concurrent appends for one Run instead of publishing a fork", async () => {
+    const root = await createRoot();
+    const [created, started] = await createEvents();
+    const storeA = new FileWorkflowEventStore({ stateRoot: root, storage: createStorage(root) });
+    const storeB = new FileWorkflowEventStore({ stateRoot: root, storage: createStorage(root) });
+    await storeA.append({
+      schemaVersion: "1.0.0",
+      runId: "run_durable",
+      expectedCursor: 0,
+      events: [created],
+    });
+    await storeA.append({
+      schemaVersion: "1.0.0",
+      runId: "run_durable",
+      expectedCursor: 1,
+      events: [started],
+    });
+    const observationA = workflowEventSchema.parse({
+      schemaVersion: "1.0.0",
+      cursor: 3,
+      type: "OBSERVATION_RECORDED",
+      observation: {
+        schemaVersion: "1.0.0",
+        observationId: observationIdSchema.parse("obs_durable-a"),
+        runId: "run_durable",
+        attemptId: "att_durable",
+        kind: "AGENT_RETURNED",
+        observedAt: timestamp,
+        evidenceIds: [],
+      },
+    }) as Extract<WorkflowEvent, { type: "OBSERVATION_RECORDED" }>;
+    const observationB = workflowEventSchema.parse({
+      ...observationA,
+      observation: {
+        ...observationA.observation,
+        observationId: observationIdSchema.parse("obs_durable-b"),
+      },
+    }) as Extract<WorkflowEvent, { type: "OBSERVATION_RECORDED" }>;
+    const results = await Promise.allSettled([
+      storeA.append({
+        schemaVersion: "1.0.0",
+        runId: "run_durable",
+        expectedCursor: 2,
+        events: [observationA],
+      }),
+      storeB.append({
+        schemaVersion: "1.0.0",
+        runId: "run_durable",
+        expectedCursor: 2,
+        events: [observationB],
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    expect(rejected).toHaveProperty("reason.code", "CURSOR_CONFLICT");
+    expect(await storeA.read("run_durable")).toEqual([created, started, observationA]);
+  });
+
+  it("fails closed when another process holds the durable mutation lock", async () => {
+    const root = await createRoot();
+    const [created] = await createEvents();
+    await mkdir(join(root, ".mutation-lock"));
+    const store = new FileWorkflowEventStore({ stateRoot: root, storage: createStorage(root) });
+
+    await expect(
+      store.append({
+        schemaVersion: "1.0.0",
+        runId: "run_durable",
+        expectedCursor: 0,
+        events: [created],
+      }),
+    ).rejects.toMatchObject({ code: "STORE_BUSY" });
   });
 
   it.each([

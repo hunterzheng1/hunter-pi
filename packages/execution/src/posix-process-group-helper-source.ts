@@ -114,45 +114,61 @@ const parseProcIdentity = async (pid) => {
   return { pid, state, parentPid, processGroupId, sessionId, startTime };
 };
 
-const readProcTable = async () => {
-  const entries = await readdir("/proc", { withFileTypes: true });
-  const table = new Map();
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
-    const pid = Number(entry.name);
+const readLiveChildIdentities = async (parentPid) => {
+  let taskEntries;
+  try {
+    taskEntries = await readdir("/proc/" + String(parentPid) + "/task", {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if (ignoredProcErrors.has(error?.code)) return [];
+    throw error;
+  }
+  const children = new Map();
+  for (const taskEntry of taskEntries) {
+    if (!taskEntry.isDirectory() || !/^\d+$/u.test(taskEntry.name)) continue;
+    let value;
     try {
-      table.set(pid, await parseProcIdentity(pid));
+      value = await readFile(
+        "/proc/" + String(parentPid) + "/task/" + taskEntry.name + "/children",
+        "utf8",
+      );
     } catch (error) {
-      if (!ignoredProcErrors.has(error?.code)) throw error;
+      if (ignoredProcErrors.has(error?.code)) continue;
+      throw error;
+    }
+    for (const token of value.trim().split(/\s+/u)) {
+      if (!/^\d+$/u.test(token)) continue;
+      const pid = Number(token);
+      if (infrastructurePids.has(pid)) continue;
+      try {
+        const identity = await parseProcIdentity(pid);
+        if (
+          identity.parentPid === parentPid &&
+          identity.state !== "Z" &&
+          identity.state !== "X"
+        ) {
+          children.set(pid, identity);
+        }
+      } catch (error) {
+        if (!ignoredProcErrors.has(error?.code)) throw error;
+      }
     }
   }
-  return table;
+  return [...children.values()];
 };
 
 const liveDescendants = async () => {
-  const table = await readProcTable();
-  const children = new Map();
-  for (const identity of table.values()) {
-    const values = children.get(identity.parentPid) ?? [];
-    values.push(identity);
-    children.set(identity.parentPid, values);
-  }
   const descendants = [];
   const pending = [process.pid];
   const visited = new Set(pending);
   while (pending.length > 0) {
     const parentPid = pending.pop();
-    for (const identity of children.get(parentPid) ?? []) {
+    for (const identity of await readLiveChildIdentities(parentPid)) {
       if (visited.has(identity.pid)) continue;
       visited.add(identity.pid);
       pending.push(identity.pid);
-      if (
-        identity.state !== "Z" &&
-        identity.state !== "X" &&
-        !infrastructurePids.has(identity.pid)
-      ) {
-        descendants.push(identity);
-      }
+      descendants.push(identity);
     }
   }
   return descendants;

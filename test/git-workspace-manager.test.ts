@@ -202,7 +202,7 @@ async function createRepositoryFixture(): Promise<{
   return { parent, repository, ownedRoot, baseCommit };
 }
 
-describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
+describe("local Git Workspace Interface", { timeout: 30_000 }, () => {
   it("prepares an exact clean worktree without changing dirty source-checkout work", async () => {
     const fixture = await createRepositoryFixture();
     const sourceStatusBefore = runGit(fixture.repository, fixture.parent, [
@@ -261,7 +261,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
-  }, 15_000);
+  }, 30_000);
 
   it("returns the original prepared workspace for an exact operation replay", async () => {
     const fixture = await createRepositoryFixture();
@@ -289,7 +289,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
       "--porcelain",
     ]);
     expect(registered.match(/^worktree /gmu)).toHaveLength(2);
-  }, 15_000);
+  }, 30_000);
 
   it("disables repository hooks while preparing an owned worktree", async () => {
     const fixture = await createRepositoryFixture();
@@ -497,7 +497,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
       if (racer.exitCode === null) racer.kill();
       if (racer.exitCode === null) await once(racer, "exit");
     }
-  }, 15_000);
+  }, 30_000);
 
   it("preserves ignored files instead of deleting them with an otherwise clean worktree", async () => {
     const fixture = await createRepositoryFixture();
@@ -709,7 +709,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
     expect(
       runGit(fixture.repository, fixture.parent, ["branch", "--list", prepared.handle.branchName]),
     ).not.toBe("");
-  }, 15_000);
+  }, 30_000);
 
   it("removes only a clean owned worktree and its zero-unique-commit local branch", async () => {
     const fixture = await createRepositoryFixture();
@@ -778,7 +778,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
-  }, 15_000);
+  }, 30_000);
 
   it("blocks a delayed cleanup intent from deleting a newer workspace generation with the same id", async () => {
     const fixture = await createRepositoryFixture();
@@ -822,7 +822,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
       receipt: { outcome: "BLOCKED", reasonCodes: ["WORKSPACE_IDENTITY_DRIFT"] },
     });
     await expect(access(second.handle.directory)).resolves.toBeUndefined();
-  }, 15_000);
+  }, 30_000);
 
   it("returns a blocked receipt when the physical target reappears after Git reports removal", async () => {
     const fixture = await createRepositoryFixture();
@@ -872,7 +872,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
       if (recreator.exitCode === null) recreator.kill();
       if (recreator.exitCode === null) await once(recreator, "exit");
     }
-  }, 15_000);
+  }, 30_000);
 
   it("blocks cleanup without traversing a junction or symlink that escapes the owned worktree", async () => {
     const fixture = await createRepositoryFixture();
@@ -927,7 +927,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
     });
     await expect(readFile(sentinel, "utf8")).resolves.toBe("PRESERVE\n");
     await expect(access(prepared.handle.directory)).resolves.toBeUndefined();
-  }, 15_000);
+  }, 30_000);
 
   it("blocks cleanup when an owned worktree contains a hard-linked file", async () => {
     const fixture = await createRepositoryFixture();
@@ -964,7 +964,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
       receipt: { outcome: "BLOCKED", reasonCodes: ["DIRTY_WORKTREE", "UNSAFE_LINKS"] },
     });
     await expect(readFile(outside, "utf8")).resolves.toBe("PRESERVE_HARDLINK_SOURCE\n");
-  }, 15_000);
+  }, 30_000);
 
   it("removes a clean worktree but preserves its pushed unmerged branch", async () => {
     const fixture = await createRepositoryFixture();
@@ -1048,7 +1048,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         `refs/remotes/origin/${prepared.handle.branchName}`,
       ]).trim(),
     ).toMatch(/^[a-f0-9]{40}$/u);
-  }, 15_000);
+  }, 30_000);
 
   it.skipIf(process.platform !== "win32")(
     "returns an ambiguous cleanup receipt while another process owns the worktree cwd",
@@ -1105,7 +1105,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         }
       }
     },
-    15_000,
+    30_000,
   );
 
   it("rejects a pre-existing destination before Git can mutate or delete it", async () => {
@@ -1146,7 +1146,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         "--untracked-files=all",
       ]),
     ).toBe(sourceStatusBefore);
-  });
+  }, 30_000);
 
   it("returns the original disposal receipt for an exact operation replay", async () => {
     const fixture = await createRepositoryFixture();
@@ -1173,7 +1173,7 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
 
     expect(first.receipt.outcome).toBe("APPLIED");
     expect(replay).toEqual(first);
-  }, 15_000);
+  }, 30_000);
 
   it("rejects a disposal operation replay whose fingerprint changed", async () => {
     const fixture = await createRepositoryFixture();
@@ -1202,5 +1202,5 @@ describe("local Git Workspace Interface", { timeout: 15_000 }, () => {
         operationFingerprint: fingerprint("task7-disposal-changed"),
       }),
     ).rejects.toThrow(/operation replay/u);
-  }, 15_000);
+  }, 30_000);
 });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  archiveIdSchema,
   attemptIdSchema,
   changeIdSchema,
   checkIdSchema,
@@ -286,6 +287,7 @@ export const runSchema = z.strictObject({
   sourceFingerprint: fingerprintSchema,
   lifecycle: changeLifecycleSchema,
   archiveStatus: archiveStatusSchema,
+  archiveId: archiveIdSchema.optional(),
   startedAt: timestampSchema,
   predecessorRunId: runIdSchema.optional(),
   endedAt: timestampSchema.optional(),
@@ -323,6 +325,9 @@ export const attemptSchema = z
     planRevisionId: planRevisionIdSchema,
     sequence: positiveFiniteIntegerSchema,
     previousAttemptId: attemptIdSchema.optional(),
+    recoveryCheckpointId: checkpointIdSchema.optional(),
+    recoveryOperationId: operationIdSchema.optional(),
+    recoveryOperationFingerprint: fingerprintSchema.optional(),
     failureEvidenceIds: z.array(evidenceIdSchema).min(1).optional(),
     retryReason: nonEmptyTextSchema.optional(),
     precedingFailureFingerprint: fingerprintSchema.optional(),
@@ -349,10 +354,20 @@ export const attemptSchema = z
     ];
     const presentCount = retryFields.filter((value) => value !== undefined).length;
     const hasRetryFields = presentCount > 0;
+    const recoveryOperationFields = [
+      attempt.recoveryOperationId,
+      attempt.recoveryOperationFingerprint,
+    ];
+    const recoveryOperationPresentCount = recoveryOperationFields.filter(
+      (value) => value !== undefined,
+    ).length;
     if (
       (hasRetryFields && presentCount !== retryFields.length) ||
       (attempt.sequence === 1 && hasRetryFields) ||
-      (attempt.sequence > 1 && presentCount !== retryFields.length)
+      (attempt.sequence > 1 && presentCount !== retryFields.length) ||
+      (attempt.sequence === 1 && attempt.recoveryCheckpointId !== undefined) ||
+      (attempt.recoveryCheckpointId === undefined && recoveryOperationPresentCount > 0) ||
+      (attempt.recoveryCheckpointId !== undefined && recoveryOperationPresentCount !== 2)
     ) {
       context.addIssue({
         code: "custom",
@@ -733,7 +748,24 @@ export const checkpointSchema = z
       checkpoint.engine.resumeCapability !== "SUPPORTED" ||
       checkpoint.engine.sessionReference !== undefined,
     "a supported resume capability requires an engine session reference",
-  );
+  )
+  .superRefine((checkpoint, context) => {
+    for (const key of [
+      "activeOperationReceiptIds",
+      "unknownOperationIds",
+      "heldWriterLeaseIds",
+      "processReferences",
+    ] as const) {
+      const values = checkpoint[key].map((value) => JSON.stringify(value));
+      if (new Set(values).size !== values.length) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: `${key} identities must be unique`,
+        });
+      }
+    }
+  });
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 
 export const pluginCompatibilitySchema = z.enum(["VERIFIED", "UNVERIFIED", "INCOMPATIBLE"]);

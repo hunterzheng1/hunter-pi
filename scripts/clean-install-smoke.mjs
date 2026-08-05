@@ -10,6 +10,9 @@ const workspaceManifests = [
   "packages/evidence/package.json",
   "packages/engine-contracts/package.json",
   "packages/pi-host/package.json",
+  "packages/pilot/package.json",
+  "packages/plugin-manager/package.json",
+  "packages/updater/package.json",
   "packages/workflow-kernel/package.json",
   "packages/testkit/package.json",
 ];

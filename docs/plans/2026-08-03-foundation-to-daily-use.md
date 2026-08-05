@@ -2,10 +2,10 @@
 
 - Created: 2026-08-03
 - Product baseline: `docs/11-decision-summary.md`
-- Current repository phase: `TASK_6_MERGED_MAIN_CI_PASS / TASK_7_ACTIVE`
-- Active task: `TASK_7_WORKTREE_LEASE_PROCESS_HOST`
+- Current repository phase: `TASK_9_11_LOCAL_PASS / TASK_12_REAL_PILOT_NOT_PROVEN`
+- Active evidence gate: `TASK_12_WINDOWS_DAILY_USE_PILOT`
 - First engine research candidate: Pi `0.83.0` / **PROVIDER_INDEPENDENT_SURFACES_SUPPORTED; EXACT_TASK_6_REQUEST_DETECTED; BROADER_PROVIDER_RELIABILITY_NOT_PROVEN**
-- Delivery style: one task, one focused branch/PR, explicit local and remote results
+- Delivery style: one task, one focused branch/PR, explicit local and remote results. Exception recorded 2026-08-06: Tasks 9–12 share the sequential `codex/daily-use` branch and PR #21 so their contract changes can be reviewed together; each task remains separately bounded and documented, and no release claim is inferred from the grouping.
 
 ## Outcome
 
@@ -219,7 +219,7 @@ Deliverables:
 
 Stop on any reproducible source-loss, escaped process tree, or ambiguous cleanup result.
 
-Implementation status on 2026-08-05: **ATTEMPT #15 FULL LOCAL PASS / INDEPENDENT EXACT-HEAD REREVIEW PENDING / REPLACEMENT REMOTE CI PENDING**. Owner-authorized test-infrastructure scope made real Git/process fixtures run one file at a time under a per-run contained Temp root, with bounded retry cleanup and child-close reconciliation. PR run `30966180228` later reproduced a non-atomic Linux `/proc` scan that could publish an empty tree before a detached orphan was reparented. Source `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` serializes termination/reconciliation and resets empty candidates on active scans and control boundaries. Independent rereview retained the post-Evidence mixed-stress timeout but closed it as non-reproducible host/test-scheduling history after exact clean and pressured reproductions. Attempts #13/#14 remain historical after successive exact-verifier identity findings. Replacement source `0580778b260c944da06fdac2d809a0db7e5f7df5` and append-only v4/v5 attempt #15 receipts bind the closed 29-path verifier set and pass the exact Windows/Ubuntu, consistency, privacy, and full 302/302 local gates. Task 8 remains `NOT_STARTED` until Task 7 review and remote closure.
+Implementation status on 2026-08-06: **ATTEMPT #15 FULL LOCAL PASS / INDEPENDENT EXACT-HEAD REREVIEW PASS / PR CI PASS / MAIN CI PASS**. Owner-authorized test-infrastructure scope made real Git/process fixtures run one file at a time under a per-run contained Temp root, with bounded retry cleanup and child-close reconciliation. PR run `30966180228` later reproduced a non-atomic Linux `/proc` scan that could publish an empty tree before a detached orphan was reparented. Source `faaaabdf01e2aa8d4766f9f0dc5495b2e479a672` serializes termination/reconciliation and resets empty candidates on active scans and control boundaries. Independent rereview retained the post-Evidence mixed-stress timeout but closed it as non-reproducible host/test-scheduling history after exact clean and pressured reproductions. Attempts #13/#14 remain historical after successive exact-verifier identity findings. Replacement source `0580778b260c944da06fdac2d809a0db7e5f7df5` and append-only v4/v5 attempt #15 receipts bind the closed 29-path verifier set and pass the exact Windows/Ubuntu, consistency, privacy, and full 302/302 local gates. PR #16 and exact main run `30979052589` passed within the recorded disposable-fixture bounds. Task 8 is complete within its recorded receipt-fixture bounds.
 
 Detailed execution: [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md).
 
@@ -239,7 +239,7 @@ Deliverables:
 
 Gates include missing, duplicate, filtered, skipped, timeout, truncated, and stale-reuse negative fixtures.
 
-Implementation status on 2026-08-05: **COMPLETE WITHIN PROVIDER-NEUTRAL RECEIPT-FIXTURE BOUNDS / LOCAL PASS / PR CI PASS / MAIN CI PASS / TASK 9 NOT_STARTED**. Merge `bbb409c282741431b75e7303b27154755c86ffd1` adds the strict adequacy schemas and validator, and exact main run `30984969665` passes Windows/Ubuntu quality, Task 7 containment, Task 7 Evidence, and Pi Evidence. Detailed scope, RED/GREEN history, and the retained initial CI failures are recorded in [2026-08-05 — Task 8 verification adequacy](2026-08-05-task8-verification-adequacy.md). Provider requests and real user repositories remain `NOT_RUN`.
+Implementation status on 2026-08-05: **COMPLETE WITHIN PROVIDER-NEUTRAL RECEIPT-FIXTURE BOUNDS / LOCAL PASS / PR CI PASS / MAIN CI PASS / TASKS 9–11 LOCAL PASS / TASK 12 REAL PILOT NOT_PROVEN**. Merge `bbb409c282741431b75e7303b27154755c86ffd1` adds the strict adequacy schemas and validator, and exact main run `30984969665` passes Windows/Ubuntu quality, Task 7 containment, Task 7 Evidence, and Pi Evidence. Detailed scope, RED/GREEN history, and the retained initial CI failures are recorded in [2026-08-05 — Task 8 verification adequacy](2026-08-05-task8-verification-adequacy.md). Provider requests and real user repositories remain `NOT_RUN` for the new daily-use pilot.
 
 ## Task 9 — Checkpoint recovery and archive
 
@@ -258,6 +258,8 @@ Deliverables:
 
 No knowledge auto-promotion yet. Stop if recovery requires manual state editing or rewrites incomplete history.
 
+Implementation status on 2026-08-06: **LOCAL PASS / REVIEW-HARDENED PR CI PASS / MAIN CI PENDING WITHIN PROVIDER-NEUTRAL DURABLE-FIXTURE BOUNDS** — periodic Checkpointing, exact operation-identity recovery replay, reconciliation-driven recovery Attempts, cancellation finality, five terminal Archive outcomes, canonical archive binding, durable import/export/delete receipts, strict export-envelope deletion, clean-profile second-device import/rejection, and cross-process durable mutation locks are implemented and locally verified. The focused Task 9 set is 7 files / 67 tests; the sharded repository set is 46 files / 362 tests. Earlier PR CI run `31032218373` covers the pre-hardening source; hardened replacement PR CI `31042109585` passes Windows/Ubuntu quality, containment, and Evidence jobs. The retained hosted Linux process-tree timeout history and its fix are recorded in [Linux process-tree validation](../validation/2026-08-05-linux-process-tree-hosted.md). Exact main CI for the reviewed source is `PENDING`. Real power loss, arbitrary user repositories, and Provider recovery remain `NOT_PROVEN`.
+
 ## Task 10 — Standard Pi Package manager and compatibility/trust/isolation
 
 **Goal:** let users install Pi ecosystem packages without hiding compatibility and authority.
@@ -272,6 +274,8 @@ Deliverables:
 - license/provenance inventory.
 
 Stop if user plugin code must execute before Safe Mode or provenance display, if critical Core Extension shadowing cannot be detected, or if Compatibility would have to be presented as a general safety/containment claim.
+
+Implementation status on 2026-08-05: **LOCAL PASS WITHIN METADATA-ONLY PACKAGE BOUNDS** — exact source binding, verifier-fingerprint- and Evidence-bound Compatibility/Isolation receipts, separate Trust receipts, Safe Mode, provenance/privacy rejection, durable replay locks, and append-only lifecycle operations pass. No general third-party package compatibility or OS containment claim is made.
 
 ## Task 11 — Qualified update, packaging, and rollback
 
@@ -288,6 +292,8 @@ Deliverables:
 - artifact digests, dependency/license inventory, and release evidence template.
 
 Publishing requires explicit owner authorization after all candidate gates and actual remote CI pass. Unsigned artifacts are labeled accordingly.
+
+Implementation status on 2026-08-06: **LOCAL PASS / REVIEW-HARDENED PR CI PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, fail-closed portable redaction for failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, clean install smoke, and Pi probe pass. Earlier PR CI run `31032218373` covers the pre-hardening source; hardened replacement PR CI `31042109585` passes all Windows/Ubuntu quality, containment, and Evidence jobs. The clean portable manifest binds source `31034a4`, uses `updateChannel=developer-preview`, and is unsigned. Exact main CI, publication, signing, state migration, and stable promotion remain `NOT_PROVEN`/`PENDING`.
 
 ## Task 12 — Windows daily-use pilot
 
@@ -334,6 +340,8 @@ Terminal outcomes:
 - **STOP** — any zero-tolerance or comparator-value gate fails, a core invariant remains blocked, or the same required noncritical gate still misses after two replacement pilot Runs.
 
 The terminal pilot decision is an aggregate projection over the original and replacement Run Archives. It lists every miss and predecessor/successor link; a later passing Run never erases an earlier pilot failure.
+
+Implementation status on 2026-08-06: **EVALUATOR IMPLEMENTED / REAL PILOT NOT_RUN** — the strict evidence schema, explicit PASS fresh-install receipt, source-bound Windows/Ubuntu CI run receipts, two-distinct-repository/source-identity comparator, and GO/REVISE/STOP/NOT_PROVEN evaluator pass policy tests. The sharded local repository set is 46 files / 362 tests. The policy now requires either at least 30% aggregate manual-intervention reduction or a contained false completion, while median Hunter-only overhead remains an independent ≤10-minute gate. No repository targets, Provider credentials, ten-task observations, or current-branch main CI receipt were safely inferable, so daily-use acceptance remains `NOT_PROVEN`.
 
 ## Task 13 — Stable 1.0 decision, not automatic work
 

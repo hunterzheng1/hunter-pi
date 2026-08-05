@@ -3,7 +3,7 @@
 - Created: 2026-08-04
 - Source baseline: `b77937f689bca859a29c7df22025ce12e875bda4`
 - Branch: `codex/task7-worktree-process`
-- Status: `IN_PROGRESS / ATTEMPT 15 FULL LOCAL PASS / INDEPENDENT EXACT-HEAD REREVIEW PENDING / REMOTE CI PENDING`
+- Status: `IN_PROGRESS / ATTEMPT 15 FULL LOCAL PASS / EXACT-HEAD REREVIEW PASS / PR CI PASS / MAIN CI PENDING`
 - Scope: provider-neutral, automatically created Git and process fixtures only
 
 ## Outcome

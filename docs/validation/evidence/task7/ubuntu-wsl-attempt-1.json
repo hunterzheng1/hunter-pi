@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "hpi-task7-platform-receipt.v1",
+  "kind": "hunter-pi/task7-platform-receipt",
+  "observedAt": "2026-08-04T09:52:32.519Z",
+  "status": "PASS",
+  "source": {
+    "repository": "hunter-pi",
+    "commit": "760518c28cbd7a4b49cdd5e7e9b8b2db3cf71d10",
+    "digest": "sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f",
+    "pathspec": [
+      "package-lock.json",
+      "package.json",
+      "packages/domain/src",
+      "packages/execution/src",
+      "packages/workspace/src",
+      "test/file-lease-manager.test.ts",
+      "test/git-workspace-manager.test.ts",
+      "test/managed-process-host.test.ts",
+      "test/managed-process-platform.test.ts"
+    ]
+  },
+  "environment": {
+    "platform": "linux",
+    "platformLabel": "UBUNTU",
+    "architecture": "x64",
+    "nodeVersion": "v24.15.0",
+    "gitVersion": "2.34.1"
+  },
+  "execution": {
+    "commandFingerprint": "sha256:c15e73382cc0908a179abf98f96be0301c50263240046e16a9dce5d7c9715bfc",
+    "testFileFingerprint": "sha256:69c237cfec876a32dca21c0a531bdafa0f1982dc29df80d2391dc9338527e2b0",
+    "startedAt": "2026-08-04T09:52:28.746Z",
+    "endedAt": "2026-08-04T09:52:32.519Z",
+    "durationMs": 3773,
+    "exitCode": 0,
+    "reportStatus": "COMPLETE",
+    "stdoutDigest": "sha256:a3ec5712e21fdcc17f2ca4f209ed23d00f7826c158a5621e96140288c5c083f5",
+    "stderrDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "observedBytes": 79
+  },
+  "containment": { "expected": "POSIX_PROCESS_GROUP", "status": "PASS" },
+  "checks": [
+    { "id": "structured-argv", "status": "PASS" },
+    { "id": "nested-cancel", "status": "PASS" },
+    { "id": "nested-timeout", "status": "PASS" },
+    { "id": "delayed-output-finality", "status": "PASS" },
+    { "id": "bounded-output", "status": "PASS" },
+    { "id": "identity-mismatch", "status": "PASS" }
+  ],
+  "boundaries": {
+    "fixturePolicy": "AUTOMATIC_TEMPORARY_ONLY",
+    "providerRequests": "NOT_RUN",
+    "realRepositories": "NOT_RUN",
+    "privateData": "EXCLUDED",
+    "remoteCi": "PENDING"
+  }
+}

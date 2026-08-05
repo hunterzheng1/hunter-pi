@@ -162,6 +162,12 @@ Mutating probes run only in automatically created temporary Git fixtures. Cleanu
 
 Runs Pi and verification commands with explicit argv, bounded output, timeouts, identity, and process-tree isolation. Windows requires native process-tree containment; an unavailable isolation mechanism is not silently downgraded for Managed Change.
 
+Task 7 implements this behind one provider-neutral host. Windows atomically creates the target inside a kill-on-close Job Object with a restricted inherited-handle list and checks kernel signaled state before accepting any literal exit code. Ubuntu launches a system-Python shim that establishes a child subreaper before executing an identity-checked Node session/group leader; the helper follows `/proc` parentage, including descendants that create a new session or close inherited output handles. Both adapters keep process exit, timeout, and cancellation separate from terminal finality and from Verification. The Task 7 result is limited to disposable fixtures until exact remote CI and later real-repository acceptance run.
+
+The Workspace adapter runs Git with an owned empty hooks directory, disables configured checkout filters and filesystem monitors, fingerprints the source checkout bytes plus index identity before and after mutation, treats ignored files as unique content, and compensates only an exact clean provisional worktree. Each workspace-generation fingerprint binds the unique prepare operation identity as well as its canonical source inputs, so disposal intent from an older generation cannot authorize deletion of a replacement generation. A physical/registration mismatch returns a blocked cleanup receipt instead of inferring deletion.
+
+The file-backed Lease adapter commits an operation receipt and all resulting lease generations in one immutable transaction. Managed-process startup uses the canonical start operation identity itself as the durable reservation key, including when no resource lease is requested; callers cannot select an independent reservation identity. It atomically binds every declared lease to one session fingerprint before launch, and only that exact binding may release it, so an inspect/start race or a second Host cannot attach one operation or lease to two external processes.
+
 ## Event and decision flow
 
 ```text

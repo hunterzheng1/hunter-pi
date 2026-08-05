@@ -4,6 +4,7 @@
   "references": [
     { "path": "./apps/cli" },
     { "path": "./packages/domain" },
+    { "path": "./packages/execution" },
     { "path": "./packages/evidence" },
     { "path": "./packages/engine-contracts" },
     { "path": "./packages/verification" },
@@ -11,6 +12,7 @@
     { "path": "./packages/workflow-kernel" },
     { "path": "./packages/testkit" },
     { "path": "./packages/managed-change" },
+    { "path": "./packages/workspace" },
     { "path": "./tools" }
   ]
 }

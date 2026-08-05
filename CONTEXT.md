@@ -50,6 +50,22 @@ _Avoid_: mutable checklist, model scratchpad
 One logical execution of a Managed Change against a fixed Plan Revision and workspace identity.
 _Avoid_: Pi session, terminal process
 
+**Managed Workspace**:
+A Hunter-owned isolated Git worktree bound to one repository, base commit, branch, ownership nonce, and writer identity for a Run.
+_Avoid_: current checkout, arbitrary directory, cleanup target inferred from a path string
+
+**Writer Lease**:
+An exclusive, receipt-bound ownership claim for one Managed Workspace and an atomic set of local resources. Expiry alone does not prove that its owner is dead.
+_Avoid_: lockfile existence as liveness proof, silent timeout takeover
+
+**Managed Process Session**:
+A process execution bound to an explicit executable/argv, physical cwd, explicit environment fingerprint, platform containment identity, output ledger, and optional leases.
+_Avoid_: terminal tab, naked PID, shell command string
+
+**Terminal Finality**:
+The reconciled state in which a Managed Process Session's owned tree is empty, output handles are closed, and declared leases are released or not required. It is not Verification or Step success.
+_Avoid_: exit zero, kill acknowledgement, terminal idle
+
 **Step**:
 A typed unit in a Plan Revision whose validated output and policy determine the next workflow transition.
 _Avoid_: arbitrary chat turn, untyped model instruction

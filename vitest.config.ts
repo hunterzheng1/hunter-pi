@@ -2,12 +2,17 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
+import { vitestResourcePolicy } from "./test/support/vitest-resource-runtime.js";
+
 export default defineConfig({
   resolve: {
     alias: {
       "@hunter-pi/cli": fileURLToPath(new URL("./apps/cli/src/index.ts", import.meta.url)),
       "@hunter-pi/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
+      ),
+      "@hunter-pi/execution": fileURLToPath(
+        new URL("./packages/execution/src/index.ts", import.meta.url),
       ),
       "@hunter-pi/evidence": fileURLToPath(
         new URL("./packages/evidence/src/index.ts", import.meta.url),
@@ -27,6 +32,9 @@ export default defineConfig({
       "@hunter-pi/verification": fileURLToPath(
         new URL("./packages/verification/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/workspace": fileURLToPath(
+        new URL("./packages/workspace/src/index.ts", import.meta.url),
+      ),
       "@hunter-pi/workflow-kernel": fileURLToPath(
         new URL("./packages/workflow-kernel/src/index.ts", import.meta.url),
       ),
@@ -34,8 +42,12 @@ export default defineConfig({
   },
   test: {
     clearMocks: true,
+    fileParallelism: vitestResourcePolicy.fileParallelism,
+    globalSetup: "./test/vitest.global-setup.ts",
     include: ["test/**/*.test.ts"],
+    maxWorkers: vitestResourcePolicy.maxWorkers,
     passWithNoTests: false,
     restoreMocks: true,
+    teardownTimeout: vitestResourcePolicy.teardownTimeoutMs,
   },
 });

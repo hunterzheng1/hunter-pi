@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "hpi-task7-platform-consistency.v1",
+  "kind": "hunter-pi/task7-platform-consistency",
+  "observedAt": "2026-08-04T10:14:55.142Z",
+  "status": "PASS",
+  "platforms": ["win32", "linux"],
+  "sourceDigest": "sha256:931b2455ee644a70e047f67e5295386e239594692e0095d1739e374183370d6f",
+  "commandFingerprint": "sha256:c15e73382cc0908a179abf98f96be0301c50263240046e16a9dce5d7c9715bfc",
+  "testFileFingerprint": "sha256:69c237cfec876a32dca21c0a531bdafa0f1982dc29df80d2391dc9338527e2b0",
+  "receiptDigests": {
+    "windows": "sha256:93919294485ff59245c2cbef903d1249255c7abd612e3c17d245a92a7c5e2b84",
+    "ubuntu": "sha256:a54a67180093fee17527d48cd68cd21cd994ef5e89dff9fb7f33f985fd8d7e89"
+  },
+  "checks": [
+    { "id": "structured-argv", "status": "PASS" },
+    { "id": "nested-cancel", "status": "PASS" },
+    { "id": "nested-timeout", "status": "PASS" },
+    { "id": "delayed-output-finality", "status": "PASS" },
+    { "id": "bounded-output", "status": "PASS" },
+    { "id": "identity-mismatch", "status": "PASS" }
+  ],
+  "fixturePolicy": "AUTOMATIC_TEMPORARY_ONLY",
+  "providerRequests": "NOT_RUN",
+  "realRepositories": "NOT_RUN",
+  "remoteCi": "PENDING"
+}

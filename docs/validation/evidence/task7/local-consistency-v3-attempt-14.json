@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "hpi-task7-platform-consistency.v3",
+  "kind": "hunter-pi/task7-platform-consistency",
+  "observedAt": "2026-08-05T04:16:57.159Z",
+  "status": "PASS",
+  "platforms": ["win32", "linux"],
+  "sourceCommit": "0341d1461a2253405a5dbf7abfaa2e640de53835",
+  "sourceDigest": "sha256:98711f63c77bbdeb4729b94fe01b31e9e177cb4a272b2624a97c5f7cc1a758d8",
+  "verifierFingerprint": "sha256:647ac89442b2e8d88a695882d24179941f4a9be5fef43c4a7d42278c44519b40",
+  "commandFingerprint": "sha256:c15e73382cc0908a179abf98f96be0301c50263240046e16a9dce5d7c9715bfc",
+  "testFileFingerprint": "sha256:6ab81e887d689d13c40ea93fe0d469feb3ab3ba816c23db4277a3b15f5a7f3d1",
+  "receiptDigests": {
+    "windows": "sha256:17e01f146423794eb5b67df459eeabf5351a37c91f92866cfe8b5bc595768e19",
+    "ubuntu": "sha256:5da0db13e16e33c9d41078a3e5964dd65876523c46d7d273e5ba494aa0437746"
+  },
+  "checks": [
+    { "id": "structured-argv", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "nested-cancel", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "nested-timeout", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "delayed-output-finality", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "detached-closed-stdio", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "bounded-output", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "identity-mismatch", "windowsStatus": "PASS", "ubuntuStatus": "PASS" },
+    { "id": "windows-signaled-state", "windowsStatus": "PASS", "ubuntuStatus": "NOT_RUN" },
+    { "id": "windows-exit-259", "windowsStatus": "PASS", "ubuntuStatus": "NOT_RUN" }
+  ],
+  "fixturePolicy": "AUTOMATIC_TEMPORARY_ONLY",
+  "providerRequests": "NOT_RUN",
+  "realRepositories": "NOT_RUN",
+  "remoteCi": "PENDING"
+}

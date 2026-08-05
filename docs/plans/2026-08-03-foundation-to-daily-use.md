@@ -239,6 +239,8 @@ Deliverables:
 
 Gates include missing, duplicate, filtered, skipped, timeout, truncated, and stale-reuse negative fixtures.
 
+Implementation status on 2026-08-05: **COMPLETE WITHIN PROVIDER-NEUTRAL RECEIPT-FIXTURE BOUNDS / LOCAL PASS / PR CI PASS / MAIN CI PASS / TASK 9 NOT_STARTED**. Merge `bbb409c282741431b75e7303b27154755c86ffd1` adds the strict adequacy schemas and validator, and exact main run `30984969665` passes Windows/Ubuntu quality, Task 7 containment, Task 7 Evidence, and Pi Evidence. Detailed scope, RED/GREEN history, and the retained initial CI failures are recorded in [2026-08-05 — Task 8 verification adequacy](2026-08-05-task8-verification-adequacy.md). Provider requests and real user repositories remain `NOT_RUN`.
+
 ## Task 9 — Checkpoint recovery and archive
 
 **Goal:** resume safely after terminal/process interruption and freeze every outcome.

@@ -5,9 +5,9 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-05
-- Product status: **TASK_7_MERGED_MAIN_CI_PASS / TASK_8_NOT_STARTED**
-- Current implementation: Tasks 1–7 are merged through the bounded disposable-fixture worktree/lease/managed-process milestone; Task 7 attempt #15 binds exact source `0580778b260c944da06fdac2d809a0db7e5f7df5`, the closed 29-path verifier identity, and locally passing Windows/Ubuntu v4 platform Evidence
-- Next gate: plan Task 8 under its own scope; real repositories and Provider requests remain prohibited until that task explicitly opens them
+- Product status: **TASK_8_MERGED_MAIN_CI_PASS / TASK_9_NOT_STARTED**
+- Current implementation: Tasks 1–8 are merged through the bounded disposable-fixture worktree/lease/managed-process and verification-adequacy milestones; Task 8 merge `bbb409c282741431b75e7303b27154755c86ffd1` binds strict DAG, resource-lock, identity, accounting, Human Receipt, Review, and fixback contracts
+- Next gate: plan Task 9 under its own scope; real repositories and Provider requests remain prohibited until a later task explicitly opens them
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
@@ -23,6 +23,9 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Task 7 local platform Evidence: **V4 WINDOWS/UBUNTU/CONSISTENCY PASS; FULL LOCAL PASS; PR CI PASS; MAIN CI PASS** — attempts #13/#14 remain historical because their distinct verifier identities omitted executed test inputs. Selected attempt #15 binds source `0580778b260c944da06fdac2d809a0db7e5f7df5`, source digest `sha256:ba0716a23ebe801b02c0cc160569d198f1c61607ff97504fac44700cdba90f5a`, verifier fingerprint `sha256:0026ec643280eeb92792fcf6035b6e1bca31d45b18764f73a8f9c265420e860d`, the closed 29-path verifier set, the nine-check applicability matrix, and `remoteCi=PENDING`. Windows full verification passes 302/302; exact Ubuntu focused verification passes 10 applicable tests with 2 Windows-only skips. Independent exact-head rereview passed with no P0/P1/P2 findings.
 - Task 7 PR CI: **PASS after preserving one non-reproducible rerun history** — run [`30977216739`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30977216739) first failed only at the Ubuntu Task 7 containment job (`TEST_EXECUTION`, exit 1; the aggregate was dependency-skipped), while the other completed jobs passed. The failed job was rerun as [`92216076192`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30977216739/job/92216076192) without source changes and passed; the rerun aggregate [`92216198047`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30977216739/job/92216198047) and all PR checks then passed. The initial structured failure remains retained and is classified only as non-reproducible host/test-scheduling history; it is not rewritten as a PASS.
 - Task 7 merge and main CI: **PASS within disposable-fixture bounds** — PR #16 merged as `91500066b3e809b92b0ab0e985adb165b2276746`; main run [`30979052589`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30979052589) initially recorded the Ubuntu nested-process timeout, then its failed job was rerun once without source changes and the exact merge head passed Ubuntu/Windows quality, both containment jobs, and both Evidence aggregators. The initial main failure remains append-only history; the committed v4 Evidence envelopes still retain `remoteCi=PENDING` as their emission-time value.
+- Task 8 local adequacy: **PASS within deterministic receipt-fixture bounds** — merge `bbb409c282741431b75e7303b27154755c86ffd1`, 39 files / 308 local tests, strict DAG/resource-lock/accounting/identity/Human Receipt/Review/fixback negative fixtures; Provider requests and real repositories were not run.
+- Task 8 PR CI: **PASS after preserving one initial failure run** — first run [`30983551241`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30983551241) retained the two-file formatting failure and a structured Ubuntu Task 7 probe failure; replacement run [`30983778626`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30983778626) passed Windows/Ubuntu quality, both containment jobs, Task 7 Evidence, and Pi Evidence.
+- Task 8 merge and main CI: **PASS** — exact merge run [`30984969665`](https://github.com/hunterzheng1/hunter-pi/actions/runs/30984969665) passed Windows/Ubuntu quality, both containment jobs, Task 7 Evidence, and Pi Evidence. Task 9 remains `NOT_STARTED`.
 - Real interactive Pi TUI: **DETECTED within startup, Core loading, command-display, and clean-exit acknowledgement bounds**
 - Real Provider: **DETECTED for the exact Task 6 disposable-fixture request; broader reliability, recovery, real-repository safety, and production readiness remain NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
@@ -53,10 +56,12 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - [Task 4 Pi public-interface validation](validation/2026-08-03-task4-pi-public-interface.md)
 - [Task 5 hpi product-shell validation](validation/2026-08-03-task5-hpi-product-shell.md)
 - [Task 7 worktree, lease, and managed-process validation](validation/2026-08-04-task7-worktree-process.md)
+- [Task 8 verification adequacy validation](validation/2026-08-05-task8-verification-adequacy.md)
 - [Testing strategy](testing-strategy.md)
 - [Plan index](plans/README.md)
 - [Foundation-to-daily-use execution plan](plans/2026-08-03-foundation-to-daily-use.md)
 - [Task 7 worktree, leases, and process-host execution](plans/2026-08-04-task7-worktree-leases-process-host.md)
+- [Task 8 verification adequacy and review/fixback execution](plans/2026-08-05-task8-verification-adequacy.md)
 
 ## Architecture decisions
 

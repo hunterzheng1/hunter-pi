@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
-    "@hunter-pi/domain": "0.0.0"
+    "@hunter-pi/domain": "0.0.0",
+    "zod": "4.4.3"
   }
 }

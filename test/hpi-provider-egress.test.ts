@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,14 +17,23 @@ import {
   resolveHpiPaths,
   resolvePiProviderDestination,
 } from "@hunter-pi/pi-host";
+import { runCapturedProcess, runCapturedRpcCommand } from "./support/captured-process.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
 const createdRoots: string[] = [];
+const providerFixtureProcessTimeoutMs = 15_000;
 
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(
-    createdRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })),
+    createdRoots.splice(0).map((root) =>
+      rm(root, {
+        force: true,
+        maxRetries: 5,
+        recursive: true,
+        retryDelay: 100,
+      }),
+    ),
   );
 });
 
@@ -54,82 +63,6 @@ function readRequestBody(request: IncomingMessage): Promise<string> {
       resolvePromise(Buffer.concat(chunks).toString("utf8"));
     });
     request.once("error", reject);
-  });
-}
-
-function runCapturedProcess(options: {
-  readonly executable: string;
-  readonly arguments: readonly string[];
-  readonly cwd: string;
-  readonly environment: Readonly<Record<string, string>>;
-}): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(options.executable, [...options.arguments], {
-      cwd: options.cwd,
-      env: options.environment,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      resolvePromise({ exitCode: signal === null ? (code ?? 1) : 1, stdout, stderr });
-    });
-  });
-}
-
-function runCapturedRpcCommand(
-  options: {
-    readonly executable: string;
-    readonly arguments: readonly string[];
-    readonly cwd: string;
-    readonly environment: Readonly<Record<string, string>>;
-  },
-  command: Readonly<Record<string, unknown>>,
-): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(options.executable, [...options.arguments], {
-      cwd: options.cwd,
-      env: options.environment,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    let inputClosed = false;
-    const rawCommandId = command["id"];
-    if (typeof rawCommandId !== "string") throw new Error("RPC fixture command id is required");
-    const commandId = rawCommandId;
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error("fixed Pi RPC fixture timed out"));
-    }, 15_000);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      if (!inputClosed && stdout.includes(`"id":"${commandId}"`)) {
-        inputClosed = true;
-        child.stdin.end();
-      }
-    });
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      resolvePromise({ exitCode: signal === null ? (code ?? 1) : 1, stdout, stderr });
-    });
-    child.stdin.write(`${JSON.stringify(command)}\n`);
   });
 }
 
@@ -354,6 +287,8 @@ describe("Hunter Pi Provider egress gate", () => {
           ...safeBashPlan,
           arguments: [...safeBashPlan.arguments, "--mode", "rpc", "--no-session", "--no-tools"],
           environment: safeBashEnvironment,
+          label: "safe-bash-rpc",
+          timeoutMs: providerFixtureProcessTimeoutMs,
         },
         {
           id: "hunter-safe-bash",
@@ -404,6 +339,8 @@ describe("Hunter Pi Provider egress gate", () => {
           "blocked fixture prompt",
         ],
         environment: noSendEnvironment,
+        label: "prompt-blocked-json",
+        timeoutMs: providerFixtureProcessTimeoutMs,
       });
       expect(noSendExecution.exitCode, noSendExecution.stderr).toBe(0);
       expect(requests).toHaveLength(0);
@@ -446,6 +383,8 @@ describe("Hunter Pi Provider egress gate", () => {
           "fixture prompt",
         ],
         environment: childEnvironment,
+        label: "local-endpoint-json",
+        timeoutMs: providerFixtureProcessTimeoutMs,
       });
       expect(execution.exitCode, execution.stderr).toBe(0);
       expect(requests).toHaveLength(1);
@@ -495,5 +434,5 @@ describe("Hunter Pi Provider egress gate", () => {
         });
       });
     }
-  }, 30_000);
+  }, 60_000);
 });

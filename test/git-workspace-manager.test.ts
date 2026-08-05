@@ -111,7 +111,14 @@ const cleanupRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    cleanupRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })),
+    cleanupRoots.splice(0).map((root) =>
+      rm(root, {
+        force: true,
+        maxRetries: 5,
+        recursive: true,
+        retryDelay: 100,
+      }),
+    ),
   );
 });
 

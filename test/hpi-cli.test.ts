@@ -27,7 +27,14 @@ const productShellFixtureIntegrity = `sha256:${"c".repeat(64)}`;
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(
-    createdRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })),
+    createdRoots.splice(0).map((root) =>
+      rm(root, {
+        force: true,
+        maxRetries: 5,
+        recursive: true,
+        retryDelay: 100,
+      }),
+    ),
   );
 });
 

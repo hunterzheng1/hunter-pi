@@ -2,6 +2,8 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
+import { vitestResourcePolicy } from "./test/support/vitest-resource-runtime.js";
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -40,8 +42,12 @@ export default defineConfig({
   },
   test: {
     clearMocks: true,
+    fileParallelism: vitestResourcePolicy.fileParallelism,
+    globalSetup: "./test/vitest.global-setup.ts",
     include: ["test/**/*.test.ts"],
+    maxWorkers: vitestResourcePolicy.maxWorkers,
     passWithNoTests: false,
     restoreMocks: true,
+    teardownTimeout: vitestResourcePolicy.teardownTimeoutMs,
   },
 });

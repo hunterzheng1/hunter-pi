@@ -5,7 +5,7 @@ import { join, parse, resolve } from "node:path";
 import type { z } from "zod";
 
 import { fingerprintSchema, type DistributionReleaseId, type Fingerprint } from "@hunter-pi/domain";
-import { withDurableMutationLock } from "@hunter-pi/evidence";
+import { redactPortableText, withDurableMutationLock } from "@hunter-pi/evidence";
 
 import {
   releaseCandidateSchema,
@@ -132,22 +132,25 @@ async function withUpdateManagerOperationLock<T>(
 }
 
 function redactFailureReason(raw: string, fallback: string): string {
-  return (
-    raw
-      .replace(/(^|[\s"'])[A-Za-z]:[\\/][^\s"']+/gu, "$1<redacted-path>")
-      .replace(/(^|[\s"'])\/(?:Users|home|private|tmp)\/[^\s"']+/gu, "$1<redacted-path>")
-      .trim()
-      .slice(0, 4_096) || fallback
-  );
+  const redaction = redactPortableText(raw);
+  const markers = redaction.categories.map((category) => `[REDACTED:${category}]`).join(" ");
+  return `${fallback}${markers === "" ? "" : ` ${markers}`}`.slice(0, 4_096);
+}
+
+function rawFailureReason(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function safeFailureReason(error: unknown, fallback: string): string {
-  const raw = error instanceof Error ? error.message : fallback;
-  return redactFailureReason(raw, fallback);
+  return redactFailureReason(rawFailureReason(error, fallback), fallback);
 }
 
-function combineFailureReasons(primary: string, cleanup: string | undefined): string {
-  const safePrimary = redactFailureReason(primary, "operation failed");
+function combineFailureReasons(
+  primary: string,
+  cleanup: string | undefined,
+  primaryFallback = "operation failed",
+): string {
+  const safePrimary = redactFailureReason(primary, primaryFallback);
   if (cleanup === undefined) return safePrimary;
   return `${safePrimary}; cleanup: ${redactFailureReason(cleanup, "cleanup failed")}`.slice(
     0,
@@ -431,8 +434,9 @@ export class FileUpdateManager implements UpdateManager {
         previousReleaseId,
         activeReleaseId: previousReleaseId,
         reason: combineFailureReasons(
-          safeFailureReason(error, "release health check failed"),
+          rawFailureReason(error, "release health check failed"),
           cleanupReason,
+          "release health check failed",
         ),
         observedAt: parsed.observedAt,
       });
@@ -466,8 +470,9 @@ export class FileUpdateManager implements UpdateManager {
         previousReleaseId,
         activeReleaseId: previousReleaseId,
         reason: combineFailureReasons(
-          safeFailureReason(error, "release state migration failed"),
+          rawFailureReason(error, "release state migration failed"),
           cleanupReason,
+          "release state migration failed",
         ),
         observedAt: parsed.observedAt,
       });
@@ -512,6 +517,7 @@ export class FileUpdateManager implements UpdateManager {
           [restoreReason, migrationRollbackReason, discardReason]
             .filter((reason): reason is string => reason !== undefined)
             .join("; cleanup: "),
+          "release activation failed",
         ).replace(/; cleanup: $/u, ""),
         observedAt: parsed.observedAt,
       });
@@ -633,8 +639,9 @@ export class FileUpdateManager implements UpdateManager {
           ? { activeReleaseId: currentReleaseId }
           : {}),
         reason: combineFailureReasons(
-          safeFailureReason(error, "rollback health check failed"),
+          rawFailureReason(error, "rollback health check failed"),
           restoreReason,
+          "rollback health check failed",
         ),
         observedAt: parsed.observedAt,
       });
@@ -694,8 +701,9 @@ export class FileUpdateManager implements UpdateManager {
           ? { activeReleaseId: currentReleaseId }
           : {}),
         reason: combineFailureReasons(
-          safeFailureReason(error, "rollback activation failed"),
+          rawFailureReason(error, "rollback activation failed"),
           restoreReason,
+          "rollback activation failed",
         ),
         observedAt: parsed.observedAt,
       });

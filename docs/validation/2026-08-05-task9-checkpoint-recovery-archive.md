@@ -14,11 +14,11 @@ Task 9 was implemented on the isolated `codex/daily-use` worktree using provider
 - immutable Archive manifests and packages for `READY`, `BLOCKED`, `FAILED`, `CANCELLED`, and `INCOMPLETE` outcomes;
 - event replay, projection, Evidence, Attempt, Checkpoint, and digest identity validation;
 - canonical Kernel-bound Archive read/export validation and cross-process durable mutation locks;
-- exact export/delete receipts, portable import rejection for live Attempts/leases/processes/device paths/credentials, and clean-profile second-device import followed by policy/Doctor/login-readiness checks.
+- durable import/export/delete operation receipts (including `hpi-archive-delete-export-receipt.v2` artifact identity), strict export-envelope deletion, portable import rejection for live Attempts/leases/processes/device paths/credentials, and clean-profile second-device import followed by policy/Doctor/login-readiness checks.
 
 ## Local evidence
 
-The focused Task 9 tests pass (7 files / 66 tests). A sharded local run covered all 46 test files and 357 tests with every shard passing; the Git fixture file passed 22/22 after its host-sensitive fixture budgets were raised to 30 seconds. Package smoke, clean install, lint, typecheck, build, format, and strict compiler smoke also pass. Final exact PR CI run `31032218373` passes Windows/Ubuntu quality, containment, and both Evidence aggregators; exact main CI remains `PENDING`. The preceding updater lint failure is retained in `31022928024`, and the hosted Linux process-tree timeout/fix history is recorded in [Linux process-tree validation](2026-08-05-linux-process-tree-hosted.md).
+The focused Task 9 tests pass (7 files / 67 tests). A sharded local run covered all 46 test files and 362 tests with every shard passing; the Git fixture file passed 22/22 after its host-sensitive fixture budgets were raised to 30 seconds. Package smoke, clean install, lint, typecheck, build, format, and strict compiler smoke also pass. Earlier PR CI run `31032218373` covers the pre-hardening source; replacement PR CI for the reviewed source is pending, and exact main CI remains `PENDING`. The preceding updater lint failure is retained in `31022928024`, and the hosted Linux process-tree timeout/fix history is recorded in [Linux process-tree validation](2026-08-05-linux-process-tree-hosted.md).
 
 ## Not proven
 

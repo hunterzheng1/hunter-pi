@@ -48,6 +48,12 @@ interface MutableRedactionResult {
   readonly categories: Set<RedactionCategory>;
 }
 
+export interface PortableTextRedaction {
+  readonly text: string;
+  readonly fieldsRemoved: number;
+  readonly categories: readonly RedactionCategory[];
+}
+
 const forbiddenDigestOnlyClasses = new Set([
   "PRIVATE_PROMPT",
   "ENVIRONMENT_DUMP",
@@ -157,6 +163,18 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
   );
   replacePattern(
     result,
+    /\b(?:access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu,
+    "[REDACTED:CREDENTIAL]",
+    "CREDENTIAL",
+  );
+  replacePattern(
+    result,
+    /(?<!\S)[A-Z][A-Z0-9_]{1,63}=(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;]+)/gu,
+    "[REDACTED:ENVIRONMENT_DUMP]",
+    "ENVIRONMENT_DUMP",
+  );
+  replacePattern(
+    result,
     /\bprompt\s*=\s*[^\r\n]+/giu,
     "prompt=[REDACTED:PRIVATE_PROMPT]",
     "PRIVATE_PROMPT",
@@ -196,6 +214,18 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
   );
 
   return result;
+}
+
+export function redactPortableText(
+  text: string,
+  policy: PortableEvidencePolicy = {},
+): PortableTextRedaction {
+  const result = redactText(text, policy);
+  return {
+    text: result.text,
+    fieldsRemoved: result.fieldsRemoved,
+    categories: [...result.categories].sort(),
+  };
 }
 
 function mergeRedactions(...results: readonly RedactionResult[]) {

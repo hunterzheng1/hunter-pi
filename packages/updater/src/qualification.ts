@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { fingerprintSchema, timestampSchema } from "@hunter-pi/domain";
+import { redactPortableText } from "@hunter-pi/evidence";
 
 import {
   qualificationProbeResultSchema,
@@ -17,13 +18,9 @@ import type {
 
 function safeReason(error: unknown): string {
   const raw = error instanceof Error ? error.message : "qualification check failed";
-  return (
-    raw
-      .replace(/[A-Za-z]:[\\/][^\s"']+/gu, "<redacted-path>")
-      .replace(/(?:^|["\s])\/(?:Users|home|private|tmp)\/[^\s"']+/gu, " <redacted-path>")
-      .trim()
-      .slice(0, 4_096) || "qualification check failed"
-  );
+  const redaction = redactPortableText(raw);
+  const markers = redaction.categories.map((category) => `[REDACTED:${category}]`).join(" ");
+  return `qualification check failed${markers === "" ? "" : ` ${markers}`}`;
 }
 
 export class ReleaseQualificationRunner {

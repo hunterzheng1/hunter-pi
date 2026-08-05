@@ -58,6 +58,14 @@ function metricsFor(evidence: PilotEvidence): PilotMetrics {
     (total, comparator) => total + comparator.hunterCapturedFactCount,
     0,
   );
+  const rawPiManualInterventions = evidence.pairedComparators.reduce(
+    (total, comparator) => total + comparator.rawPiManualInterventions,
+    0,
+  );
+  const hunterManualInterventions = evidence.pairedComparators.reduce(
+    (total, comparator) => total + comparator.hunterManualInterventions,
+    0,
+  );
   return {
     taskCount: evidence.taskResults.length,
     correctTaskCount: evidence.taskResults.filter(
@@ -71,14 +79,12 @@ function metricsFor(evidence: PilotEvidence): PilotMetrics {
     acknowledgementP95Ms: p95(evidence.acknowledgementSamplesMs),
     memoryP95MiB: p95(evidence.memorySamplesMiB),
     comparatorFactScore: applicableFacts === 0 ? 0 : capturedFacts / applicableFacts,
-    rawPiManualInterventions: evidence.pairedComparators.reduce(
-      (total, comparator) => total + comparator.rawPiManualInterventions,
-      0,
-    ),
-    hunterManualInterventions: evidence.pairedComparators.reduce(
-      (total, comparator) => total + comparator.hunterManualInterventions,
-      0,
-    ),
+    rawPiManualInterventions,
+    hunterManualInterventions,
+    manualInterventionReductionRatio:
+      rawPiManualInterventions === 0
+        ? 0
+        : (rawPiManualInterventions - hunterManualInterventions) / rawPiManualInterventions,
     hunterAdditionalOverheadMedianMinutes: median(
       evidence.pairedComparators.map((comparator) => comparator.hunterAdditionalOverheadMinutes),
     ),
@@ -125,7 +131,7 @@ export class PilotEvaluator {
     const parsed = pilotEvidenceSchema.safeParse(input);
     if (!parsed.success) {
       return pilotDecisionSchema.parse({
-        schemaVersion: "hpi-pilot-decision.v1",
+        schemaVersion: "hpi-pilot-decision.v2",
         evidenceFingerprint: evidenceFingerprint(input),
         outcome: "STOP",
         reasons: ["pilot Evidence failed strict identity and consistency validation"],
@@ -140,6 +146,7 @@ export class PilotEvaluator {
           comparatorFactScore: 0,
           rawPiManualInterventions: 0,
           hunterManualInterventions: 0,
+          manualInterventionReductionRatio: 0,
           hunterAdditionalOverheadMedianMinutes: 0,
         },
         observedAt: new Date().toISOString(),
@@ -149,7 +156,7 @@ export class PilotEvaluator {
     const metrics = metricsFor(evidence);
     const reasons = identityProblems(evidence);
     const missingEvidence: string[] = [];
-    if (evidence.ci.windows !== "PASS" || evidence.ci.ubuntu !== "PASS") {
+    if (evidence.ci.windows.status !== "PASS" || evidence.ci.ubuntu.status !== "PASS") {
       missingEvidence.push("exact Windows and Ubuntu CI are not both PASS");
     }
     if (!evidence.providerLatencySeparated) {
@@ -198,6 +205,14 @@ export class PilotEvaluator {
       zeroToleranceFailures.push("unresolved P0/P1 review finding remains");
     if (metrics.comparatorFactScore < 0.95)
       zeroToleranceFailures.push("paired workflow-fact score is below 95%");
+    if (
+      metrics.manualInterventionReductionRatio < 0.3 &&
+      !evidence.pairedComparators.some((comparator) => comparator.containedFalseCompletion)
+    ) {
+      zeroToleranceFailures.push(
+        "paired comparison did not reduce manual intervention by 30% or contain a false completion",
+      );
+    }
 
     const quantitativeMisses: string[] = [];
     if (metrics.correctTaskCount < 9)
@@ -212,13 +227,8 @@ export class PilotEvaluator {
       quantitativeMisses.push("local acknowledgement p95 exceeds 250 ms");
     if (metrics.memoryP95MiB > 1_536)
       quantitativeMisses.push("Hunter-owned memory p95 exceeds 1.5 GiB");
-    if (
-      metrics.hunterAdditionalOverheadMedianMinutes > 10 &&
-      !evidence.pairedComparators.some((comparator) => comparator.containedFalseCompletion)
-    ) {
-      quantitativeMisses.push(
-        "Hunter-only overhead exceeds 10 minutes without containing a false completion",
-      );
+    if (metrics.hunterAdditionalOverheadMedianMinutes > 10) {
+      quantitativeMisses.push("Hunter-only overhead exceeds 10 minutes");
     }
 
     const allEvidenceAvailable = reasons.length === 0 && missingEvidence.length === 0;
@@ -240,7 +250,7 @@ export class PilotEvaluator {
     ];
     if (decisionReasons.length === 0) decisionReasons.push("all frozen Task 12 gates passed");
     return pilotDecisionSchema.parse({
-      schemaVersion: "hpi-pilot-decision.v1",
+      schemaVersion: "hpi-pilot-decision.v2",
       evidenceFingerprint: evidenceFingerprint(evidence),
       outcome,
       reasons: decisionReasons,

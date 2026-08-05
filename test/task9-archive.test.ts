@@ -1,3 +1,4 @@
+import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,8 +13,10 @@ import {
 } from "@hunter-pi/domain";
 import {
   archivePackageSchema,
+  assertPortableArchive,
   createPortableEvidenceEnvelope,
   FileRunArchiveStore,
+  LocalStorageController,
   PortableDeviceImporter,
 } from "@hunter-pi/evidence";
 import {
@@ -300,14 +303,32 @@ describe("Task 9 Run Archive", () => {
     });
     expect(exported.outcome).toBe("APPLIED");
     const destination = new FileRunArchiveStore({ stateRoot: join(root, "destination") });
+    const importReceipt = await destination.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_archive-import",
+      operationFingerprint: `sha256:${"d".repeat(64)}`,
+      archive,
+    });
+    expect(importReceipt).toMatchObject({ outcome: "APPLIED", archiveId: manifest.archiveId });
+    const importRequest = {
+      schemaVersion: "hpi-archive-import.v1" as const,
+      operationId: "op_archive-import" as const,
+      operationFingerprint: `sha256:${"d".repeat(64)}`,
+      archive,
+    };
+    await expect(destination.import(importRequest)).resolves.toMatchObject({ outcome: "NOOP" });
     await expect(
       destination.import({
-        schemaVersion: "hpi-archive-import.v1",
-        operationId: "op_archive-import",
-        operationFingerprint: `sha256:${"d".repeat(64)}`,
-        archive,
+        ...importRequest,
+        operationId: "op_archive-import-different-operation",
+        operationFingerprint: `sha256:${"e".repeat(64)}`,
       }),
-    ).resolves.toMatchObject({ outcome: "APPLIED", archiveId: manifest.archiveId });
+    ).rejects.toThrow(/identity|operation/u);
+    await writeFile(
+      join(root, "destination", ".operation-receipts", "imports", `${manifest.archiveId}.json`),
+      `${JSON.stringify({ ...importReceipt, archiveId: "archive_task9-tampered-receipt" })}\n`,
+    );
+    await expect(destination.import(importRequest)).rejects.toThrow(/identity|archive/u);
     await expect(
       destination.import({
         schemaVersion: "hpi-archive-import.v1",
@@ -337,23 +358,147 @@ describe("Task 9 Run Archive", () => {
         }),
       }),
     ).rejects.toThrow(/digest|identity|replay/u);
-    await expect(
-      source.deleteExport({
-        schemaVersion: "hpi-archive-delete-export.v1",
-        operationId: "op_archive-delete",
-        operationFingerprint: `sha256:${"f".repeat(64)}`,
-        targetReference: "task9-export",
-      }),
-    ).resolves.toMatchObject({ outcome: "APPLIED" });
+    const deleteRequest = {
+      schemaVersion: "hpi-archive-delete-export.v1" as const,
+      operationId: "op_archive-delete" as const,
+      operationFingerprint: `sha256:${"f".repeat(64)}`,
+      targetReference: "task9-export" as const,
+    };
+    await writeFile(join(root, "source", ".critical-reserve"), "corrupt\n");
+    const reserveGuardedSource = new FileRunArchiveStore({
+      stateRoot: join(root, "source"),
+      storage: new LocalStorageController({ stateRoot: join(root, "source") }),
+    });
+    await expect(reserveGuardedSource.deleteExport(deleteRequest)).rejects.toThrow(
+      /reserve|corrupt/u,
+    );
+    const retainedTarget = await lstat(join(root, "source", "exports", "task9-export.json"));
+    expect(retainedTarget.isFile()).toBe(true);
+    await rm(join(root, "source", ".critical-reserve"), { force: true });
+    const deleteReceipt = await source.deleteExport(deleteRequest);
+    expect(deleteReceipt).toMatchObject({
+      outcome: "APPLIED",
+      artifactFingerprint: exported.artifactFingerprint,
+      archiveId: manifest.archiveId,
+    });
     await expect(source.read(manifest.archiveId)).resolves.toEqual(manifest);
+    await expect(source.deleteExport(deleteRequest)).resolves.toMatchObject({
+      outcome: "NOOP",
+      artifactFingerprint: exported.artifactFingerprint,
+      archiveId: manifest.archiveId,
+    });
     await expect(
       source.deleteExport({
-        schemaVersion: "hpi-archive-delete-export.v1",
+        ...deleteRequest,
         operationId: "op_archive-delete-again",
         operationFingerprint: `sha256:${"a".repeat(64)}`,
-        targetReference: "task9-export",
       }),
-    ).resolves.toMatchObject({ outcome: "NOOP" });
+    ).rejects.toThrow(/identity|operation|exact/u);
+    await writeFile(
+      join(root, "source", ".operation-receipts", "deletes", "task9-export.json"),
+      `${JSON.stringify({ ...deleteReceipt, targetReference: "task9-other" })}\n`,
+    );
+    await expect(source.deleteExport(deleteRequest)).rejects.toThrow(/identity|target/u);
+    const pendingDeleteRequest = {
+      ...deleteRequest,
+      operationId: "op_archive-delete-pending-missing" as const,
+      operationFingerprint: `sha256:${"2".repeat(64)}`,
+      targetReference: "task9-pending-missing" as const,
+    };
+    await writeFile(
+      join(root, "source", ".operation-receipts", "deletes", "task9-pending-missing.pending.json"),
+      `${JSON.stringify({
+        schemaVersion: "hpi-archive-delete-pending.v1",
+        operationId: pendingDeleteRequest.operationId,
+        operationFingerprint: pendingDeleteRequest.operationFingerprint,
+        targetReference: pendingDeleteRequest.targetReference,
+        archiveId: manifest.archiveId,
+        artifactFingerprint: exported.artifactFingerprint,
+      })}\n`,
+    );
+    await expect(source.deleteExport(pendingDeleteRequest)).resolves.toMatchObject({
+      outcome: "NOOP",
+      archiveId: manifest.archiveId,
+      artifactFingerprint: exported.artifactFingerprint,
+    });
+    await writeFile(join(root, "source", "exports", "task9-invalid.json"), '{"not":"an export"}\n');
+    await expect(
+      source.deleteExport({
+        ...deleteRequest,
+        operationId: "op_archive-delete-invalid",
+        operationFingerprint: `sha256:${"b".repeat(64)}`,
+        targetReference: "task9-invalid",
+      }),
+    ).rejects.toThrow(/corrupt|export|invalid|unreadable/u);
+    await mkdir(join(root, "source", "exports", "task9-directory.json"));
+    const blockedDelete = {
+      ...deleteRequest,
+      operationId: "op_archive-delete-directory" as const,
+      operationFingerprint: `sha256:${"c".repeat(64)}`,
+      targetReference: "task9-directory" as const,
+    };
+    await expect(source.deleteExport(blockedDelete)).resolves.toMatchObject({ outcome: "BLOCKED" });
+    await expect(source.deleteExport(blockedDelete)).resolves.toMatchObject({ outcome: "BLOCKED" });
+    await expect(
+      source.deleteExport({
+        ...blockedDelete,
+        operationId: "op_archive-delete-directory-conflict",
+        operationFingerprint: `sha256:${"d".repeat(64)}`,
+      }),
+    ).rejects.toThrow(/identity|operation/u);
+  });
+
+  it("rejects file URLs and non-home POSIX paths from portable Archives", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-archive-paths-");
+    const fixture = await createTerminalProjection(root);
+    const source = new FileRunArchiveStore({
+      stateRoot: join(root, "source"),
+      kernel: new InMemoryWorkflowKernel([fixture.events]),
+    });
+    const manifest = await source.finalize({
+      schemaVersion: "hpi-archive-finalize.v1",
+      operationId: "op_archive-paths-finalize",
+      operationFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-paths",
+      distributionReleaseId: "release_task9",
+      projection: fixture.projection,
+      events: [...fixture.events],
+      evidence: [...fixture.evidence],
+      recoveryLimits: { maxAttempts: 2, maxElapsedMs: 60_000 },
+      archivedAt: fixtureTimestamp,
+    });
+    const archive = archivePackageSchema.parse({
+      schemaVersion: "hpi-archive-package.v1",
+      manifest,
+      projection: fixture.projection,
+      events: [...fixture.events],
+      evidence: [...fixture.evidence],
+      portability: {
+        activeAttemptIds: [],
+        activeOperationReceiptIds: [],
+        unknownOperationIds: [],
+        heldWriterLeaseIds: [],
+        processReferences: [],
+        deviceLocalPaths: [],
+        credentialMaterial: false,
+      },
+    });
+    for (const path of [
+      "file:///home/alice/private.json",
+      "FILE:///C:/Users/alice/private.json",
+      "File:///var/lib/hunter/private.json",
+      "/var/lib/hunter/private.json",
+      "//server/share/private.json",
+    ]) {
+      expect(() => {
+        assertPortableArchive({
+          ...archive,
+          evidence: archive.evidence.map((evidence, index) =>
+            index === 0 ? { ...evidence, content: path } : evidence,
+          ),
+        });
+      }).toThrow(/device-local path/u);
+    }
   });
 
   it("imports only a portable terminal Archive into a clean device profile", async () => {

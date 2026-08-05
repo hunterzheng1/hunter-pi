@@ -6,7 +6,7 @@
 
 ## Evidence contract
 
-`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v1` schema and evaluator. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
+`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v2` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; and comparator/task-result binding for both identities and numeric observations. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
 
 ## Required run
 

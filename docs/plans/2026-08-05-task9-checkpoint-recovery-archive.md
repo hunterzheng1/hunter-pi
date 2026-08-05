@@ -15,7 +15,7 @@ Make interruption handling and Run finalization durable without rewriting workfl
 - A recovery result is `RECOVERED`, `BLOCKED`, `NOT_PROVEN`, or `NOT_FOUND`. No recovery Attempt is created for ambiguous, stale, unresolved, or device-local facts.
 - `RunArchiveStore` finalizes only terminal Runs and binds the immutable Run projection, event stream digest, Evidence identities/digests, source/release identities, and recovery limits into one manifest. Same archive operation and fingerprint is idempotent; a changed request is rejected.
 - Portable Archive import rejects device-local paths, live leases, live processes, credentials, and an active Attempt. It imports redacted immutable facts only and never claims a migrated live execution.
-- Export and deletion receipts bind an exact target reference and operation identity. Deletion is explicit and scoped to the exported artifact.
+- Import, export, and deletion receipts bind exact archive/target references and operation identities. The hardened `hpi-archive-delete-export-receipt.v2` retains the deleted envelope identity. Import and delete replay is append-only; deletion validates the exact export envelope, records `BLOCKED`/`NOOP` outcomes, and is scoped to the exported artifact.
 
 ## Required RED/GREEN coverage
 

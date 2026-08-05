@@ -220,7 +220,35 @@ describe("Task 11 qualified updater", () => {
       (check) => check.name === "ubuntu-ci",
     );
     expect(failedCheck?.outcome).toBe("NOT_PROVEN");
-    expect(failedCheck?.reason).toContain("unavailable");
+    expect(failedCheck?.reason).toBe("qualification check failed");
+  });
+
+  it("redacts credential material, URLs, and POSIX paths from qualification failure receipts", async () => {
+    const runner = new ReleaseQualificationRunner({
+      verifierFingerprint: fixtureFingerprint,
+      now: () => fixtureTimestamp,
+    });
+    const candidate = candidateFor("release_task11-qualification-redaction");
+    const { qualification, ...baseCandidate } = candidate;
+    void qualification;
+    const qualified = await runner.qualify({
+      candidate: baseCandidate,
+      checks: [
+        {
+          name: "unsafe-verifier",
+          run: () =>
+            Promise.reject(
+              new Error(
+                "request failed Authorization: Bearer fixture-token-123456789 Cookie: sid=fixture-cookie\nhttps://user:password@example.invalid/api?token=fixture-query\nAPI_KEY=fixture-api-key ENV_SECRET=fixture-env-secret\n/var/lib/hunter/private.json",
+              ),
+            ),
+        },
+      ],
+    });
+    const reason = qualified.qualification.checks[0]?.reason ?? "";
+    expect(reason).toContain("[REDACTED:CREDENTIAL]");
+    expect(reason).toContain("[REDACTED:PRIVATE_PATH]");
+    expect(reason).not.toMatch(/fixture-token|fixture-cookie|password|fixture-query|\/var\/lib/u);
   });
 
   it("applies only an exact qualified artifact and records the license inventory", async () => {
@@ -523,7 +551,8 @@ describe("Task 11 qualified updater", () => {
     const fixture = adapterFor();
     fixture.healthCheck.mockResolvedValueOnce({
       status: "FAIL",
-      reason: "health probe failed at C:\\Users\\fixture-user\\private-state\\health.json",
+      reason:
+        "health probe failed at C:\\Users\\fixture-user\\private-state\\health.json\nAuthorization: Bearer fixture-token-123456789\nhttps://user:password@example.invalid/api?token=fixture-query\nAPI_KEY=fixture-api-key ENV_SECRET=fixture-env-secret\n/var/lib/hunter/private.json",
     });
     const manager = new FileUpdateManager({
       stateRoot: join(root, "state"),
@@ -543,9 +572,12 @@ describe("Task 11 qualified updater", () => {
 
     expect(failure).toMatchObject({
       outcome: "FAILED",
-      reason: "health probe failed at <redacted-path>",
     });
-    expect(failure.reason).not.toContain("fixture-user");
+    expect(failure.reason).toContain("[REDACTED:PRIVATE_PATH]");
+    expect(failure.reason).toContain("[REDACTED:CREDENTIAL]");
+    expect(failure.reason).not.toMatch(
+      /fixture-user|fixture-token|password|fixture-query|\/var\/lib/u,
+    );
   });
 
   it("records a failed recovery fact when artifact or health probing throws", async () => {
@@ -565,7 +597,7 @@ describe("Task 11 qualified updater", () => {
       observedAt: fixtureTimestamp,
     });
     expect(artifactFailure.outcome).toBe("FAILED");
-    expect(artifactFailure.reason).toContain("unavailable");
+    expect(artifactFailure.reason).toBe("qualified artifact source failed");
 
     const health = adapterFor();
     health.healthCheck.mockRejectedValueOnce(new Error("health probe unavailable"));
@@ -584,7 +616,7 @@ describe("Task 11 qualified updater", () => {
       observedAt: fixtureTimestamp,
     });
     expect(healthFailure.outcome).toBe("FAILED");
-    expect(healthFailure.reason).toContain("unavailable");
+    expect(healthFailure.reason).toContain("release health check failed");
     expect(health.activate).not.toHaveBeenCalled();
 
     const migration = adapterFor();
@@ -604,7 +636,7 @@ describe("Task 11 qualified updater", () => {
       observedAt: fixtureTimestamp,
     });
     expect(migrationFailure.outcome).toBe("FAILED");
-    expect(migrationFailure.reason).toContain("migration");
+    expect(migrationFailure.reason).toContain("release state migration failed");
     expect(migration.activate).not.toHaveBeenCalled();
 
     const currentState = adapterFor();
@@ -624,6 +656,6 @@ describe("Task 11 qualified updater", () => {
       observedAt: fixtureTimestamp,
     });
     expect(currentFailure.outcome).toBe("FAILED");
-    expect(currentFailure.reason).toContain("current release unavailable");
+    expect(currentFailure.reason).toContain("current release state could not be read");
   });
 });

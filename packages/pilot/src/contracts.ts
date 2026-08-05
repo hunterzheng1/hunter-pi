@@ -11,7 +11,7 @@ const nonnegativeIntegerSchema = z.number().int().nonnegative();
 const nonnegativeNumberSchema = z.number().nonnegative();
 
 export const pilotMachineProfileSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-pilot-machine.v1"),
+  schemaVersion: z.literal("hpi-pilot-machine.v2"),
   platform: z.literal("win32"),
   architecture: z.literal("x64"),
   osBuild: stableIdSchema,
@@ -24,6 +24,7 @@ export const pilotMachineProfileSchema = z.strictObject({
   securitySoftwareState: stableIdSchema,
   powerMode: stableIdSchema,
   networkCondition: stableIdSchema,
+  sourceFingerprint: fingerprintSchema,
   hunterReleaseFingerprint: fingerprintSchema,
   engineReleaseFingerprint: fingerprintSchema,
 });
@@ -55,6 +56,7 @@ export const pilotTaskResultSchema = z
     repositoryFingerprint: fingerprintSchema,
     sourceFingerprint: fingerprintSchema,
     mode: pilotModeSchema,
+    acceptanceCheckIds: z.array(stableIdSchema).min(1),
     terminalOutcome: pilotOutcomeSchema,
     oracleOutcome: pilotOutcomeSchema,
     correct: z.boolean(),
@@ -65,6 +67,8 @@ export const pilotTaskResultSchema = z
     capturedFactCount: nonnegativeIntegerSchema,
     manualInterventions: nonnegativeIntegerSchema,
     hunterOverheadMinutes: nonnegativeNumberSchema,
+    rawPiCapturedFactCount: nonnegativeIntegerSchema,
+    rawPiManualInterventions: nonnegativeIntegerSchema,
   })
   .superRefine((result, context) => {
     if (result.capturedFactCount > result.applicableFactCount) {
@@ -83,6 +87,14 @@ export const pilotTaskResultSchema = z
     }
   });
 export type PilotTaskResult = z.infer<typeof pilotTaskResultSchema>;
+
+export const pilotInstallationSchema = z.strictObject({
+  status: z.literal("PASS"),
+  sourceFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  cleanProfileFingerprint: fingerprintSchema,
+});
+export type PilotInstallation = z.infer<typeof pilotInstallationSchema>;
 
 export const pilotInterruptionSchema = z.strictObject({
   interruptionId: stableIdSchema,
@@ -150,11 +162,20 @@ export const pilotComparatorSchema = z
 export type PilotComparator = z.infer<typeof pilotComparatorSchema>;
 
 export const pilotCiStatusSchema = z.enum(["PASS", "FAIL", "PENDING"]);
+export const pilotCiReceiptSchema = z.strictObject({
+  status: pilotCiStatusSchema,
+  sourceFingerprint: fingerprintSchema,
+  runFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  engineReleaseFingerprint: fingerprintSchema,
+});
+export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
 export const pilotEvidenceSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-evidence.v1"),
+    schemaVersion: z.literal("hpi-pilot-evidence.v2"),
     machine: pilotMachineProfileSchema,
+    installation: pilotInstallationSchema,
     taskOracles: z.array(pilotTaskOracleSchema).length(10),
     taskResults: z.array(pilotTaskResultSchema).length(10),
     interruptions: z.array(pilotInterruptionSchema).length(3),
@@ -169,8 +190,9 @@ export const pilotEvidenceSchema = z
     providerLatencySeparated: z.boolean(),
     reviewP0P1Count: nonnegativeIntegerSchema,
     ci: z.strictObject({
-      windows: pilotCiStatusSchema,
-      ubuntu: pilotCiStatusSchema,
+      sourceFingerprint: fingerprintSchema,
+      windows: pilotCiReceiptSchema,
+      ubuntu: pilotCiReceiptSchema,
     }),
     pairedComparators: z.array(pilotComparatorSchema).length(3),
     observedAt: timestampSchema,
@@ -239,7 +261,8 @@ export const pilotEvidenceSchema = z
           result.repositoryFingerprint !== oracle.repositoryFingerprint ||
           result.sourceFingerprint !== oracle.sourceFingerprint ||
           result.mode !== oracle.mode ||
-          result.oracleOutcome !== oracle.expectedOutcome
+          result.oracleOutcome !== oracle.expectedOutcome ||
+          JSON.stringify(result.acceptanceCheckIds) !== JSON.stringify(oracle.acceptanceCheckIds)
         );
       }) ||
       oracleIds.some((taskId) => !resultIds.includes(taskId))
@@ -259,7 +282,26 @@ export const pilotEvidenceSchema = z
           comparator.sourceFingerprint !== oracle.sourceFingerprint ||
           comparator.mode !== oracle.mode ||
           JSON.stringify(comparator.acceptanceCheckIds) !==
-            JSON.stringify(oracle.acceptanceCheckIds)
+            JSON.stringify(oracle.acceptanceCheckIds) ||
+          (() => {
+            const result = evidence.taskResults.find(
+              (candidate) => candidate.taskId === comparator.taskId,
+            );
+            if (result === undefined) return true;
+            return (
+              result.repositoryFingerprint !== comparator.repositoryFingerprint ||
+              result.sourceFingerprint !== comparator.sourceFingerprint ||
+              result.mode !== comparator.mode ||
+              JSON.stringify(result.acceptanceCheckIds) !==
+                JSON.stringify(comparator.acceptanceCheckIds) ||
+              result.applicableFactCount !== comparator.applicableFactCount ||
+              result.capturedFactCount !== comparator.hunterCapturedFactCount ||
+              result.manualInterventions !== comparator.hunterManualInterventions ||
+              result.hunterOverheadMinutes !== comparator.hunterAdditionalOverheadMinutes ||
+              result.rawPiCapturedFactCount !== comparator.rawPiCapturedFactCount ||
+              result.rawPiManualInterventions !== comparator.rawPiManualInterventions
+            );
+          })()
         );
       }) ||
       new Set(comparatorIds).size !== 3
@@ -278,6 +320,31 @@ export const pilotEvidenceSchema = z
         message: "the pilot must cover at least two distinct repository identities",
       });
     }
+    if (
+      evidence.installation.sourceFingerprint !== evidence.machine.sourceFingerprint ||
+      evidence.installation.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["installation"],
+        message: "fresh-install Evidence must bind the exact tested source and release artifact",
+      });
+    }
+    if (
+      evidence.ci.sourceFingerprint !== evidence.machine.sourceFingerprint ||
+      evidence.ci.windows.sourceFingerprint !== evidence.ci.sourceFingerprint ||
+      evidence.ci.ubuntu.sourceFingerprint !== evidence.ci.sourceFingerprint ||
+      evidence.ci.windows.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
+      evidence.ci.ubuntu.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
+      evidence.ci.windows.engineReleaseFingerprint !== evidence.machine.engineReleaseFingerprint ||
+      evidence.ci.ubuntu.engineReleaseFingerprint !== evidence.machine.engineReleaseFingerprint
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ci"],
+        message: "Windows and Ubuntu CI Evidence must bind the exact tested source",
+      });
+    }
   });
 export type PilotEvidence = z.infer<typeof pilotEvidenceSchema>;
 
@@ -292,12 +359,13 @@ export const pilotMetricsSchema = z.strictObject({
   comparatorFactScore: z.number().min(0).max(1),
   rawPiManualInterventions: nonnegativeIntegerSchema,
   hunterManualInterventions: nonnegativeIntegerSchema,
+  manualInterventionReductionRatio: z.number(),
   hunterAdditionalOverheadMedianMinutes: nonnegativeNumberSchema,
 });
 export type PilotMetrics = z.infer<typeof pilotMetricsSchema>;
 
 export const pilotDecisionSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-pilot-decision.v1"),
+  schemaVersion: z.literal("hpi-pilot-decision.v2"),
   evidenceFingerprint: fingerprintSchema,
   outcome: z.enum(["GO", "REVISE", "STOP", "NOT_PROVEN"]),
   reasons: z.array(nonEmptyTextSchema).min(1),

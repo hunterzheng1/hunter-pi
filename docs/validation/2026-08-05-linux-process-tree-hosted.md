@@ -12,10 +12,10 @@ Commit `b2906ab` replaces the Linux helper's serial whole-`/proc` enumeration wi
 
 ## Verification
 
-- Local: 46 files / 357 tests passed; lint, typecheck, format, strict compiler smoke, build, external package smoke, clean install smoke, Pi interface probe, developer-preview packaging, and Windows portable packaging passed.
+- Local: 46 files / 362 tests passed; lint, typecheck, format, strict compiler smoke, build, external package smoke, clean install smoke, Pi interface probe, developer-preview packaging, and Windows portable packaging passed.
 - Local Windows focused platform suite: 9/9 passed.
 - Local Ubuntu focused platform suite: 7 passed / 2 Windows-only skipped.
-- Final exact PR CI [`31032218373`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31032218373): Windows and Ubuntu quality passed; both Task 7 containment jobs passed; Task 7 Evidence and Pi Evidence consistency passed.
+- Earlier exact PR CI [`31032218373`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31032218373): Windows and Ubuntu quality passed; both Task 7 containment jobs passed; Task 7 Evidence and Pi Evidence consistency passed for the pre-hardening source. Replacement PR CI for the reviewed source is pending.
 
 ## Limits
 

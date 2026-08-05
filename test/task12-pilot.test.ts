@@ -23,9 +23,9 @@ function completeEvidence(): PilotEvidence {
     acceptanceCheckIds: [`check-${String(index + 1).padStart(2, "0")}`],
   }));
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v1",
+    schemaVersion: "hpi-pilot-evidence.v2",
     machine: {
-      schemaVersion: "hpi-pilot-machine.v1",
+      schemaVersion: "hpi-pilot-machine.v2",
       platform: "win32",
       architecture: "x64",
       osBuild: "fixture-windows-build",
@@ -38,8 +38,15 @@ function completeEvidence(): PilotEvidence {
       securitySoftwareState: "FIXTURE_DECLARED",
       powerMode: "BALANCED",
       networkCondition: "FIXTURE_CONTROLLED",
+      sourceFingerprint: firstSourceFingerprint,
       hunterReleaseFingerprint: fixtureFingerprint,
       engineReleaseFingerprint: fixtureFingerprint,
+    },
+    installation: {
+      status: "PASS",
+      sourceFingerprint: firstSourceFingerprint,
+      artifactFingerprint: fixtureFingerprint,
+      cleanProfileFingerprint: fixtureFingerprint,
     },
     taskOracles,
     taskResults: taskOracles.map((oracle) => ({
@@ -47,6 +54,7 @@ function completeEvidence(): PilotEvidence {
       repositoryFingerprint: oracle.repositoryFingerprint,
       sourceFingerprint: oracle.sourceFingerprint,
       mode: oracle.mode,
+      acceptanceCheckIds: oracle.acceptanceCheckIds,
       terminalOutcome: "READY" as const,
       oracleOutcome: oracle.expectedOutcome,
       correct: true,
@@ -56,7 +64,9 @@ function completeEvidence(): PilotEvidence {
       applicableFactCount: 20,
       capturedFactCount: 20,
       manualInterventions: 1,
-      hunterOverheadMinutes: 2,
+      hunterOverheadMinutes: 4,
+      rawPiCapturedFactCount: 15,
+      rawPiManualInterventions: 3,
     })),
     interruptions: Array.from({ length: 3 }, (_, index) => ({
       interruptionId: `pilot-interruption-${String(index + 1)}`,
@@ -97,7 +107,23 @@ function completeEvidence(): PilotEvidence {
     privacyGate: true,
     providerLatencySeparated: true,
     reviewP0P1Count: 0,
-    ci: { windows: "PASS", ubuntu: "PASS" },
+    ci: {
+      sourceFingerprint: firstSourceFingerprint,
+      windows: {
+        status: "PASS",
+        sourceFingerprint: firstSourceFingerprint,
+        runFingerprint: fixtureFingerprint,
+        artifactFingerprint: fixtureFingerprint,
+        engineReleaseFingerprint: fixtureFingerprint,
+      },
+      ubuntu: {
+        status: "PASS",
+        sourceFingerprint: firstSourceFingerprint,
+        runFingerprint: fixtureFingerprint,
+        artifactFingerprint: fixtureFingerprint,
+        engineReleaseFingerprint: fixtureFingerprint,
+      },
+    },
     pairedComparators: Array.from({ length: 3 }, (_, index) => ({
       taskId: taskOracles[index]?.taskId ?? "pilot-task-01",
       repositoryFingerprint: taskOracles[index]?.repositoryFingerprint ?? fixtureFingerprint,
@@ -135,7 +161,10 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const evidence = completeEvidence();
     const decision = new PilotEvaluator().evaluate({
       ...evidence,
-      ci: { windows: "PASS", ubuntu: "PENDING" },
+      ci: {
+        ...evidence.ci,
+        ubuntu: { ...evidence.ci.ubuntu, status: "PENDING" },
+      },
       providerLatencySeparated: false,
     });
     expect(decision.outcome).toBe("NOT_PROVEN");
@@ -173,6 +202,98 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const decision = new PilotEvaluator().evaluate(forged);
     expect(decision.outcome).toBe("STOP");
     expect(decision.reasons.join(" ")).toMatch(/strict identity|consistency/u);
+  });
+
+  it("binds fresh-install and CI receipts to the exact tested Hunter source", () => {
+    const evidence = completeEvidence();
+    expect(evidence.installation.sourceFingerprint).toBe(evidence.machine.sourceFingerprint);
+    expect(evidence.ci.sourceFingerprint).toBe(evidence.machine.sourceFingerprint);
+    expect(evidence.ci.windows.sourceFingerprint).toBe(evidence.machine.sourceFingerprint);
+    expect(evidence.ci.ubuntu.sourceFingerprint).toBe(evidence.machine.sourceFingerprint);
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        installation: {
+          ...evidence.installation,
+          sourceFingerprint: secondSourceFingerprint,
+        },
+      }),
+    ).toThrow(/fresh-install|source/u);
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        ci: { ...evidence.ci, sourceFingerprint: secondSourceFingerprint },
+      }),
+    ).toThrow(/CI|source/u);
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        ci: {
+          ...evidence.ci,
+          windows: {
+            ...evidence.ci.windows,
+            artifactFingerprint: secondSourceFingerprint,
+          },
+        },
+      }),
+    ).toThrow(/CI|artifact|release/u);
+  });
+
+  it("requires paired comparator facts to bind an exact task result", () => {
+    const evidence = completeEvidence();
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        taskResults: evidence.taskResults.map((result, index) =>
+          index === 0
+            ? {
+                ...result,
+                acceptanceCheckIds: ["different-check"],
+              }
+            : result,
+        ),
+      }),
+    ).toThrow(/frozen oracle|acceptance/u);
+    expect(() =>
+      pilotEvidenceSchema.parse({
+        ...evidence,
+        pairedComparators: evidence.pairedComparators.map((comparator, index) =>
+          index === 0 ? { ...comparator, hunterCapturedFactCount: 19 } : comparator,
+        ),
+      }),
+    ).toThrow(/comparator|task result|metric/u);
+  });
+
+  it("requires intervention reduction or contained ambiguity and never waives overhead", () => {
+    const evidence = completeEvidence();
+    const noComparatorValue = new PilotEvaluator().evaluate({
+      ...evidence,
+      taskResults: evidence.taskResults.map((result, index) =>
+        index < 3 ? { ...result, manualInterventions: 1, rawPiManualInterventions: 1 } : result,
+      ),
+      pairedComparators: evidence.pairedComparators.map((comparator) => ({
+        ...comparator,
+        rawPiManualInterventions: 1,
+        hunterManualInterventions: 1,
+        containedFalseCompletion: false,
+      })),
+    });
+    expect(noComparatorValue.outcome).toBe("STOP");
+    const overheadMiss = new PilotEvaluator().evaluate({
+      ...evidence,
+      taskResults: evidence.taskResults.map((result, index) =>
+        index < 3 ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 } : result,
+      ),
+      pairedComparators: evidence.pairedComparators.map((comparator) => ({
+        ...comparator,
+        rawPiManualInterventions: 3,
+        hunterManualInterventions: 3,
+        hunterAdditionalOverheadMinutes: 11,
+        containedFalseCompletion: true,
+      })),
+    });
+    expect(overheadMiss.outcome).toBe("REVISE");
+    expect(overheadMiss.reasons.join(" ")).toMatch(/overhead/u);
   });
 
   it("rejects captured fact counts that exceed the applicable oracle facts", () => {

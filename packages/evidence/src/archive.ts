@@ -1,5 +1,5 @@
 import { lstat, readFile, readdir, realpath, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -212,10 +212,12 @@ export const archiveDeleteExportRequestSchema = z.strictObject({
 export type ArchiveDeleteExportRequest = z.input<typeof archiveDeleteExportRequestSchema>;
 
 export const archiveDeleteExportReceiptSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-archive-delete-export-receipt.v1"),
+  schemaVersion: z.literal("hpi-archive-delete-export-receipt.v2"),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   targetReference: targetReferenceSchema,
+  archiveId: archiveIdSchema.nullable(),
+  artifactFingerprint: fingerprintSchema.nullable(),
   outcome: z.enum(["APPLIED", "NOOP", "BLOCKED"]),
   observedAt: timestampSchema,
 });
@@ -233,6 +235,15 @@ const archiveExportArtifactSchema = z.strictObject({
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   archive: archivePackageSchema,
+});
+
+const archiveDeletePendingSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-archive-delete-pending.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  targetReference: targetReferenceSchema,
+  archiveId: archiveIdSchema,
+  artifactFingerprint: fingerprintSchema,
 });
 
 export interface RunArchiveStore {
@@ -257,6 +268,49 @@ function archivePackageFilename(): string {
 
 function archivePackageFingerprint(archive: ArchivePackage): string {
   return sha256Fingerprint(canonicalJson(archive));
+}
+
+function operationReceiptPath(stateRoot: string, kind: "imports" | "deletes", key: string): string {
+  return join(stateRoot, ".operation-receipts", kind, `${key}.json`);
+}
+
+function operationPendingPath(stateRoot: string, key: string): string {
+  return join(stateRoot, ".operation-receipts", "deletes", `${key}.pending.json`);
+}
+
+async function readImmutableJsonOptional<T>(
+  path: string,
+  schema: z.ZodType<T>,
+): Promise<T | undefined> {
+  try {
+    await assertSafeDirectoryPath(dirname(path));
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "An immutable operation receipt must be an exact regular file.",
+      );
+    }
+    return schema.parse(parseJson(await readFile(path, "utf8")));
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return undefined;
+    throw storeErrorFrom(error, "STORE_CORRUPT");
+  }
+}
+
+function assertOperationIdentity(
+  existing: { readonly operationId: string; readonly operationFingerprint: string },
+  requested: { readonly operationId: string; readonly operationFingerprint: string },
+): void {
+  if (
+    existing.operationId !== requested.operationId ||
+    existing.operationFingerprint !== requested.operationFingerprint
+  ) {
+    throw new DurableStoreError(
+      "IDENTITY_CONFLICT",
+      "The exact operation identity is already bound to another Archive fact.",
+    );
+  }
 }
 
 const archiveOperationLocks = new Map<string, Promise<void>>();
@@ -300,7 +354,7 @@ export function assertPortableArchive(archive: ArchivePackage): void {
     );
   }
   const serialized = canonicalJson(archive);
-  if (/[A-Za-z]:[\\/]|\\\\|(?:^|["\s])\/(?:Users|home|tmp)\//u.test(serialized)) {
+  if (/(?:^|["\s])(?:file:\/\/|\/\/|[A-Za-z]:[\\/]|\\\\|\/(?!\/))[^\s"'<>|]*/iu.test(serialized)) {
     throw new DurableStoreError(
       "INVALID_TARGET",
       "A portable Archive cannot contain a device-local path.",
@@ -637,6 +691,14 @@ export class FileRunArchiveStore implements RunArchiveStore {
       archive,
     };
     const artifactFingerprint = sha256Fingerprint(canonicalJson(artifact));
+    const priorDeleteReceipt = await this.#readDeleteReceiptOptional(parsed.targetReference);
+    const priorDeletePending = await this.#readDeletePendingOptional(parsed.targetReference);
+    if (priorDeleteReceipt !== undefined || priorDeletePending !== undefined) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "An Archive export target is already bound to a delete operation.",
+      );
+    }
     const targetPath = this.#exportPath(parsed.targetReference);
     const existing = await this.#readExportOptional(targetPath);
     if (existing !== undefined) {
@@ -697,8 +759,30 @@ export class FileRunArchiveStore implements RunArchiveStore {
     await assertSafeDirectoryPath(this.#stateRoot);
     assertPortableArchive(parsed.archive);
     assertArchivePackage(parsed.archive);
-    const existing = await this.#readPackageOptional(parsed.archive.manifest.archiveId);
     const artifactFingerprint = archivePackageFingerprint(parsed.archive);
+    const archiveId = parsed.archive.manifest.archiveId;
+    const priorReceipt = await this.#readImportReceiptOptional(archiveId);
+    if (priorReceipt !== undefined) {
+      assertOperationIdentity(priorReceipt, parsed);
+      if (priorReceipt.artifactFingerprint !== artifactFingerprint) {
+        throw new DurableStoreError(
+          "IDENTITY_CONFLICT",
+          "The imported Archive identity is already bound to different facts.",
+        );
+      }
+      const existing = await this.#readPackageOptional(archiveId);
+      if (existing === undefined) await this.#writePackage(parsed.archive);
+      else if (canonicalJson(existing) !== canonicalJson(parsed.archive)) {
+        throw new DurableStoreError(
+          "IDENTITY_CONFLICT",
+          "Imported Archive identity is already bound to other facts.",
+        );
+      }
+      return existing === undefined || priorReceipt.outcome === "NOOP"
+        ? priorReceipt
+        : archiveImportReceiptSchema.parse({ ...priorReceipt, outcome: "NOOP" });
+    }
+    const existing = await this.#readPackageOptional(archiveId);
     if (existing !== undefined) {
       if (canonicalJson(existing) !== canonicalJson(parsed.archive)) {
         throw new DurableStoreError(
@@ -706,7 +790,7 @@ export class FileRunArchiveStore implements RunArchiveStore {
           "Imported Archive identity is already bound to other facts.",
         );
       }
-      return archiveImportReceiptSchema.parse({
+      const receipt = archiveImportReceiptSchema.parse({
         schemaVersion: "hpi-archive-import-receipt.v1",
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
@@ -715,9 +799,10 @@ export class FileRunArchiveStore implements RunArchiveStore {
         outcome: "NOOP",
         observedAt: new Date().toISOString(),
       });
+      await this.#writeImportReceipt(receipt);
+      return receipt;
     }
-    await this.#writePackage(parsed.archive);
-    return archiveImportReceiptSchema.parse({
+    const receipt = archiveImportReceiptSchema.parse({
       schemaVersion: "hpi-archive-import-receipt.v1",
       operationId: parsed.operationId,
       operationFingerprint: parsed.operationFingerprint,
@@ -726,6 +811,9 @@ export class FileRunArchiveStore implements RunArchiveStore {
       outcome: "APPLIED",
       observedAt: new Date().toISOString(),
     });
+    await this.#writeImportReceipt(receipt);
+    await this.#writePackage(parsed.archive);
+    return receipt;
   }
 
   public async deleteExport(
@@ -743,31 +831,48 @@ export class FileRunArchiveStore implements RunArchiveStore {
     await assertSafeDirectoryPath(this.#stateRoot);
     await assertSafeDirectoryPath(join(this.#stateRoot, "exports"));
     const targetPath = this.#exportPath(parsed.targetReference);
+    const priorReceipt = await this.#readDeleteReceiptOptional(parsed.targetReference);
+    if (priorReceipt !== undefined) {
+      assertOperationIdentity(priorReceipt, parsed);
+      return priorReceipt.outcome === "APPLIED"
+        ? archiveDeleteExportReceiptSchema.parse({ ...priorReceipt, outcome: "NOOP" })
+        : priorReceipt;
+    }
+    const pending = await this.#readDeletePendingOptional(parsed.targetReference);
+    if (pending !== undefined) assertOperationIdentity(pending, parsed);
     let stats: Awaited<ReturnType<typeof lstat>>;
     try {
       stats = await lstat(targetPath);
     } catch (error) {
       if (isErrnoException(error) && error.code === "ENOENT") {
-        return archiveDeleteExportReceiptSchema.parse({
-          schemaVersion: "hpi-archive-delete-export-receipt.v1",
+        const receipt = archiveDeleteExportReceiptSchema.parse({
+          schemaVersion: "hpi-archive-delete-export-receipt.v2",
           operationId: parsed.operationId,
           operationFingerprint: parsed.operationFingerprint,
           targetReference: parsed.targetReference,
+          archiveId: pending?.archiveId ?? null,
+          artifactFingerprint: pending?.artifactFingerprint ?? null,
           outcome: "NOOP",
           observedAt: new Date().toISOString(),
         });
+        await this.#writeDeleteReceipt(receipt);
+        return receipt;
       }
       throw storeErrorFrom(error, "STORE_CORRUPT");
     }
     if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
-      return archiveDeleteExportReceiptSchema.parse({
-        schemaVersion: "hpi-archive-delete-export-receipt.v1",
+      const receipt = archiveDeleteExportReceiptSchema.parse({
+        schemaVersion: "hpi-archive-delete-export-receipt.v2",
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         targetReference: parsed.targetReference,
+        archiveId: null,
+        artifactFingerprint: null,
         outcome: "BLOCKED",
         observedAt: new Date().toISOString(),
       });
+      await this.#writeDeleteReceipt(receipt);
+      return receipt;
     }
     const exportsRoot = await realpath(join(this.#stateRoot, "exports"));
     const targetParent = await realpath(join(targetPath, ".."));
@@ -777,15 +882,47 @@ export class FileRunArchiveStore implements RunArchiveStore {
         "Export deletion target escaped its exact root.",
       );
     }
+    const exported = await this.#readExportOptional(targetPath);
+    if (exported === undefined) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "The export target disappeared before its exact envelope could be validated.",
+      );
+    }
+    const artifactFingerprint = sha256Fingerprint(canonicalJson(exported));
+    const archiveId = exported.archive.manifest.archiveId;
+    if (
+      pending !== undefined &&
+      (pending.artifactFingerprint !== artifactFingerprint || pending.archiveId !== archiveId)
+    ) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "The pending delete operation is bound to a different export artifact.",
+      );
+    }
+    if (pending === undefined) {
+      await this.#writeDeletePending({
+        schemaVersion: "hpi-archive-delete-pending.v1",
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        targetReference: parsed.targetReference,
+        archiveId,
+        artifactFingerprint,
+      });
+    }
     await rm(targetPath, { force: false });
-    return archiveDeleteExportReceiptSchema.parse({
-      schemaVersion: "hpi-archive-delete-export-receipt.v1",
+    const receipt = archiveDeleteExportReceiptSchema.parse({
+      schemaVersion: "hpi-archive-delete-export-receipt.v2",
       operationId: parsed.operationId,
       operationFingerprint: parsed.operationFingerprint,
       targetReference: parsed.targetReference,
+      archiveId,
+      artifactFingerprint,
       outcome: "APPLIED",
       observedAt: new Date().toISOString(),
     });
+    await this.#writeDeleteReceipt(receipt);
+    return receipt;
   }
 
   async #writePackage(archive: ArchivePackage): Promise<void> {
@@ -889,5 +1026,79 @@ export class FileRunArchiveStore implements RunArchiveStore {
       if (isErrnoException(error) && error.code === "ENOENT") return undefined;
       throw storeErrorFrom(error, "STORE_CORRUPT");
     }
+  }
+
+  async #readImportReceiptOptional(archiveId: string) {
+    const receipt = await readImmutableJsonOptional(
+      operationReceiptPath(this.#stateRoot, "imports", archiveId),
+      archiveImportReceiptSchema,
+    );
+    if (receipt !== undefined && receipt.archiveId !== archiveId) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "An import receipt is bound to a different Archive identity than its path.",
+      );
+    }
+    return receipt;
+  }
+
+  async #writeImportReceipt(receipt: ArchiveImportReceipt): Promise<void> {
+    await this.#storage.writeCritical(() =>
+      writeImmutableAtomically({
+        directory: dirname(operationReceiptPath(this.#stateRoot, "imports", receipt.archiveId)),
+        filename: `${receipt.archiveId}.json`,
+        content: `${canonicalJson(receipt)}\n`,
+      }),
+    );
+  }
+
+  async #readDeleteReceiptOptional(targetReference: string) {
+    const receipt = await readImmutableJsonOptional(
+      operationReceiptPath(this.#stateRoot, "deletes", targetReference),
+      archiveDeleteExportReceiptSchema,
+    );
+    if (receipt !== undefined && receipt.targetReference !== targetReference) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A delete receipt is bound to a different target than its path.",
+      );
+    }
+    return receipt;
+  }
+
+  async #writeDeleteReceipt(receipt: ArchiveDeleteExportReceipt): Promise<void> {
+    await this.#storage.writeCritical(() =>
+      writeImmutableAtomically({
+        directory: dirname(
+          operationReceiptPath(this.#stateRoot, "deletes", receipt.targetReference),
+        ),
+        filename: `${receipt.targetReference}.json`,
+        content: `${canonicalJson(receipt)}\n`,
+      }),
+    );
+  }
+
+  async #readDeletePendingOptional(targetReference: string) {
+    const pending = await readImmutableJsonOptional(
+      operationPendingPath(this.#stateRoot, targetReference),
+      archiveDeletePendingSchema,
+    );
+    if (pending !== undefined && pending.targetReference !== targetReference) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A pending delete intent is bound to a different target than its path.",
+      );
+    }
+    return pending;
+  }
+
+  async #writeDeletePending(pending: z.infer<typeof archiveDeletePendingSchema>): Promise<void> {
+    await this.#storage.writeCritical(() =>
+      writeImmutableAtomically({
+        directory: dirname(operationPendingPath(this.#stateRoot, pending.targetReference)),
+        filename: `${pending.targetReference}.pending.json`,
+        content: `${canonicalJson(pending)}\n`,
+      }),
+    );
   }
 }

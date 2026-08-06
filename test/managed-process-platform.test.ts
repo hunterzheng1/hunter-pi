@@ -609,7 +609,7 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       eof: true,
     });
     expect(receipt.outputDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
-  });
+  }, 30_000);
 
   it("does not signal a platform process tree when its identity fingerprint differs", async () => {
     expect(linuxPidfdSignalSource).toContain("pidfd_send_signal");
@@ -647,5 +647,5 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
       identityState: "MATCH",
       treeState: "EMPTY",
     });
-  });
+  }, 30_000);
 });

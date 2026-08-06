@@ -4,7 +4,7 @@
 
 `NOT_PROVEN` / `NOT_RUN`.
 
-At the time this boundary record was authored, pre-merge `main` was `29d2ef2` (`docs: close Task 12 CI evidence`) and its exact main CI run [`31104828696`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31104828696) passed the recorded Windows, Ubuntu, containment, Task 7 Evidence, and Pi Evidence jobs. The record was then merged in `b37f8fb`; its exact main CI run [`31109317291`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31109317291) also passed all six jobs. These receipts prove the checked-in implementation and its provider-neutral verification gates at their documented scope; they do not constitute a Task 12 real-use acceptance.
+At the time this boundary record was authored, pre-merge `main` was `29d2ef2` (`docs: close Task 12 CI evidence`) and its exact main CI run [`31104828696`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31104828696) passed the recorded Windows, Ubuntu, containment, Task 7 Evidence, and Pi Evidence jobs. The merged Task 12 product/evidence baseline `b37f8fb` then passed exact main CI [`31109317291`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31109317291), and the follow-on documentation-only head `ac1d7ae` passed exact main CI [`31113254777`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31113254777). These receipts prove the checked-in implementation and its provider-neutral verification gates at their documented scope; they do not constitute a Task 12 real-use acceptance.
 
 ## Proven within the recorded bounds
 

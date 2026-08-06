@@ -142,6 +142,7 @@ describe("hpi command", () => {
       expect(await runHpiCli([helpArgument], dependencies)).toBe(0);
       expect(io.stdout.join("\n")).toContain("--model exact-id");
       expect(io.stdout.join("\n")).toContain("--permission safe|balanced|full-access");
+      expect(io.stdout.join("\n")).toContain("--allow-provider-request");
       expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
     }
   });
@@ -564,11 +565,61 @@ describe("hpi command", () => {
     const { dependencies, io, root } = await createDependencies({ authConfigured: false });
     await writeReadyConfiguration(dependencies);
 
-    expect(await runHpiCli(["managed", "fixture", "--json"], dependencies)).toBe(2);
+    expect(
+      await runHpiCli(["managed", "fixture", "--json", "--allow-provider-request"], dependencies),
+    ).toBe(2);
     expect(io.stderr.join("\n")).toContain(
       "ManagedChangeStatus=BLOCKED Reason=PROVIDER_AUTH_REQUIRED",
     );
     expect(io.stderr.join("\n")).not.toContain("InvalidArguments=BLOCKED");
+    expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
+  });
+
+  it("blocks the disposable Managed Change until the Provider request is explicitly authorized", async () => {
+    const { dependencies, io, root } = await createDependencies({ authConfigured: true });
+    await writeReadyConfiguration(dependencies);
+    let processRan = false;
+    const managedDependencies: HpiCliDependencies = {
+      ...dependencies,
+      runTask6Process: () => {
+        processRan = true;
+        throw new Error("an unauthorized Provider request must not reach Pi");
+      },
+    };
+
+    expect(await runHpiCli(["managed", "fixture", "--json"], managedDependencies)).toBe(2);
+    expect(processRan).toBe(false);
+    expect(io.stderr.join("\n")).toContain(
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_AUTHORIZED",
+    );
+    expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
+  });
+
+  it("blocks an explicitly scoped Managed Change when the Provider request confirmation is declined", async () => {
+    const { dependencies, io, root } = await createDependencies({
+      authConfigured: true,
+      confirmed: false,
+    });
+    await writeReadyConfiguration(dependencies);
+    let processRan = false;
+    const managedDependencies: HpiCliDependencies = {
+      ...dependencies,
+      runTask6Process: () => {
+        processRan = true;
+        throw new Error("a declined Provider request must not reach Pi");
+      },
+    };
+
+    expect(
+      await runHpiCli(
+        ["managed", "fixture", "--json", "--allow-provider-request"],
+        managedDependencies,
+      ),
+    ).toBe(2);
+    expect(processRan).toBe(false);
+    expect(io.stderr.join("\n")).toContain(
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_ACKNOWLEDGED",
+    );
     expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
   });
 
@@ -623,7 +674,12 @@ describe("hpi command", () => {
       runTask6Process,
     };
 
-    expect(await runHpiCli(["managed", "fixture", "--json"], managedDependencies)).toBe(0);
+    expect(
+      await runHpiCli(
+        ["managed", "fixture", "--json", "--allow-provider-request"],
+        managedDependencies,
+      ),
+    ).toBe(0);
     expect(processRequests).toBe(1);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
@@ -653,7 +709,12 @@ describe("hpi command", () => {
       },
     };
 
-    expect(await runHpiCli(["managed", "fixture", "--json"], managedDependencies)).toBe(2);
+    expect(
+      await runHpiCli(
+        ["managed", "fixture", "--json", "--allow-provider-request"],
+        managedDependencies,
+      ),
+    ).toBe(2);
     expect(processRan).toBe(false);
     expect(io.stderr.join("\n")).toContain(
       "ManagedChangeStatus=BLOCKED Reason=UNSTAMPED_OR_DIRTY_PRODUCT",

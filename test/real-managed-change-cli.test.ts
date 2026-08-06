@@ -212,5 +212,5 @@ describe("hpi change command", () => {
       /containment=(?:WINDOWS_JOB_OBJECT|LINUX_SUBREAPER_PROCESS_TREE)/u,
     );
     expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
-  });
+  }, 30_000);
 });

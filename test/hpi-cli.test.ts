@@ -17,6 +17,11 @@ import {
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
+import {
+  completePilotExecutionPlan,
+  completePilotPlanInput,
+} from "./support/task12-plan-fixture.js";
+import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
 const createdRoots: string[] = [];
@@ -144,6 +149,10 @@ describe("hpi command", () => {
       expect(io.stdout.join("\n")).toContain("--permission safe|balanced|full-access");
       expect(io.stdout.join("\n")).toContain("--allow-provider-request");
       expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
+      expect(io.stdout.join("\n")).toContain("hpi pilot compile --input <file> --json");
+      expect(io.stdout.join("\n")).toContain(
+        "hpi pilot evaluate --plan <file> --evidence <file> --json",
+      );
     }
   });
 
@@ -193,6 +202,142 @@ describe("hpi command", () => {
     expect(invalidJson.io.stdout.join("\n")).toContain("PILOT_PLAN_JSON_INVALID");
   });
 
+  it("compiles a valid pilot input into a redacted fingerprint-bound execution plan", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan-input.json");
+    await writeFile(planPath, JSON.stringify(completePilotPlanInput()), "utf8");
+
+    expect(await runHpiCli(["pilot", "compile", "--input", planPath, "--json"], dependencies)).toBe(
+      0,
+    );
+    const plan = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v1" });
+    expect(plan["planFingerprint"]).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(JSON.stringify(plan)).not.toContain(root);
+  });
+
+  it("blocks pilot compilation without echoing unreadable or invalid input", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan-input.json");
+    await writeFile(
+      planPath,
+      JSON.stringify({ credential: "token=do-not-echo", privatePath: root }),
+      "utf8",
+    );
+
+    expect(await runHpiCli(["pilot", "compile", "--input", planPath, "--json"], dependencies)).toBe(
+      2,
+    );
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).toContain('"status":"BLOCKED"');
+    expect(output).not.toContain(root);
+    expect(output).not.toContain("do-not-echo");
+  });
+
+  it("rejects path-bearing machine identity fields before emitting a pilot plan", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan-input.json");
+    const input = completePilotPlanInput();
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        ...input,
+        machineProfile: { ...input.machineProfile, cpuModel: root },
+      }),
+      "utf8",
+    );
+
+    expect(await runHpiCli(["pilot", "compile", "--input", planPath, "--json"], dependencies)).toBe(
+      2,
+    );
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).toContain('"status":"BLOCKED"');
+    expect(output).not.toContain(root);
+  });
+
+  it("rejects a path-bearing Git identity before emitting a pilot plan", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan-input.json");
+    const input = completePilotPlanInput();
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        ...input,
+        machineProfile: { ...input.machineProfile, gitVersion: root },
+      }),
+      "utf8",
+    );
+
+    expect(await runHpiCli(["pilot", "compile", "--input", planPath, "--json"], dependencies)).toBe(
+      2,
+    );
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).toContain('"status":"BLOCKED"');
+    expect(output).not.toContain(root);
+  });
+
+  it("returns GO for complete Evidence without launching Pi or checking Provider auth", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const plan = completePilotExecutionPlan();
+    const planPath = join(root, "pilot-plan.json");
+    const evidencePath = join(root, "pilot-evidence.json");
+    await writeFile(planPath, JSON.stringify(plan), "utf8");
+    await writeFile(evidencePath, JSON.stringify(completePilotEvidence(plan)), "utf8");
+    let launched = false;
+    let authChecked = false;
+    const evaluationDependencies: HpiCliDependencies = {
+      ...dependencies,
+      launch: () => {
+        launched = true;
+        return Promise.resolve(0);
+      },
+      readProviderAuthStatus: () => {
+        authChecked = true;
+        return Promise.resolve({ configured: true, source: "stored" });
+      },
+    };
+
+    expect(
+      await runHpiCli(
+        ["pilot", "evaluate", "--plan", planPath, "--evidence", evidencePath, "--json"],
+        evaluationDependencies,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(io.stdout.join(""))).toMatchObject({
+      schemaVersion: "hpi-pilot-decision.v2",
+      outcome: "GO",
+    });
+    expect(launched).toBe(false);
+    expect(authChecked).toBe(false);
+  });
+
+  it("evaluates Evidence through the CLI without exposing invalid plan or Evidence input", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan.json");
+    const evidencePath = join(root, "pilot-evidence.json");
+    await writeFile(planPath, JSON.stringify(completePilotExecutionPlan()), "utf8");
+    await writeFile(
+      evidencePath,
+      JSON.stringify({ credential: "token=do-not-echo", privatePath: root }),
+      "utf8",
+    );
+
+    expect(
+      await runHpiCli(
+        ["pilot", "evaluate", "--plan", planPath, "--evidence", evidencePath, "--json"],
+        dependencies,
+      ),
+    ).toBe(2);
+    const decision = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    expect(decision).toMatchObject({
+      schemaVersion: "hpi-pilot-decision.v2",
+      outcome: "STOP",
+    });
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).not.toContain(root);
+    expect(output).not.toContain("do-not-echo");
+  });
+
   it("rejects unknown commands and malformed options before confirmation or launch", async () => {
     for (const arguments_ of [
       ["quik"],
@@ -202,6 +347,8 @@ describe("hpi command", () => {
       ["doctor", "--jsno"],
       ["login", "unexpected"],
       ["--safe-mode", "unexpected"],
+      ["pilot", "compile", "--input"],
+      ["pilot", "evaluate", "--plan", "plan.json", "--json"],
     ]) {
       let launched = false;
       const { dependencies, io } = await createDependencies({

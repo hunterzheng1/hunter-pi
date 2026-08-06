@@ -40,7 +40,12 @@ import {
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
-import { PilotPlanCompiler, type PilotPreflightFailure } from "@hunter-pi/pilot";
+import {
+  PilotEvaluator,
+  PilotPlanCompiler,
+  type PilotPlanInput,
+  type PilotPreflightFailure,
+} from "@hunter-pi/pilot";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -185,6 +190,36 @@ function assertValueOptions(arguments_: readonly string[], allowed: ReadonlySet<
   }
 }
 
+function assertPilotJsonOptions(
+  arguments_: readonly string[],
+  requiredValueOptions: ReadonlySet<string>,
+): void {
+  const seen = new Set<string>();
+  let jsonSeen = false;
+  for (let index = 0; index < arguments_.length;) {
+    const option = arguments_[index];
+    if (option === "--json") {
+      if (jsonSeen) throw new HpiCliUsageError();
+      jsonSeen = true;
+      index += 1;
+      continue;
+    }
+    const value = arguments_[index + 1];
+    if (
+      option === undefined ||
+      value === undefined ||
+      !requiredValueOptions.has(option) ||
+      seen.has(option) ||
+      value.startsWith("-")
+    ) {
+      throw new HpiCliUsageError();
+    }
+    seen.add(option);
+    index += 2;
+  }
+  if (!jsonSeen || seen.size !== requiredValueOptions.size) throw new HpiCliUsageError();
+}
+
 function validateCliArguments(arguments_: readonly string[]): void {
   const command = arguments_[0];
   if (command === "--help" || command === "-h") {
@@ -217,6 +252,14 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (command === "doctor") {
     assertUniqueFlags(arguments_.slice(1), new Set(["--json"]));
+    return;
+  }
+  if (command === "pilot" && arguments_[1] === "compile") {
+    assertPilotJsonOptions(arguments_.slice(2), new Set(["--input"]));
+    return;
+  }
+  if (command === "pilot" && arguments_[1] === "evaluate") {
+    assertPilotJsonOptions(arguments_.slice(2), new Set(["--plan", "--evidence"]));
     return;
   }
   if (command === "pilot" && arguments_[1] === "preflight") {
@@ -952,7 +995,33 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi smoke tui");
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin doctor | plugin disable <id>");
+  line(io, "       hpi pilot compile --input <file> --json");
+  line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --json");
   line(io, "       hpi pilot preflight --plan <file> --json");
+}
+
+interface PilotJsonFile {
+  readonly value: unknown;
+  readonly failure?: PilotPreflightFailure;
+}
+
+async function readPilotJsonFile(
+  path: string,
+  dependencies: HpiCliDependencies,
+): Promise<PilotJsonFile> {
+  let raw: string;
+  try {
+    raw = await (dependencies.readTextFile ?? ((filePath: string) => readFile(filePath, "utf8")))(
+      path,
+    );
+  } catch {
+    return { value: null, failure: "FILE_UNREADABLE" };
+  }
+  try {
+    return { value: JSON.parse(raw) as unknown };
+  } catch {
+    return { value: null, failure: "INVALID_JSON" };
+  }
 }
 
 async function pilotPreflightCommand(
@@ -961,28 +1030,44 @@ async function pilotPreflightCommand(
 ): Promise<number> {
   const planPath = optionValue(arguments_, "--plan");
   if (planPath === undefined) throw new HpiCliUsageError();
-  let input: unknown;
-  let failure: PilotPreflightFailure | undefined;
-  let rawPlan: string;
-  try {
-    rawPlan = await (dependencies.readTextFile ?? ((path: string) => readFile(path, "utf8")))(
-      planPath,
-    );
-  } catch {
-    rawPlan = "";
-    failure = "FILE_UNREADABLE";
-  }
-  if (failure === undefined) {
-    try {
-      input = JSON.parse(rawPlan) as unknown;
-    } catch {
-      input = null;
-      failure = "INVALID_JSON";
-    }
-  }
-  const receipt = new PilotPlanCompiler().preflight(input, failure);
+  const parsed = await readPilotJsonFile(planPath, dependencies);
+  const receipt = new PilotPlanCompiler().preflight(parsed.value, parsed.failure);
   line(dependencies.io, JSON.stringify(receipt));
   return receipt.status === "READY" ? 0 : 2;
+}
+
+async function pilotCompileCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+): Promise<number> {
+  const inputPath = optionValue(arguments_, "--input");
+  if (inputPath === undefined) throw new HpiCliUsageError();
+  const parsed = await readPilotJsonFile(inputPath, dependencies);
+  const compiler = new PilotPlanCompiler();
+  const receipt = compiler.preflight(parsed.value, parsed.failure);
+  if (receipt.status !== "READY") {
+    line(dependencies.io, JSON.stringify(receipt));
+    return 2;
+  }
+  const plan = compiler.compile(parsed.value as PilotPlanInput);
+  line(dependencies.io, JSON.stringify(plan));
+  return 0;
+}
+
+async function pilotEvaluateCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+): Promise<number> {
+  const planPath = optionValue(arguments_, "--plan");
+  const evidencePath = optionValue(arguments_, "--evidence");
+  if (planPath === undefined || evidencePath === undefined) throw new HpiCliUsageError();
+  const [plan, evidence] = await Promise.all([
+    readPilotJsonFile(planPath, dependencies),
+    readPilotJsonFile(evidencePath, dependencies),
+  ]);
+  const decision = new PilotEvaluator().evaluate(evidence.value, plan.value);
+  line(dependencies.io, JSON.stringify(decision));
+  return decision.outcome === "GO" ? 0 : 2;
 }
 
 export async function runHpiCli(
@@ -1006,6 +1091,12 @@ export async function runHpiCli(
     }
     if (command === "pilot" && arguments_[1] === "preflight") {
       return await pilotPreflightCommand(arguments_.slice(2), dependencies);
+    }
+    if (command === "pilot" && arguments_[1] === "compile") {
+      return await pilotCompileCommand(arguments_.slice(2), dependencies);
+    }
+    if (command === "pilot" && arguments_[1] === "evaluate") {
+      return await pilotEvaluateCommand(arguments_.slice(2), dependencies);
     }
     const paths = resolveHpiPaths({
       env: dependencies.environment,

@@ -7,5 +7,6 @@ Validation records bind claims to exact artifacts, source digests, environments,
 - Machine-readable receipts are stored under [`evidence/`](evidence/).
 - Task 7 worktree, lease, process-finality, and local Windows/Ubuntu fixture results are recorded in [2026-08-04-task7-worktree-process.md](2026-08-04-task7-worktree-process.md).
 - The hosted Linux process-tree traversal fix and final PR CI receipt are recorded in [2026-08-05-linux-process-tree-hosted.md](2026-08-05-linux-process-tree-hosted.md).
+- The current Task 12 real-pilot boundary is recorded in [2026-08-06-task12-real-pilot-boundary.md](2026-08-06-task12-real-pilot-boundary.md); its disposition remains `NOT_PROVEN` / `NOT_RUN` until an explicitly scoped Windows pilot produces the required Archive.
 
 Committed Evidence must use allowlisted schemas and must not contain credentials, private prompts, full environment dumps, or absolute user paths. A missing or unexecuted platform remains `PENDING`, `BLOCKED`, or `NOT_PROVEN`; it is never filled with an inferred pass.

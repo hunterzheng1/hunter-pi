@@ -9,3 +9,5 @@ The actual ten-task Windows run has not been executed on current `main`. There i
 ## Terminal disposition
 
 `NOT_PROVEN` — the evidence contract and exact remote CI are ready, but the required real-use observations are absent. The correct next action is a separately recorded pilot run with explicit repository/credential scope, not a claim of daily-use readiness.
+
+The current `main` head `29d2ef2` also passed exact [main CI `31104828696`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31104828696). This later documentation receipt does not change the real-pilot disposition: no target repositories, Provider authorization scope, or real-use Archive has been supplied or safely inferred. See [2026-08-06 — Task 12 real-pilot boundary](2026-08-06-task12-real-pilot-boundary.md) for the dated evidence-bound blocker record.

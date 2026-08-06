@@ -1,19 +1,22 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import {
   Task6PiEngineHost,
   HPI_CORE_EXTENSION_VERSION,
   HpiLaunchBlockedError,
+  PiJsonEngineHost,
+  QualifiedPiProcessBlockedError,
   acknowledgeProviderDisclosure,
   assertHpiSessionTreeSafe,
   createDefaultHpiConfiguration,
   createInteractiveTuiConfigurationFingerprint,
   createPiLaunchPlan,
+  createQualifiedPiJsonProcess,
   createQuickSessionHeader,
   createQuickSessionProcessObservation,
   disableHpiPlugin,
@@ -39,7 +42,14 @@ import {
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
-import { runTask6ManagedChange, task6OutputCaptureLimits } from "@hunter-pi/managed-change";
+import { createFileLeaseManager } from "@hunter-pi/execution";
+import {
+  RealManagedChangeBlockedError,
+  realManagedChangeRequestSchema,
+  runRealManagedChange,
+  runTask6ManagedChange,
+  task6OutputCaptureLimits,
+} from "@hunter-pi/managed-change";
 import {
   PilotEvaluator,
   PilotPlanCompiler,
@@ -220,6 +230,40 @@ function assertPilotJsonOptions(
   if (!jsonSeen || seen.size !== requiredValueOptions.size) throw new HpiCliUsageError();
 }
 
+function assertChangeOptions(arguments_: readonly string[]): void {
+  const seen = new Set<string>();
+  let jsonSeen = false;
+  let allowProviderRequestSeen = false;
+  for (let index = 0; index < arguments_.length;) {
+    const option = arguments_[index];
+    if (option === "--json") {
+      if (jsonSeen) throw new HpiCliUsageError();
+      jsonSeen = true;
+      index += 1;
+      continue;
+    }
+    if (option === "--allow-provider-request") {
+      if (allowProviderRequestSeen) throw new HpiCliUsageError();
+      allowProviderRequestSeen = true;
+      index += 1;
+      continue;
+    }
+    const value = arguments_[index + 1];
+    if (
+      option === undefined ||
+      value === undefined ||
+      !new Set(["--repo", "--plan"]).has(option) ||
+      seen.has(option) ||
+      value.startsWith("-")
+    ) {
+      throw new HpiCliUsageError();
+    }
+    seen.add(option);
+    index += 2;
+  }
+  if (!jsonSeen || seen.size !== 2) throw new HpiCliUsageError();
+}
+
 function validateCliArguments(arguments_: readonly string[]): void {
   const command = arguments_[0];
   if (command === "--help" || command === "-h") {
@@ -276,6 +320,10 @@ function validateCliArguments(arguments_: readonly string[]): void {
     ) {
       throw new HpiCliUsageError();
     }
+    return;
+  }
+  if (command === "change") {
+    assertChangeOptions(arguments_.slice(1));
     return;
   }
   if (command === "version") {
@@ -735,6 +783,180 @@ async function managedFixtureCommand(
   return artifact.taskResult === "GO" ? 0 : 2;
 }
 
+async function realChangeCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+): Promise<number> {
+  const configuration = await loadHpiConfiguration(paths);
+  if (configuration?.setupCompletedAt == null) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi setup` first.",
+    );
+    return 2;
+  }
+  if (!arguments_.includes("--allow-provider-request")) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_AUTHORIZED NextAction=Rerun with `--allow-provider-request` only after confirming the explicit repository target and plan.",
+    );
+    return 2;
+  }
+  if (providerDisclosureRequired(configuration)) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_DISCLOSURE_REQUIRED NextAction=Run `hpi setup` and acknowledge the current Provider disclosure.",
+    );
+    return 2;
+  }
+  const planPath = optionValue(arguments_, "--plan");
+  const repositoryInput = optionValue(arguments_, "--repo");
+  if (planPath === undefined || repositoryInput === undefined) throw new HpiCliUsageError();
+  const rawPlan = await readPilotJsonFile(planPath, dependencies);
+  if (rawPlan.failure !== undefined) {
+    errorLine(
+      dependencies.io,
+      `ManagedChangeStatus=BLOCKED Reason=PLAN_${rawPlan.failure} NextAction=Provide a readable valid JSON Managed Change plan.`,
+    );
+    return 2;
+  }
+  const parsedPlan = realManagedChangeRequestSchema.safeParse(rawPlan.value);
+  if (!parsedPlan.success) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PLAN_INVALID NextAction=Use hpi-managed-change-request.v1 with an explicit check and allowedPaths.",
+    );
+    return 2;
+  }
+  let repositoryPath: string;
+  try {
+    repositoryPath = await realpath(resolve(repositoryInput));
+  } catch {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=REPOSITORY_NOT_FOUND NextAction=Select one existing physical Git repository root with --repo.",
+    );
+    return 2;
+  }
+  const repository = await dependencies.inspectRepository(repositoryPath);
+  if (resolve(repository.root) !== repositoryPath) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=REPOSITORY_NOT_ROOT NextAction=Pass the exact Git repository root with --repo.",
+    );
+    return 2;
+  }
+  const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
+  if (!auth.configured) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_AUTH_REQUIRED NextAction=Run `hpi login` first.",
+    );
+    return 2;
+  }
+  const confirmed = await dependencies.io.confirm(
+    `This explicitly selected ${repository.name} repository on ${repository.branch} may send one bounded Provider request and modify only the declared paths. Continue?`,
+  );
+  if (!confirmed) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_ACKNOWLEDGED NextAction=Rerun only after explicitly acknowledging the target, plan, and Provider request.",
+    );
+    return 2;
+  }
+  const version = await assertCoreExtensionIntegrity(dependencies);
+  if (!/^[a-f0-9]{40}$/u.test(version.sourceCommit) || version.sourceState !== "CLEAN") {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=UNSTAMPED_OR_DIRTY_PRODUCT NextAction=Use an exact clean packaged Hunter Pi artifact.",
+    );
+    return 2;
+  }
+  await prepareRuntimeDirectories(paths);
+  await assertHpiSessionTreeSafe(paths);
+  const resolvedProviderDestination = await resolveLaunchDestination(
+    configuration,
+    dependencies,
+    paths,
+  );
+  const managedConfiguration = hpiConfigurationSchema.parse({
+    ...configuration,
+    permissionProfile: "FULL_ACCESS",
+  });
+  const leaseRoot = join(paths.root, "leases");
+  await mkdir(leaseRoot, { recursive: true });
+  const writerLeaseManager = await createFileLeaseManager({
+    leaseRoot,
+    now: dependencies.now,
+  });
+  const writerLeaseOwnerFingerprint = sha256(
+    `hpi-real-writer-owner\0${String(process.pid)}\0${randomUUID()}`,
+  );
+  const qualifiedProcess =
+    dependencies.runTask6Process ??
+    (await createQualifiedPiJsonProcess({ leaseRoot, now: dependencies.now }));
+  const host = new PiJsonEngineHost({
+    launchPlanForWorkspace: (workspace) =>
+      Promise.resolve(
+        createPiLaunchPlan({
+          paths,
+          configuration: managedConfiguration,
+          cwd: workspace,
+          purpose: "MANAGED",
+          safeMode: false,
+          providerAuthConfigured: true,
+          sessionTreeInspected: true,
+          resolvedProviderDestination,
+          displayHeader: [
+            "Hunter Pi | Mode=MANAGED Permission=FULL_ACCESS",
+            "Scope=EXPLICIT_OPERATOR_SELECTED AgentReturn=OBSERVATION_ONLY",
+            "IndependentVerification=REQUIRED CommitPushPublishDeploy=PROHIBITED",
+          ].join("\n"),
+          ...(dependencies.piCliPath === undefined ? {} : { piCliPath: dependencies.piCliPath }),
+          ...(dependencies.coreExtensionPath === undefined
+            ? {}
+            : { coreExtensionPath: dependencies.coreExtensionPath }),
+        }),
+      ),
+    runProcess: qualifiedProcess,
+    now: dependencies.now,
+    processTimeoutMs: 300_000,
+    maximumOutputBytes: 229_376,
+    requireQualifiedProcess: dependencies.runTask6Process === undefined,
+  });
+  const environmentFingerprint = sha256(
+    JSON.stringify({
+      platform: dependencies.platform,
+      node: process.version,
+      productVersion: version.productVersion,
+      productShellIntegrity: version.productShellIntegrity,
+      coreExtensionIntegrity: version.coreExtensionIntegrity,
+      engine: version.engine,
+      provider: configuration.provider.id,
+      model: configuration.provider.selectedModel,
+      permissionProfile: "FULL_ACCESS",
+      executionScope: "EXPLICIT_OPERATOR_SELECTED",
+      repositoryBranch: repository.branch,
+    }),
+  );
+  const artifact = await runRealManagedChange({
+    repository: repository.root,
+    request: parsedPlan.data,
+    engineHost: host,
+    providerAuthConfigured: true,
+    productSource: { commit: version.sourceCommit, state: version.sourceState },
+    engineRelease: version.engine,
+    providerId: configuration.provider.id,
+    environmentFingerprint,
+    writerLeaseManager,
+    writerLeaseOwnerFingerprint,
+    now: dependencies.now,
+  });
+  line(dependencies.io, JSON.stringify(artifact));
+  return artifact.taskResult === "GO" ? 0 : 2;
+}
+
 async function firstRunCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
   line(dependencies.io, "Hunter Pi — First Run");
   line(
@@ -993,6 +1215,7 @@ function printHelp(io: HpiCliIo): void {
   );
   line(io, "       hpi login | doctor [--json] | version --json");
   line(io, "       hpi smoke tui");
+  line(io, "       hpi change --repo <directory> --plan <file> --json --allow-provider-request");
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin doctor | plugin disable <id>");
   line(io, "       hpi pilot compile --input <file> --json");
@@ -1114,6 +1337,9 @@ export async function runHpiCli(
     if (command === "managed" && arguments_[1] === "fixture") {
       return await managedFixtureCommand(arguments_.slice(2), dependencies, paths);
     }
+    if (command === "change") {
+      return await realChangeCommand(arguments_.slice(1), dependencies, paths);
+    }
     if (command === "plugin") {
       return await pluginCommand(arguments_, dependencies, paths);
     }
@@ -1134,6 +1360,23 @@ export async function runHpiCli(
       errorLine(
         dependencies.io,
         `LaunchStatus=BLOCKED Code=${error.code} NextAction=${error.message}`,
+      );
+      return 2;
+    }
+    if (error instanceof QualifiedPiProcessBlockedError) {
+      const reason =
+        error.reason === "LEASE_CONFLICT" ? "WORKSPACE_BUSY" : "PROCESS_FINALITY_NOT_PROVEN";
+      errorLine(
+        dependencies.io,
+        `ManagedChangeStatus=BLOCKED Reason=${reason} NextAction=${error.message}`,
+      );
+      return 2;
+    }
+    if (error instanceof RealManagedChangeBlockedError) {
+      const message = error.message.replace(/^[A-Z_]+:\s*/u, "");
+      errorLine(
+        dependencies.io,
+        `ManagedChangeStatus=BLOCKED Reason=${error.reasonCode} NextAction=${message}`,
       );
       return 2;
     }

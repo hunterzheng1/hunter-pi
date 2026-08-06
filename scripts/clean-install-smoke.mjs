@@ -9,6 +9,7 @@ const workspaceManifests = [
   "packages/domain/package.json",
   "packages/evidence/package.json",
   "packages/engine-contracts/package.json",
+  "packages/execution/package.json",
   "packages/pi-host/package.json",
   "packages/pilot/package.json",
   "packages/plugin-manager/package.json",

@@ -8,5 +8,9 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../domain" }, { "path": "../engine-contracts" }]
+  "references": [
+    { "path": "../domain" },
+    { "path": "../engine-contracts" },
+    { "path": "../execution" }
+  ]
 }

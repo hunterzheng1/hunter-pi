@@ -43,7 +43,7 @@ export interface CreatePiLaunchPlanOptions {
   readonly paths: HpiPaths;
   readonly configuration: HpiConfiguration;
   readonly cwd: string;
-  readonly purpose: "QUICK" | "LOGIN";
+  readonly purpose: "QUICK" | "LOGIN" | "MANAGED";
   readonly safeMode: boolean;
   readonly providerAuthConfigured: boolean;
   readonly continueSession?: boolean;
@@ -188,7 +188,11 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
         : "The resolved custom/local Provider origin does not match the acknowledged destination.",
     );
   }
-  if (options.purpose === "QUICK" && !options.safeMode && !options.providerAuthConfigured) {
+  if (
+    (options.purpose === "QUICK" || options.purpose === "MANAGED") &&
+    !options.safeMode &&
+    !options.providerAuthConfigured
+  ) {
     throw new HpiLaunchBlockedError(
       "PROVIDER_AUTH_REQUIRED",
       "Run `hpi login` before starting a normal Quick Session.",

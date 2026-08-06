@@ -56,6 +56,12 @@ export const task6PiProcessResultSchema = z.strictObject({
   stderrDigest: fingerprintSchema,
   capturedBytes: z.number().int().nonnegative(),
   outputTruncated: z.boolean(),
+  containment: z
+    .enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE", "TEST_CONTAINED"])
+    .optional(),
+  terminalFinality: z.enum(["FINAL", "NOT_PROVEN"]).optional(),
+  processTreeState: z.enum(["EMPTY", "ACTIVE", "NOT_PROVEN"]).optional(),
+  leaseState: z.enum(["RELEASED", "HELD", "NOT_REQUIRED", "NOT_PROVEN"]).optional(),
 });
 export type Task6PiProcessResult = z.infer<typeof task6PiProcessResultSchema>;
 
@@ -72,6 +78,7 @@ export interface Task6PiEngineHostOptions {
   readonly now?: () => string;
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
+  readonly requireQualifiedProcess?: boolean;
 }
 
 interface StoredOperation {
@@ -109,6 +116,22 @@ function operationBoundarySignature(operation: ExternalOperation): readonly unkn
     operation.cancellationPolicy.mode,
     operation.cancellationPolicy.timeoutMs,
   ];
+}
+
+function hasQualifiedProcessContainment(result: Task6PiProcessResult): boolean {
+  const expectedContainment =
+    process.platform === "win32"
+      ? "WINDOWS_JOB_OBJECT"
+      : process.platform === "linux"
+        ? "LINUX_SUBREAPER_PROCESS_TREE"
+        : undefined;
+  return (
+    expectedContainment !== undefined &&
+    result.containment === expectedContainment &&
+    result.terminalFinality === "FINAL" &&
+    result.processTreeState === "EMPTY" &&
+    result.leaseState === "RELEASED"
+  );
 }
 
 export class PiOperationReplayConflictError extends Error {
@@ -210,6 +233,7 @@ export class Task6PiEngineHost implements EngineHost {
   readonly #now: () => string;
   readonly #processTimeoutMs: number;
   readonly #maximumOutputBytes: number;
+  readonly #requireQualifiedProcess: boolean;
   readonly #operations = new Map<OperationId, StoredOperation>();
   readonly #pendingOperations = new Map<OperationId, PendingOperation>();
   readonly #handles = new Map<string, HandleState>();
@@ -221,13 +245,14 @@ export class Task6PiEngineHost implements EngineHost {
       !Number.isSafeInteger(options.maximumOutputBytes) ||
       options.maximumOutputBytes <= 0
     ) {
-      throw new Error("Task 6 Pi process limits must be positive finite integers");
+      throw new Error("Pi JSON process limits must be positive finite integers");
     }
     this.#launchPlanForWorkspace = options.launchPlanForWorkspace;
     this.#runProcess = options.runProcess ?? runTask6PiJsonProcess;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#processTimeoutMs = options.processTimeoutMs;
     this.#maximumOutputBytes = options.maximumOutputBytes;
+    this.#requireQualifiedProcess = options.requireQualifiedProcess ?? false;
   }
 
   public probe(request: ProbeRequest): Promise<CapabilityReceipt> {
@@ -285,11 +310,11 @@ export class Task6PiEngineHost implements EngineHost {
       workspaceStatus.isSymbolicLink() ||
       canonicalWorkspace !== resolve(parsed.workspaceReference)
     ) {
-      throw new Error("Task 6 Pi workspace must be one exact physical directory");
+      throw new Error("Pi JSON workspace must be one exact physical directory");
     }
     const launchPlan = await this.#launchPlanForWorkspace(canonicalWorkspace);
     if (resolve(launchPlan.cwd) !== canonicalWorkspace) {
-      throw new Error("Task 6 Pi launch plan does not bind the requested workspace");
+      throw new Error("Pi JSON launch plan does not bind the requested workspace");
     }
     const operationReceipt = this.#storeReceipt(
       parsed.operationId,
@@ -360,7 +385,7 @@ export class Task6PiEngineHost implements EngineHost {
           attemptId: state.handle.attemptId,
           kind: "OUTPUT_CAPTURED",
           observedAt: this.#now(),
-          summary: `Pi JSON emitted ${String(processResult.recordCount)} bounded records; content retained by digest only.`,
+          summary: `Pi JSON emitted ${String(processResult.recordCount)} bounded records; containment=${processResult.containment ?? "NOT_PROVEN"} terminalFinality=${processResult.terminalFinality ?? "NOT_PROVEN"}; content retained by digest only.`,
           resourceUsage: { outputBytes: processResult.capturedBytes },
         }),
       ];
@@ -392,7 +417,8 @@ export class Task6PiEngineHost implements EngineHost {
         !processResult.outputTruncated &&
         processResult.framingValid &&
         processResult.exitCode === 0 &&
-        processResult.eventTypes.includes("agent_end");
+        processResult.eventTypes.includes("agent_end") &&
+        (!this.#requireQualifiedProcess || hasQualifiedProcessContainment(processResult));
       return this.#storeReceipt(
         parsed.operationId,
         parsed.fingerprint,
@@ -536,7 +562,7 @@ export class Task6PiEngineHost implements EngineHost {
       operation.expectedTarget.namespace !== expectedTargetNamespace ||
       operation.expectedTarget.reference !== expectedTargetReference
     ) {
-      throw new Error("operation expected target does not match the Task 6 Host target");
+      throw new Error("operation expected target does not match the Pi JSON Host target");
     }
     if (Date.parse(operation.deadline) <= Date.parse(this.#now())) {
       throw new Error(`operation ${operation.operationId} deadline has expired`);
@@ -611,3 +637,11 @@ export class Task6PiEngineHost implements EngineHost {
     );
   }
 }
+
+// Task 6 introduced this implementation. Keep the historical export for its immutable
+// fixtures while exposing the provider-neutral name used by real-project Managed Change.
+export { Task6PiEngineHost as PiJsonEngineHost };
+export type PiJsonEngineHostOptions = Task6PiEngineHostOptions;
+export type PiProcessRequest = Task6PiProcessRequest;
+export type PiProcessResult = Task6PiProcessResult;
+export const runPiJsonProcess = runTask6PiJsonProcess;

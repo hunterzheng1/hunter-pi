@@ -236,8 +236,13 @@ export async function runDeclaredCommandVerification(
   if (check === undefined) {
     throw new Error(`check ${request.checkId} is not declared by the Plan Revision`);
   }
-  if (check.definition.workingDirectoryReference !== "fixture-repository") {
-    throw new Error("Task 6 verifier requires the exact fixture repository working directory");
+  if (
+    check.definition.workingDirectoryReference !== "fixture-repository" &&
+    check.definition.workingDirectoryReference !== "workspace-root"
+  ) {
+    throw new Error(
+      `verification working directory reference ${check.definition.workingDirectoryReference} is not supported`,
+    );
   }
   if (
     !Number.isSafeInteger(request.timeoutMs) ||

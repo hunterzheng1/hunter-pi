@@ -1,6 +1,6 @@
 # User experience
 
-Task 5 implements the bounded developer-preview subset: `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, and plugin doctor/disable. Managed Change, full plugin management, installer/update UI, and other commands remain target designs unless a dated validation record says otherwise.
+Task 5 implements the bounded developer-preview subset: `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, and plugin doctor/disable. Task 12 adds an explicitly scoped JSON-plan Managed Change entry point; conversational planning, full plugin management, installer/update UI, and other commands remain target designs unless a dated validation record says otherwise.
 
 ## Installation experience
 
@@ -82,11 +82,13 @@ Before promotion, Hunter Pi captures the current Git identity and asks whether e
 
 ## Managed Change
 
-A user can start directly:
+A user can start an explicitly scoped local Managed Change directly:
 
 ```powershell
-hpi change "修复刷新令牌过期后重复跳转"
+hpi change --repo D:\Projects\sample --plan .\hpi-change.json --json --allow-provider-request
 ```
+
+The plan must be `hpi-managed-change-request.v1` and declare the goal, non-goals, constraints, exact relative `allowedPaths`, and one independent command check. `--repo` is mandatory; Hunter Pi never silently selects the current directory. The command requires setup, Provider auth metadata, a clean physical Git root, explicit Provider-request authorization, and an operator acknowledgement of the target and plan. It runs one or at most two bounded Agent Attempts through the Task 7 qualified local process host and a durable writer lease, verifies with the declared command in `workspace-root`, reviews every changed path against `allowedPaths`, and leaves the selected working tree uncommitted for explicit operator review. It never commits, pushes, publishes, deploys, or treats Agent return as success.
 
 The interaction is conversational, but the workflow has visible stages:
 
@@ -99,7 +101,7 @@ The user sees:
 
 - goal, non-goals, constraints, and acceptance checks;
 - current Plan Revision and why it changed;
-- isolated worktree path in abbreviated form;
+- selected repository/branch identity and relative changed paths;
 - active Attempt and prior failed Attempts;
 - commands currently running and their time limits;
 - independent Verification results;

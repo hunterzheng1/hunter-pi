@@ -251,4 +251,37 @@ describe("independent command verifier", () => {
       stderrTruncated: false,
     });
   });
+
+  it("accepts the provider-neutral workspace-root working-directory reference for a real project", async () => {
+    const runVerification = requireRunVerification();
+    const { fixture, promotion } = await createPromotedFixture();
+    const planRevision = planRevisionSchema.parse({
+      ...createPlan(promotion),
+      checks: [
+        {
+          ...createPlan(promotion).checks[0],
+          definition: {
+            ...createPlan(promotion).checks[0]?.definition,
+            workingDirectoryReference: "workspace-root",
+          },
+        },
+      ],
+    });
+
+    const result = await runVerification({
+      planRevision,
+      runId: "run_task6",
+      attemptId: "att_task6-1",
+      checkId: "check_task6-result",
+      verificationReceiptId: "verify_task6-workspace-root",
+      evidenceId: "evidence_task6-workspace-root",
+      repository: fixture.repository,
+      environmentFingerprint: fingerprintA,
+      timeoutMs: 5_000,
+      maximumOutputBytes: 4_096,
+    });
+
+    expect(result.receipt.outcome).toBe("FAIL");
+    expect(result.receipt.workspaceFingerprint).toBe(promotion.workspaceFingerprint);
+  });
 });

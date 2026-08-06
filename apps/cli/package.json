@@ -24,6 +24,7 @@
     "@earendil-works/pi-coding-agent": "0.83.0"
   },
   "devDependencies": {
+    "@hunter-pi/execution": "0.0.0",
     "@hunter-pi/managed-change": "0.0.0",
     "@hunter-pi/pilot": "0.0.0",
     "@hunter-pi/pi-host": "0.0.0",

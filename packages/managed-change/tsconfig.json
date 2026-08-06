@@ -12,6 +12,7 @@
     { "path": "../domain" },
     { "path": "../engine-contracts" },
     { "path": "../evidence" },
+    { "path": "../execution" },
     { "path": "../pi-host" },
     { "path": "../verification" },
     { "path": "../workflow-kernel" }

@@ -19,6 +19,7 @@
     "@hunter-pi/domain": "0.0.0",
     "@hunter-pi/engine-contracts": "0.0.0",
     "@hunter-pi/evidence": "0.0.0",
+    "@hunter-pi/execution": "0.0.0",
     "@hunter-pi/pi-host": "0.0.0",
     "@hunter-pi/verification": "0.0.0",
     "@hunter-pi/workflow-kernel": "0.0.0",

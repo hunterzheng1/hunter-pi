@@ -17,7 +17,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0",
+    "@hunter-pi/domain": "0.0.0",
     "@hunter-pi/engine-contracts": "0.0.0",
+    "@hunter-pi/execution": "0.0.0",
     "zod": "4.4.3"
   }
 }

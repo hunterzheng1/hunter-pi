@@ -64,14 +64,24 @@ export {
 } from "./product-launcher.js";
 export { LfOnlyNdjsonDecoder } from "./ndjson.js";
 export {
+  QualifiedPiProcessBlockedError,
+  createQualifiedPiJsonProcess,
+  type QualifiedPiJsonProcessOptions,
+} from "./qualified-pi-process.js";
+export {
   PiProbeStageError,
   runPiPublicInterfaceProbe,
   type RunPiPublicInterfaceProbeOptions,
 } from "./probe.js";
 export {
   PiOperationReplayConflictError,
+  PiJsonEngineHost,
   Task6PiEngineHost,
+  runPiJsonProcess,
   runTask6PiJsonProcess,
+  type PiJsonEngineHostOptions,
+  type PiProcessRequest,
+  type PiProcessResult,
   task6PiProcessResultSchema,
   type Task6PiEngineHostOptions,
   type Task6PiProcessRequest,

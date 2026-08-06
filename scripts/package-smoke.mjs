@@ -13,6 +13,7 @@ import { packCliArtifact } from "./cli-package.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const packageNames = [
   "@hunter-pi/domain",
+  "@hunter-pi/execution",
   "@hunter-pi/evidence",
   "@hunter-pi/engine-contracts",
   "@hunter-pi/pi-host",
@@ -24,6 +25,7 @@ const packageNames = [
 ];
 const packageDirectories = [
   "domain",
+  "execution",
   "evidence",
   "engine-contracts",
   "pi-host",

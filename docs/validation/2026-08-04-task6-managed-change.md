@@ -86,7 +86,7 @@ Result is **GO** only if every item passes; **REVISE** if correctness and all ze
 
 The first authorized request ran from clean packaged source `164fc28ac423ac3cdccf91b9a7f0c36ca51612df`. It preserved the required Provider, Attempt, Verification, review, and cleanup facts, but independent review found that it omitted Pi captured-output bytes and configured three separate full-run capture limits. Its premature local `GO` was replaced by `STOP / NOT_PROVEN`; the corrected artifact hash `dc5db8f72124f0b30f430d60cc8c464637f15f50bd39646544169da1047ef195` remains recoverable in Git history.
 
-After explicit separate authorization, exactly one corrected request ran from the clean packaged product source `e36ee52764065cea02982962e2f84ff9ed3d0034` through `hpi managed fixture --json`. The process exited zero with empty stderr, the Provider request returned an `APPLIED` operation receipt, and Pi emitted 53 bounded JSON records. No automatic retry occurred. Those facts are evidence of this exact request only, not a general Provider capability or production-readiness claim.
+After explicit separate authorization, exactly one corrected request ran from the clean packaged product source `e36ee52764065cea02982962e2f84ff9ed3d0034` through `hpi managed fixture --json --allow-provider-request` and an affirmative confirmation. The process exited zero with empty stderr, the Provider request returned an `APPLIED` operation receipt, and Pi emitted 53 bounded JSON records. No automatic retry occurred. Those facts are evidence of this exact request only, not a general Provider capability or production-readiness claim.
 
 - Attempt 1: `INCOMPLETE / FAILED`, preserved with its exact failure Evidence;
 - Agent return: observed while the Change was `VERIFYING`;

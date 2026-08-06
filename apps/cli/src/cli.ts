@@ -243,12 +243,10 @@ function validateCliArguments(arguments_: readonly string[]): void {
     if (arguments_.length !== 1) throw new HpiCliUsageError();
     return;
   }
-  if (
-    command === "managed" &&
-    arguments_.length === 3 &&
-    arguments_[1] === "fixture" &&
-    arguments_[2] === "--json"
-  ) {
+  if (command === "managed" && arguments_[1] === "fixture") {
+    const options = arguments_.slice(2);
+    assertUniqueFlags(options, new Set(["--json", "--allow-provider-request"]));
+    if (!options.includes("--json")) throw new HpiCliUsageError();
     return;
   }
   if (
@@ -581,6 +579,7 @@ async function loginCommand(dependencies: HpiCliDependencies, paths: HpiPaths): 
 }
 
 async function managedFixtureCommand(
+  arguments_: readonly string[],
   dependencies: HpiCliDependencies,
   paths: HpiPaths,
 ): Promise<number> {
@@ -592,11 +591,28 @@ async function managedFixtureCommand(
     );
     return 2;
   }
+  if (!arguments_.includes("--allow-provider-request")) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_AUTHORIZED NextAction=Rerun with `--allow-provider-request` only after confirming the declared Provider scope.",
+    );
+    return 2;
+  }
   const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
   if (!auth.configured) {
     errorLine(
       dependencies.io,
       "ManagedChangeStatus=BLOCKED Reason=PROVIDER_AUTH_REQUIRED NextAction=Run `hpi login` first.",
+    );
+    return 2;
+  }
+  const confirmed = await dependencies.io.confirm(
+    "This disposable fixture will send one Provider request. Continue?",
+  );
+  if (!confirmed) {
+    errorLine(
+      dependencies.io,
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_REQUEST_NOT_ACKNOWLEDGED NextAction=Rerun only after explicitly acknowledging the Provider request.",
     );
     return 2;
   }
@@ -934,7 +950,7 @@ function printHelp(io: HpiCliIo): void {
   );
   line(io, "       hpi login | doctor [--json] | version --json");
   line(io, "       hpi smoke tui");
-  line(io, "       hpi managed fixture --json");
+  line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin doctor | plugin disable <id>");
   line(io, "       hpi pilot preflight --plan <file> --json");
 }
@@ -1005,7 +1021,7 @@ export async function runHpiCli(
       return await loginCommand(dependencies, paths);
     }
     if (command === "managed" && arguments_[1] === "fixture") {
-      return await managedFixtureCommand(dependencies, paths);
+      return await managedFixtureCommand(arguments_.slice(2), dependencies, paths);
     }
     if (command === "plugin") {
       return await pluginCommand(arguments_, dependencies, paths);

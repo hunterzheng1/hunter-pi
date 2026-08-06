@@ -312,6 +312,13 @@ export class PilotEvaluator {
       );
     }
     if (
+      evidence.taskResults.some(
+        (result) => result.terminalOutcome === "READY" && result.oracleOutcome !== "READY",
+      )
+    ) {
+      zeroToleranceFailures.push("false READY outcome observed");
+    }
+    if (
       evidence.interruptions.some(
         (interruption) => !interruption.historyPreserved || !interruption.sourcePreserved,
       )
@@ -339,6 +346,8 @@ export class PilotEvaluator {
     if (!evidence.privacyGate) zeroToleranceFailures.push("privacy/hash gate failed");
     if (!evidence.storageGate)
       zeroToleranceFailures.push("bounded-storage and critical-reserve gate failed");
+    if (evidence.manualStateEditingRequired)
+      zeroToleranceFailures.push("manual Hunter state editing was required");
     if (evidence.reviewP0P1Count > 0)
       zeroToleranceFailures.push("unresolved P0/P1 review finding remains");
     if (metrics.comparatorFactScore < 0.95)

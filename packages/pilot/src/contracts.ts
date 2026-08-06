@@ -508,7 +508,7 @@ export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
 export const pilotEvidenceSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-evidence.v3"),
+    schemaVersion: z.literal("hpi-pilot-evidence.v4"),
     planFingerprint: fingerprintSchema,
     operatorScope: pilotOperatorScopeSchema,
     machine: pilotMachineProfileSchema,
@@ -523,6 +523,7 @@ export const pilotEvidenceSchema = z
     pluginFixtures: z.array(pilotPluginFixtureSchema).length(5),
     memorySamplesMiB: z.array(nonnegativeNumberSchema).min(30),
     storageGate: z.boolean(),
+    manualStateEditingRequired: z.boolean(),
     privacyGate: z.boolean(),
     providerLatencySeparated: z.boolean(),
     reviewP0P1Count: nonnegativeIntegerSchema,

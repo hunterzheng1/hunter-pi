@@ -5,6 +5,10 @@ import { fingerprintSchema, timestampSchema } from "@hunter-pi/domain";
 import { pilotFingerprint } from "./serialization.js";
 
 const nonEmptyTextSchema = z.string().trim().min(1).max(4_096);
+const pathFreeIdentityTextSchema = nonEmptyTextSchema.refine(
+  (value) => !/[\\/]/u.test(value),
+  "pilot identity text must not contain filesystem separators",
+);
 const stableIdSchema = z
   .string()
   .trim()
@@ -17,12 +21,12 @@ export const pilotMachineProfileSchema = z.strictObject({
   platform: z.literal("win32"),
   architecture: z.literal("x64"),
   osBuild: stableIdSchema,
-  cpuModel: nonEmptyTextSchema,
+  cpuModel: pathFreeIdentityTextSchema,
   logicalCores: z.number().int().positive(),
   memoryMiB: z.number().int().positive(),
   storage: z.enum(["SSD", "HDD", "UNKNOWN"]),
   terminal: stableIdSchema,
-  gitVersion: nonEmptyTextSchema,
+  gitVersion: pathFreeIdentityTextSchema,
   securitySoftwareState: stableIdSchema,
   powerMode: stableIdSchema,
   networkCondition: stableIdSchema,

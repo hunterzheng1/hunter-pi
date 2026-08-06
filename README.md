@@ -4,7 +4,7 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 6 已在有界范围内合并并通过精确 main 双平台与聚合 Evidence 门禁；Task 7 已为独立审查发现的 source-loss、租约竞态、进程逃逸和 verifier 绑定问题生成 Windows/Ubuntu 本地 v2 替换证据。较早收据和 v2 首轮 Ubuntu `NOT_PROVEN` 均保留；独立复审与远端 CI 仍为 `PENDING`。Task 7 合并且后续入口明确授权前，仍不得把 Managed Change 用于真实项目。**
+**Task 6–11 已在各自记录的 provider-neutral、disposable-fixture 或 unsigned developer-preview 边界内合并并通过精确 Windows/Ubuntu 主线门禁；Task 12 的计划、预检和 Evidence evaluator 已实现，但真实 Windows pilot 仍 `NOT_RUN`，daily-use acceptance 仍 `NOT_PROVEN`。当前主分支 `2d6a79579e63102c331769974d0ce33d5ceff280` 的最终 main CI `31064206951` 已通过；这不等于真实用户仓库安全或生产就绪。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。Task 7 新增隔离 worktree、进程边界租约、Windows Job Object 与 Linux subreaper 进程树适配；这些目前只证明临时 fixture 中的 Hunter 契约，真实仓库入口、恢复、第三方插件兼容和生产发布仍未被证明。
 
@@ -33,7 +33,7 @@ hpi
 - `hpi setup` 显示 Provider、endpoint 类别、离线解析的精确 origin、可能外发的数据类别、外部政策引用、未知的 retention/training 事实及 Hunter 可控的 telemetry/startup-network 设置；版本化 acknowledgement 会绑定这些值。拒绝确认会得到 `BLOCKED`，不会启动请求。
 - `hpi smoke tui` 只接受带精确产品壳与 Core SHA-256 的打包制品，并以 Safe Mode 打开 Pi。该模式阻断普通 prompt 输入，但 Pi 的部分内建斜杠命令先于 Extension hook 执行，因此所有 Provider 请求仍标记为 `NOT_PROVEN`。不要发送模型请求或运行其他内建命令；只运行 `/hunter-status`、检查 Hunter 头部后退出。退出码本身不算成功，随后明确确认只记录绑定 product/Engine/source/platform/configuration/`hpi.js` SHA/Core SHA 的本机可变人工 smoke acknowledgement，不是正式 Human Receipt；换产品壳或换 Core 后自动失效。
 - `hpi login` 打开 Pi 管理的登录界面；在 Pi 内运行 `/login`。Pi Engine 自主管理 credential storage；Hunter host 只接收并持久化 `configured/source` 元数据，不提取、复制或输出 token。真实登录或可能收费的请求需要用户自行决定。
-- `hpi managed fixture --json --allow-provider-request` 是 Task 6 的严格验收入口，只会创建并清理 Hunter 自有的临时 Git fixture；它会在显式确认后发起一次真实 Provider 请求，必须使用精确干净制品和已配置登录。没有 `--allow-provider-request` 或拒绝确认时，命令在创建 fixture 前阻断。Task 7 完成前不要把它解释为真实仓库 Managed Change。
+- `hpi managed fixture --json --allow-provider-request` 是 Task 6 的严格验收入口，只会创建并清理 Hunter 自有的临时 Git fixture；它会在显式确认后发起一次真实 Provider 请求，必须使用精确干净制品和已配置登录。没有 `--allow-provider-request` 或拒绝确认时，命令在创建 fixture 前阻断。即使 Task 7–11 已完成各自边界证明，也不要把它解释为真实仓库 Managed Change。
 - 普通 `hpi` 在当前 Git 仓库启动 Quick Session。开发者预览会拒绝任何已启用用户插件；先运行 `hpi plugin doctor` 和 `hpi plugin disable <id>`。`hpi --safe-mode` 不加载用户插件、skills、prompt templates、themes 或 context files，只显式加载 Core，并拦截 Agent 工具写入与 `!` 直接 shell；它不是操作系统沙箱。Core 会对 `.envrc`、`secrets.json`、`token.json`、`service-account.json` 等明确的 credential-like 路径要求确认（Safe Mode 阻断），即使选择 Full Access 也不会预批准；但它不能仅凭路径识别任意文件内容，因此界面明确显示 `CredentialGuard=NAMED_PATHS_ONLY / ContentDetection=NOT_PROVEN`。每次 Quick、login、smoke 启动都会先检查隔离 Session 树；但 Pi 的 `/share`、`/import`、`/export`、`/compact`、`/trust`、设置及其他内建命令属于用户直接操作，不受全局 Hunter tool policy 保证，开发者预览中应避免使用这些命令。特别是 `/share` 可通过 GitHub CLI 上传完整会话 HTML，且 Task 5 无法在公开 Extension hook 中插入 Hunter 确认或 Receipt，因此显示为 `ShareCommand=NOT_MEDIATED / RemoteWriteGuarantee=NOT_PROVEN`。
 - Quick Session 退出只记录 `PROCESS_EXIT` 和 `VerifiedChange=NOT_CLAIMED`，不会伪装成已验证交付。
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PilotPlanCompiler,
   PilotEvaluator,
   nearestRank,
   pilotEvidenceSchema,
@@ -10,13 +11,13 @@ import {
 import { fixtureFingerprint, fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import {
   completePilotExecutionPlan,
+  completePilotPlanInput,
   firstSourceFingerprint,
   secondRepositoryFingerprint,
   secondSourceFingerprint,
 } from "./support/task12-plan-fixture.js";
 
-function completeEvidence(): PilotEvidence {
-  const plan = completePilotExecutionPlan();
+function completeEvidence(plan = completePilotExecutionPlan()): PilotEvidence {
   const targetById = new Map(plan.repositoryTargets.map((target) => [target.targetId, target]));
   const acceptanceCheckById = new Map(
     plan.acceptanceChecks.map((check) => [check.checkId, check.definitionFingerprint]),
@@ -40,7 +41,7 @@ function completeEvidence(): PilotEvidence {
     };
   });
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v3",
+    schemaVersion: "hpi-pilot-evidence.v4",
     planFingerprint: plan.planFingerprint,
     operatorScope: plan.operatorScope,
     machine: plan.machineProfile,
@@ -61,7 +62,7 @@ function completeEvidence(): PilotEvidence {
       acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
       terminalOutcome: "READY" as const,
       oracleOutcome: oracle.expectedOutcome,
-      correct: true,
+      correct: oracle.expectedOutcome === "READY",
       sourcePreserved: true,
       rawSecretLeakage: false,
       providerSendAcknowledged: true,
@@ -115,6 +116,7 @@ function completeEvidence(): PilotEvidence {
     })),
     memorySamplesMiB: Array.from({ length: 30 }, () => 512),
     storageGate: true,
+    manualStateEditingRequired: false,
     privacyGate: true,
     providerLatencySeparated: true,
     reviewP0P1Count: 0,
@@ -207,6 +209,47 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     );
     expect(decision.outcome).toBe("STOP");
     expect(decision.reasons.join(" ")).toMatch(/source|zero-tolerance/u);
+  });
+
+  it("returns STOP for a false READY instead of treating it as a quantitative miss", () => {
+    const plan = new PilotPlanCompiler().compile({
+      ...completePilotPlanInput(),
+      tasks: completePilotPlanInput().tasks.map((task, index) =>
+        index === 0 ? { ...task, expectedOutcome: "BLOCKED" as const } : task,
+      ),
+    });
+    const decision = new PilotEvaluator().evaluate(completeEvidence(plan), plan);
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/false READY|zero-tolerance/u);
+  });
+
+  it("requires an explicit no-manual-state-edit receipt before evaluating daily-use readiness", () => {
+    const evidence = {
+      ...completeEvidence(),
+      schemaVersion: "hpi-pilot-evidence.v4" as const,
+      manualStateEditingRequired: false,
+    };
+    expect(() => pilotEvidenceSchema.parse(evidence)).not.toThrow();
+
+    const decision = new PilotEvaluator().evaluate(
+      { ...evidence, manualStateEditingRequired: true },
+      completePilotExecutionPlan(),
+    );
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/manual.*state|zero-tolerance/u);
+  });
+
+  it("rejects legacy Evidence and incomplete v4 receipts fail closed", () => {
+    const evidence = completeEvidence();
+    expect(() =>
+      pilotEvidenceSchema.parse({ ...evidence, schemaVersion: "hpi-pilot-evidence.v3" }),
+    ).toThrow(/schemaVersion|v4/u);
+
+    const withoutManualStateReceipt: Record<string, unknown> = { ...evidence };
+    delete withoutManualStateReceipt["manualStateEditingRequired"];
+    expect(() => pilotEvidenceSchema.parse(withoutManualStateReceipt)).toThrow(
+      /manualStateEditingRequired/u,
+    );
   });
 
   it("does not allow self-reported correctness or duplicate comparator facts to produce GO", () => {

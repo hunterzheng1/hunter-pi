@@ -30,6 +30,16 @@ No user repository was selected or modified. No credential, token, cookie, priva
 
 The next valid transition is a separately recorded pilot run whose plan names the two repositories and explicit authorization scope, followed by the complete Task 12 Evidence contract and exact source/artifact-bound Windows/Ubuntu receipts. Until that Archive exists, daily-use GO remains prohibited.
 
+## Follow-on hosted CI history (2026-08-07)
+
+The append-only PR #38 history after this boundary record retains the following exact-head results:
+
+- PR run `31124466020` for head `0cd71c5` passed Windows quality, but its Windows Task 7 receipt failed at `TEST_EXECUTION`; Ubuntu quality and Task 7 were not acquired by hosted runners, so both Evidence aggregators were skipped.
+- Manual run `31124251190` for the same head passed Windows quality and Windows Task 7, but Ubuntu quality and Task 7 were not acquired by hosted runners; its Evidence aggregators were skipped. This is a platform-run result, not a complete Windows/Ubuntu CI pass.
+- Eight consecutive local Windows platform-suite repetitions on the clean head passed; the hosted Windows `TEST_EXECUTION` failure was not reproduced locally. These local repetitions do not replace the required remote Ubuntu and exact PR gates.
+
+These results preserve the distinction between a product/test failure and a hosted-runner failure. They do not change the Task 12 disposition: the real pilot remains `NOT_PROVEN` / `NOT_RUN`.
+
 ## Source records
 
 - [Task 12 plan](../plans/2026-08-05-task12-daily-use-pilot.md)

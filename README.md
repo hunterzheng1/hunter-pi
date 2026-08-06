@@ -4,7 +4,7 @@ Hunter Pi 的目标是成为一个面向个人开发者、可独立安装和使�
 
 ## 当前状态
 
-**Task 6–11 已在各自记录的 provider-neutral、disposable-fixture 或 unsigned developer-preview 边界内合并并通过精确 Windows/Ubuntu 主线门禁；Task 12 的计划、预检和 Evidence evaluator 已实现，但真实 Windows pilot 仍 `NOT_RUN`，daily-use acceptance 仍 `NOT_PROVEN`。当前主分支 `2d6a79579e63102c331769974d0ce33d5ceff280` 的最终 main CI `31064206951` 已通过；这不等于真实用户仓库安全或生产就绪。**
+**Task 6–11 已在各自记录的 provider-neutral、disposable-fixture 或 unsigned developer-preview 边界内合并并通过精确 Windows/Ubuntu 主线门禁；Task 12 的计划、预检和 Evidence evaluator 已实现，但真实 Windows pilot 仍 `NOT_RUN`，daily-use acceptance 仍 `NOT_PROVEN`。最后通过完整 main CI 的产品代码提交为 `2d6a79579e63102c331769974d0ce33d5ceff280`（CI `31064206951`）；其后的提交仅同步文档，不改变运行时代码。这不等于真实用户仓库安全或生产就绪。**
 
 本仓库已建立 Node.js 24、严格 ESM TypeScript、npm workspaces、仓库 Doctor 与 Windows/Ubuntu CI 基线，并实现严格领域 schema、command/event Workflow Kernel、provider-neutral Engine Host contract、确定性 Fake Host、共享 contract suite、不可变事件/Evidence，以及固定 `@earendil-works/pi-coding-agent@0.83.0` 的公共接口探针。Task 6 又增加了临时 fixture 提升、两次 Attempt、独立命令验证、确定性 review 和可移植 Evidence。Task 7 新增隔离 worktree、进程边界租约、Windows Job Object 与 Linux subreaper 进程树适配；这些目前只证明临时 fixture 中的 Hunter 契约，真实仓库入口、恢复、第三方插件兼容和生产发布仍未被证明。
 

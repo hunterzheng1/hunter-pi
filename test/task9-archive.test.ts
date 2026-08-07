@@ -446,7 +446,7 @@ describe("Task 9 Run Archive", () => {
         operationFingerprint: `sha256:${"d".repeat(64)}`,
       }),
     ).rejects.toThrow(/identity|operation/u);
-  });
+  }, 30_000);
 
   it("rejects file URLs and non-home POSIX paths from portable Archives", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-archive-paths-");

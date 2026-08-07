@@ -4,7 +4,7 @@
 
 `NOT_PROVEN` / `NOT_RUN`.
 
-At the time this boundary record was authored, pre-merge `main` was `29d2ef2` (`docs: close Task 12 CI evidence`) and its exact main CI run [`31104828696`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31104828696) passed the recorded Windows, Ubuntu, containment, Task 7 Evidence, and Pi Evidence jobs. The record was then merged in `b37f8fb`; its exact main CI run [`31109317291`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31109317291) also passed all six jobs. These receipts prove the checked-in implementation and its provider-neutral verification gates at their documented scope; they do not constitute a Task 12 real-use acceptance.
+At the time this boundary record was authored, pre-merge `main` was `29d2ef2` (`docs: close Task 12 CI evidence`) and its exact main CI run [`31104828696`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31104828696) passed the recorded Windows, Ubuntu, containment, Task 7 Evidence, and Pi Evidence jobs. The merged Task 12 product/evidence baseline `b37f8fb` then passed exact main CI [`31109317291`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31109317291), and the follow-on documentation-only head `ac1d7ae` passed exact main CI [`31113254777`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31113254777). These receipts prove the checked-in implementation and its provider-neutral verification gates at their documented scope; they do not constitute a Task 12 real-use acceptance.
 
 ## Proven within the recorded bounds
 
@@ -29,6 +29,16 @@ These are evidence-bound conditions, not assumptions that can be filled from the
 No user repository was selected or modified. No credential, token, cookie, private prompt, or unredacted path was read into Evidence. No Provider or paid request, publish, deploy, push, or irreversible production operation was initiated.
 
 The next valid transition is a separately recorded pilot run whose plan names the two repositories and explicit authorization scope, followed by the complete Task 12 Evidence contract and exact source/artifact-bound Windows/Ubuntu receipts. Until that Archive exists, daily-use GO remains prohibited.
+
+## Follow-on hosted CI history (2026-08-07)
+
+The append-only PR #38 history after this boundary record retains the following exact-head results:
+
+- PR run `31124466020` for head `0cd71c5` passed Windows quality, but its Windows Task 7 receipt failed at `TEST_EXECUTION`; Ubuntu quality and Task 7 were not acquired by hosted runners, so both Evidence aggregators were skipped.
+- Manual run `31124251190` for the same head passed Windows quality and Windows Task 7, but Ubuntu quality and Task 7 were not acquired by hosted runners; its Evidence aggregators were skipped. This is a platform-run result, not a complete Windows/Ubuntu CI pass.
+- Eight consecutive local Windows platform-suite repetitions on the clean head passed; the hosted Windows `TEST_EXECUTION` failure was not reproduced locally. These local repetitions do not replace the required remote Ubuntu and exact PR gates.
+
+These results preserve the distinction between a product/test failure and a hosted-runner failure. They do not change the Task 12 disposition: the real pilot remains `NOT_PROVEN` / `NOT_RUN`.
 
 ## Source records
 

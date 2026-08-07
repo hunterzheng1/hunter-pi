@@ -443,7 +443,7 @@ describe("hpi command", () => {
     expect(output).toContain("InteractiveTui=NOT_PROVEN");
     expect(capturedPlan?.environment["HUNTER_PI_MODE"]).toBe("LOGIN");
     expect(capturedPlan?.environment["HUNTER_PI_BLOCK_PROMPT_INPUT"]).toBe("1");
-  });
+  }, 15_000);
 
   it("rejects invalid setup values before printing or persisting them", async () => {
     const { dependencies, io } = await createDependencies({ confirmed: false });

@@ -322,8 +322,8 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     }
   }, 15_000);
 
-  // Linux hosted runners can pause the helper while the full suite is running;
-  // keep the product timeout exact while giving final process-tree reconciliation
+  // Hosted runners can pause the helper while the full suite is running;
+  // keep the product timeouts exact while giving final process-tree reconciliation
   // a bounded host-sensitive test budget.
   it("times out and reconciles the exact nested process tree", async () => {
     const fixture = await createFixture();
@@ -362,7 +362,7 @@ describe.runIf(supportedPlatform)("local managed process platform", () => {
     } finally {
       if (isProcessAlive(detachedPid)) process.kill(detachedPid, "SIGKILL");
     }
-  }, 30_000);
+  }, 180_000);
 
   it("keeps finality pending while a descendant holds inherited output handles", async () => {
     const fixture = await createFixture();

@@ -20,3 +20,9 @@ Git inspection uses a minimal environment with global/system configuration disab
 - `npm run package-smoke`, `npm run clean-install-smoke`, and `npm run probe:pi`: passed.
 
 All repositories used by these tests were temporary Git fixtures. No user repository, Provider credential, paid request, or external network operation was used. This evidence does not create the required dated Task 12 real-use Archive.
+
+## Hosted CI stabilization
+
+The first exact merged-head main run `31150894319` failed only on Windows: the out-of-scope-path integration test at `test/real-managed-change.test.ts` exceeded Vitest's default 5-second test timeout while performing its Git and child-process fixture work. The assertion did not fail; the subsequent Pi receipt upload was absent because the test step had already stopped. The same PR run had passed, and the test completes locally, but the hosted timing variance exposed an under-sized test timeout.
+
+The real Managed Change and CLI integration suites now use an explicit finite 30-second Vitest suite timeout, matching the existing Git/process integration-suite policy. This changes test-harness tolerance only; product command and Engine timeouts remain unchanged.

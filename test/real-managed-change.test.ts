@@ -133,7 +133,7 @@ function createMutationHost(
   });
 }
 
-describe("real-project Managed Change runner", () => {
+describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
   it("rejects control characters in the independent check definition", () => {
     expect(
       realManagedChangeRequestSchema.safeParse({

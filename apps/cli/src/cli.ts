@@ -83,7 +83,7 @@ export interface HpiCliDependencies {
   readonly io: HpiCliIo;
   readonly now: () => string;
   readonly inspectRepository: (cwd: string) => Promise<HpiRepositoryState>;
-  readonly inspectPilotTarget: (
+  readonly inspectPilotTarget?: (
     repository: string,
     targetId: string,
   ) => Promise<PilotRepositoryTargetReceipt>;
@@ -127,27 +127,107 @@ export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
   return Promise.resolve({ root, name: basename(root), branch, dirty });
 }
 
+function minimalPilotGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "PATH", "TEMP", "TMP"]) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return {
+    ...environment,
+    GIT_CONFIG_NOGLOBAL: "1",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    NO_COLOR: "1",
+  };
+}
+
 function runPilotGit(
   repository: string,
   arguments_: readonly string[],
 ): { readonly ok: boolean; readonly stdout: string } {
-  const result = spawnSync("git", ["-C", repository, ...arguments_], {
-    env: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_OPTIONAL_LOCKS: "0",
-      GIT_TERMINAL_PROMPT: "0",
-      NO_COLOR: "1",
+  const result = spawnSync(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "-C",
+      repository,
+      ...arguments_,
+    ],
+    {
+      env: minimalPilotGitEnvironment(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      shell: false,
+      timeout: 10_000,
+      windowsHide: true,
     },
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    shell: false,
-    timeout: 10_000,
-    windowsHide: true,
-  });
+  );
   return {
     ok: result.error === undefined && result.status === 0,
     stdout: result.stdout,
+  };
+}
+
+type PilotTargetSnapshot =
+  | {
+      readonly ok: true;
+      readonly repository: string;
+      readonly branch: string;
+      readonly baseCommit: string;
+      readonly baseTree: string;
+      readonly dirty: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: Parameters<typeof createPilotRepositoryTargetBlockedReceipt>[1];
+    };
+
+function capturePilotTargetSnapshot(repository: string): PilotTargetSnapshot {
+  const topLevel = runPilotGit(repository, ["rev-parse", "--show-toplevel"]);
+  if (!topLevel.ok) return { ok: false, reason: "PILOT_TARGET_NOT_GIT_ROOT" };
+  let topLevelPath: string;
+  try {
+    topLevelPath = resolve(topLevel.stdout.trim());
+  } catch {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  if (topLevelPath !== repository) return { ok: false, reason: "PILOT_TARGET_NOT_GIT_ROOT" };
+
+  const baseCommit = runPilotGit(repository, ["rev-parse", "HEAD"]);
+  const baseTree = runPilotGit(repository, ["rev-parse", "HEAD^{tree}"]);
+  if (!baseCommit.ok || !baseTree.ok) {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  const branch = runPilotGit(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (!branch.ok) {
+    const headName = runPilotGit(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    return {
+      ok: false,
+      reason:
+        headName.ok && headName.stdout.trim() === "HEAD"
+          ? "PILOT_TARGET_DETACHED_HEAD"
+          : "PILOT_TARGET_INSPECTION_FAILED",
+    };
+  }
+  const workspaceStatus = runPilotGit(repository, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  if (!workspaceStatus.ok) return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  return {
+    ok: true,
+    repository,
+    branch: branch.stdout.trim(),
+    baseCommit: baseCommit.stdout.trim(),
+    baseTree: baseTree.stdout.trim(),
+    dirty: workspaceStatus.stdout.length > 0,
   };
 }
 
@@ -168,45 +248,26 @@ export async function inspectHpiPilotTarget(
     if (repository === undefined) return blocked("PILOT_TARGET_NOT_GIT_ROOT");
     if (repository !== resolved) return blocked("PILOT_TARGET_NOT_CANONICAL");
 
-    const topLevel = runPilotGit(repository, ["rev-parse", "--show-toplevel"]);
-    if (!topLevel.ok) return blocked("PILOT_TARGET_NOT_GIT_ROOT");
-    if (resolve(topLevel.stdout.trim()) !== repository) {
-      return blocked("PILOT_TARGET_NOT_GIT_ROOT");
-    }
-    const baseCommit = runPilotGit(repository, ["rev-parse", "HEAD"]);
-    const baseTree = runPilotGit(repository, ["rev-parse", "HEAD^{tree}"]);
-    if (!baseCommit.ok || !baseTree.ok) return blocked("PILOT_TARGET_INSPECTION_FAILED");
-    const branch = runPilotGit(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-    if (!branch.ok) {
-      const headName = runPilotGit(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
-      return headName.ok && headName.stdout.trim() === "HEAD"
-        ? blocked("PILOT_TARGET_DETACHED_HEAD")
-        : blocked("PILOT_TARGET_INSPECTION_FAILED");
-    }
-    const workspaceStatus = runPilotGit(repository, [
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=all",
-    ]);
-    if (!workspaceStatus.ok) return blocked("PILOT_TARGET_INSPECTION_FAILED");
-    if (workspaceStatus.stdout.length > 0) {
-      return createPilotRepositoryTargetReceipt({
-        targetId,
-        canonicalRepositoryIdentity: repository,
-        branch: branch.stdout.trim(),
-        baseCommit: baseCommit.stdout.trim(),
-        baseTree: baseTree.stdout.trim(),
-        dirty: true,
-      });
+    const first = capturePilotTargetSnapshot(repository);
+    if (!first.ok) return blocked(first.reason);
+    const second = capturePilotTargetSnapshot(repository);
+    if (!second.ok) return blocked(second.reason);
+    if (
+      first.repository !== second.repository ||
+      first.branch !== second.branch ||
+      first.baseCommit !== second.baseCommit ||
+      first.baseTree !== second.baseTree ||
+      first.dirty !== second.dirty
+    ) {
+      return blocked("PILOT_TARGET_CHANGED_DURING_INSPECTION");
     }
     return createPilotRepositoryTargetReceipt({
       targetId,
       canonicalRepositoryIdentity: repository,
-      branch: branch.stdout.trim(),
-      baseCommit: baseCommit.stdout.trim(),
-      baseTree: baseTree.stdout.trim(),
-      dirty: false,
+      branch: first.branch,
+      baseCommit: first.baseCommit,
+      baseTree: first.baseTree,
+      dirty: first.dirty,
     });
   } catch {
     return blocked("PILOT_TARGET_INSPECTION_FAILED");
@@ -1343,7 +1404,10 @@ async function pilotTargetCommand(
   const repository = optionValue(arguments_, "--repo");
   const targetId = optionValue(arguments_, "--target-id");
   if (repository === undefined || targetId === undefined) throw new HpiCliUsageError();
-  const receipt = await dependencies.inspectPilotTarget(repository, targetId);
+  const receipt = await (dependencies.inspectPilotTarget ?? inspectHpiPilotTarget)(
+    repository,
+    targetId,
+  );
   line(dependencies.io, JSON.stringify(receipt));
   return receipt.status === "READY" ? 0 : 2;
 }

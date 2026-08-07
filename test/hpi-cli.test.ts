@@ -226,6 +226,30 @@ describe("hpi command", () => {
     expect(authChecked).toBe(false);
   });
 
+  it("falls back to the built-in target inspector for older dependency callers", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const selectedRepository = join(root, "not-a-repository");
+    const legacyDependencies = { ...dependencies };
+    delete legacyDependencies.inspectPilotTarget;
+
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "target",
+          "--repo",
+          selectedRepository,
+          "--target-id",
+          "repository-alpha",
+          "--json",
+        ],
+        legacyDependencies,
+      ),
+    ).toBe(2);
+    expect(io.stdout.join("")).toContain('"status":"BLOCKED"');
+    expect(io.stdout.join("")).not.toContain(selectedRepository);
+  });
+
   it("runs only the safe pilot preflight and never echoes an invalid plan", async () => {
     const { dependencies, io, root } = await createDependencies();
     const planPath = join(root, "pilot-plan.json");

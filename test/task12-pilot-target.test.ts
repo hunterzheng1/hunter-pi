@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -78,6 +78,35 @@ describe("Task 12 pilot target inspection", () => {
     expect(receipt.status).toBe("BLOCKED");
     expect(receipt.reasons).toContain("PILOT_TARGET_DETACHED_HEAD");
     expect(JSON.stringify(receipt)).not.toContain(repository);
+  });
+
+  it("blocks a directory symlink or junction without resolving it into a target", async () => {
+    const repository = await createGitFixture();
+    const linked = join(dirname(repository), "linked-repository");
+    await symlink(repository, linked, process.platform === "win32" ? "junction" : "dir");
+
+    const receipt = await inspectHpiPilotTarget(linked, "repository-alpha");
+
+    expect(receipt.status).toBe("BLOCKED");
+    expect(receipt.reasons).toContain("PILOT_TARGET_NOT_GIT_ROOT");
+    expect(JSON.stringify(receipt)).not.toContain(linked);
+  });
+
+  it("does not execute a repository-configured fsmonitor command", async () => {
+    const repository = await createGitFixture();
+    const script = join(dirname(repository), "pilot-fsmonitor.mjs");
+    const marker = join(dirname(repository), "pilot-fsmonitor.marker");
+    await writeFile(
+      script,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "executed");\n`,
+      "utf8",
+    );
+    runGit(repository, ["config", "core.fsmonitor", `node "${script}"`]);
+
+    const receipt = await inspectHpiPilotTarget(repository, "repository-alpha");
+
+    expect(receipt.status).toBe("READY");
+    await expect(access(marker)).rejects.toThrow();
   });
 
   it("blocks a non-root path without exposing the selected path", async () => {

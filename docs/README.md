@@ -64,6 +64,7 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - [Task 7 worktree, lease, and managed-process validation](validation/2026-08-04-task7-worktree-process.md)
 - [Task 8 verification adequacy validation](validation/2026-08-05-task8-verification-adequacy.md)
 - [Testing strategy](testing-strategy.md)
+- [CI operations and GitHub control-plane budget](ci-operations.md)
 - [Plan index](plans/README.md)
 - [Foundation-to-daily-use execution plan](plans/2026-08-03-foundation-to-daily-use.md)
 - [Task 7 worktree, leases, and process-host execution](plans/2026-08-04-task7-worktree-leases-process-host.md)

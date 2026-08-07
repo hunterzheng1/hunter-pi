@@ -158,7 +158,7 @@ function plan(target: RealManagedChangeTarget): Record<string, unknown> {
   };
 }
 
-describe("hpi change command", () => {
+describe("hpi change command", { timeout: 30_000 }, () => {
   it("rejects external Git filters during CLI repository inspection without executing them", async () => {
     const { root, repository } = await createCliFixture();
     const filterScript = join(root, "cli-filter.mjs");

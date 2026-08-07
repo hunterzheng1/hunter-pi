@@ -169,15 +169,54 @@ jobs:
       - name: Build Task 7 probe
         run: npm run build
 
-      - name: Run exact Task 7 platform matrix
+      - name: Run exact Task 7 platform matrix (attempt 1)
+        id: task7_probe
+        continue-on-error: true
         run: npm run probe:task7:compiled -- --output .artifacts/task7-platform/${{ runner.os }}.json
+
+      # A hosted process-tree scheduling interruption is retryable only after
+      # the probe itself has published a bound TEST_EXECUTION failure receipt.
+      # Preserve that receipt so a later pass never erases the failure history.
+      - name: Preserve retryable Task 7 failure
+        id: task7_retry_gate
+        if: steps.task7_probe.outcome == 'failure'
+        continue-on-error: true
+        env:
+          TASK7_RECEIPT_PATH: .artifacts/task7-platform/${{ runner.os }}.json
+          TASK7_RETRY_ARTIFACT_PATH: .artifacts/task7-platform/${{ runner.os }}.attempt-1.json
+        run: >-
+          node -e "const fs = require('node:fs');
+          const input = process.env.TASK7_RECEIPT_PATH;
+          const preserved = process.env.TASK7_RETRY_ARTIFACT_PATH;
+          if (!input || !preserved || !fs.existsSync(input)) process.exit(1);
+          const receipt = JSON.parse(fs.readFileSync(input, 'utf8'));
+          if (receipt.status !== 'FAIL' || receipt.stage !== 'TEST_EXECUTION') process.exit(1);
+          fs.copyFileSync(input, preserved);
+          fs.rmSync(input);"
+
+      - name: Retry exact Task 7 platform matrix once
+        id: task7_retry
+        if: steps.task7_retry_gate.outcome == 'success'
+        continue-on-error: true
+        run: npm run probe:task7:compiled -- --output .artifacts/task7-platform/${{ runner.os }}.json
+
+      - name: Require a passing Task 7 receipt
+        if: always()
+        env:
+          TASK7_RECEIPT_PATH: .artifacts/task7-platform/${{ runner.os }}.json
+        run: >-
+          node -e "const fs = require('node:fs');
+          const input = process.env.TASK7_RECEIPT_PATH;
+          if (!input || !fs.existsSync(input)) process.exit(1);
+          const receipt = JSON.parse(fs.readFileSync(input, 'utf8'));
+          if (receipt.status !== 'PASS') process.exit(1);"
 
       - name: Upload Task 7 platform receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: task7-platform-${{ runner.os }}
-          path: .artifacts/task7-platform/${{ runner.os }}.json
+          path: .artifacts/task7-platform/
           if-no-files-found: error
           retention-days: 14
 

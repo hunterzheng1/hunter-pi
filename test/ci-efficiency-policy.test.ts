@@ -60,4 +60,22 @@ describe("GitHub Actions CI efficiency policy", () => {
     );
     expect(workflow).not.toMatch(/npm run compare:task7-evidence(?:\s|$)/u);
   });
+
+  it("preserves and retries only structured Task 7 test-execution failures once", () => {
+    const task7Section =
+      /\x20{2}task7-platform:\r?\n([\s\S]*?)\r?\n\x20{2}task7-evidence-consistency:/u.exec(
+        workflow,
+      )?.[1];
+
+    expect(task7Section).toMatch(/id: task7_probe/u);
+    expect(task7Section).toMatch(/continue-on-error: true/u);
+    expect(task7Section).toMatch(/id: task7_retry_gate/u);
+    expect(task7Section).toMatch(/if: steps\.task7_probe\.outcome == 'failure'/u);
+    expect(task7Section).toMatch(/receipt\.stage !== 'TEST_EXECUTION'/u);
+    expect(task7Section).toMatch(/attempt-1/u);
+    expect(task7Section).toMatch(/id: task7_retry/u);
+    expect(task7Section).toMatch(/if: steps\.task7_retry_gate\.outcome == 'success'/u);
+    expect(task7Section).toMatch(/Require a passing Task 7 receipt/u);
+    expect(task7Section).toMatch(/status !== 'PASS'/u);
+  });
 });

@@ -45,9 +45,11 @@ import {
   type EngineObservation,
 } from "@hunter-pi/engine-contracts";
 import {
+  canonicalJson,
   createPortableEvidenceEnvelope,
   createRunSummaryEvidence,
   redactPortableText,
+  sha256Fingerprint,
 } from "@hunter-pi/evidence";
 import { runDeclaredCommandVerification } from "@hunter-pi/verification";
 import {
@@ -82,6 +84,20 @@ const processArgumentSchema = z
       }),
     "terminal control characters are forbidden",
   );
+
+const managedChangeTargetIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u, "target identities must be stable and path-free");
+
+export const realManagedChangeTargetSchema = z.strictObject({
+  targetId: managedChangeTargetIdSchema,
+  selectionMode: z.literal("EXPLICIT_OPERATOR_SELECTED"),
+  repositoryFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  targetReferenceFingerprint: fingerprintSchema,
+});
+export type RealManagedChangeTarget = z.infer<typeof realManagedChangeTargetSchema>;
 
 function normalizeRelativePath(value: string): string {
   const normalized = value.trim().replaceAll("\\", "/");
@@ -124,13 +140,14 @@ const projectCheckSchema = z.strictObject({
 
 export const realManagedChangeRequestSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-managed-change-request.v1"),
+    schemaVersion: z.literal("hpi-managed-change-request.v2"),
     title: terminalSafeTextSchema,
     goal: terminalSafeTextSchema,
     nonGoals: z.array(terminalSafeTextSchema).max(64),
     constraints: z.array(terminalSafeTextSchema).max(64),
     allowedPaths: z.array(projectPathSchema).min(1).max(256),
     check: projectCheckSchema,
+    target: realManagedChangeTargetSchema,
   })
   .superRefine((request, context) => {
     if (new Set(request.allowedPaths).size !== request.allowedPaths.length) {
@@ -174,7 +191,7 @@ const resourceAccountingSchema = z.strictObject({
 });
 
 export const realManagedChangeEvidenceSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-managed-change.v1"),
+  schemaVersion: z.literal("hpi-managed-change.v2"),
   observedAt: z.iso.datetime({ offset: true }),
   taskResult: z.enum(["GO", "REVISE", "STOP"]),
   productSource: productSourceSchema,
@@ -194,6 +211,7 @@ export const realManagedChangeEvidenceSchema = z.strictObject({
     baseCommit: z.string().regex(/^[a-f0-9]{40}$/u),
     workspaceFingerprint: fingerprintSchema,
     sourceFingerprint: fingerprintSchema,
+    target: realManagedChangeTargetSchema,
   }),
   plan: z.strictObject({
     planRevisionId: z.string().regex(/^plan_[A-Za-z0-9][A-Za-z0-9.-]*$/u),
@@ -254,7 +272,9 @@ export type RealManagedChangeReasonCode =
   | "PLAN_CONTENT_NOT_PORTABLE"
   | "UNSUPPORTED_PROJECT_PATH"
   | "WORKSPACE_DRIFT"
-  | "WORKSPACE_BUSY";
+  | "WORKSPACE_BUSY"
+  | "TARGET_IDENTITY_MISMATCH"
+  | "EXTERNAL_FILTER_CONFIGURED";
 
 export class RealManagedChangeBlockedError extends Error {
   public readonly reasonCode: RealManagedChangeReasonCode;
@@ -283,6 +303,10 @@ function idSuffix(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
 }
 
+function pilotTargetFingerprint(value: unknown): Fingerprint {
+  return sha256Fingerprint(canonicalJson(value));
+}
+
 function minimalGitEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const name of [
@@ -299,6 +323,7 @@ function minimalGitEnvironment(): NodeJS.ProcessEnv {
   }
   return {
     ...environment,
+    GIT_CONFIG_NOGLOBAL: "1",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0",
@@ -306,14 +331,41 @@ function minimalGitEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
+interface GitCommandResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly error: Error | undefined;
+}
+
+function runGitCommand(repository: string, arguments_: readonly string[]): GitCommandResult {
+  const result = spawnSync(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "-C",
+      repository,
+      ...arguments_,
+    ],
+    {
+      env: minimalGitEnvironment(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      shell: false,
+      windowsHide: true,
+    },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    error: result.error,
+  };
+}
+
 function runGit(repository: string, arguments_: readonly string[]): string {
-  const result = spawnSync("git", ["-C", repository, ...arguments_], {
-    env: minimalGitEnvironment(),
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-    shell: false,
-    windowsHide: true,
-  });
+  const result = runGitCommand(repository, arguments_);
   if (result.error !== undefined || result.status !== 0) {
     throw new RealManagedChangeBlockedError(
       "NOT_GIT_ROOT",
@@ -331,6 +383,9 @@ interface GitRepositorySnapshot {
   readonly status: string;
   readonly workspaceFingerprint: Fingerprint;
   readonly sourceFingerprint: Fingerprint;
+  readonly pilotRepositoryFingerprint: Fingerprint;
+  readonly pilotSourceFingerprint: Fingerprint;
+  readonly pilotTargetReferenceFingerprint: Fingerprint;
 }
 
 async function inspectGitRepository(repositoryInput: string): Promise<GitRepositorySnapshot> {
@@ -359,6 +414,28 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
   const baseCommit = runGit(repository, ["rev-parse", "HEAD"]).trim();
   const baseTree = runGit(repository, ["rev-parse", "HEAD^{tree}"]).trim();
   const branch = runGit(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"]).trim();
+  const filterConfiguration = runGitCommand(repository, [
+    "config",
+    "--local",
+    "--name-only",
+    "--get-regexp",
+    "^filter\\..*\\.(clean|process|smudge)$",
+  ]);
+  if (
+    filterConfiguration.error !== undefined ||
+    (filterConfiguration.status !== 0 && filterConfiguration.status !== 1)
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "NOT_GIT_ROOT",
+      "the selected Git repository configuration could not be inspected safely",
+    );
+  }
+  if (filterConfiguration.stdout.trim().length > 0) {
+    throw new RealManagedChangeBlockedError(
+      "EXTERNAL_FILTER_CONFIGURED",
+      "the selected Git repository configures an external clean, process, or smudge filter",
+    );
+  }
   const workspaceStatus = runGit(repository, [
     "status",
     "--porcelain=v1",
@@ -366,6 +443,20 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     "--untracked-files=all",
   ]);
   const sourceFingerprint = sha256(`hpi-real-source.v1\0${baseCommit}\0${baseTree}`);
+  const pilotRepositoryFingerprint = pilotTargetFingerprint({
+    schemaVersion: "hpi-pilot-repository-identity.v1",
+    canonicalRepositoryIdentity: repository,
+  });
+  const pilotSourceFingerprint = pilotTargetFingerprint({
+    schemaVersion: "hpi-pilot-source.v1",
+    baseCommit,
+    baseTree,
+  });
+  const pilotTargetReferenceFingerprint = pilotTargetFingerprint({
+    schemaVersion: "hpi-pilot-target-reference.v1",
+    branch,
+    baseCommit,
+  });
   const workspaceFingerprint = sha256(
     JSON.stringify({
       schemaVersion: "hpi-real-workspace.v1",
@@ -382,7 +473,54 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     status: workspaceStatus,
     sourceFingerprint,
     workspaceFingerprint,
+    pilotRepositoryFingerprint,
+    pilotSourceFingerprint,
+    pilotTargetReferenceFingerprint,
   };
+}
+
+function assertTargetIdentity(
+  target: RealManagedChangeTarget,
+  snapshot: GitRepositorySnapshot,
+): void {
+  if (
+    target.repositoryFingerprint !== snapshot.pilotRepositoryFingerprint ||
+    target.sourceFingerprint !== snapshot.pilotSourceFingerprint ||
+    target.targetReferenceFingerprint !== snapshot.pilotTargetReferenceFingerprint
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "TARGET_IDENTITY_MISMATCH",
+      "the frozen target identity does not match the current canonical Git repository snapshot",
+    );
+  }
+}
+
+function assertWorkspaceBaseline(
+  baseline: GitRepositorySnapshot,
+  current: GitRepositorySnapshot,
+  allowDirty: boolean,
+): void {
+  if (
+    (!allowDirty && current.status.length > 0) ||
+    current.baseCommit !== baseline.baseCommit ||
+    current.sourceFingerprint !== baseline.sourceFingerprint ||
+    current.workspaceFingerprint !== baseline.workspaceFingerprint
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "WORKSPACE_DRIFT",
+      "the selected repository changed after preflight and before the next Agent started",
+    );
+  }
+}
+
+async function assertTargetReadyForAgent(
+  baseline: GitRepositorySnapshot,
+  target: RealManagedChangeTarget,
+  allowDirty: boolean,
+): Promise<void> {
+  const current = await inspectGitRepository(baseline.repository);
+  assertTargetIdentity(target, current);
+  assertWorkspaceBaseline(baseline, current, allowDirty);
 }
 
 function parseChangedPaths(status: string): {
@@ -581,6 +719,7 @@ async function runAgent(options: {
   readonly repository: string;
   readonly prompt: string;
   readonly now: () => string;
+  readonly beforeStart: () => Promise<void>;
 }): Promise<AgentRunResult> {
   const capabilityReceipt = capabilityReceiptSchema.parse(
     await options.engineHost.probe({
@@ -604,6 +743,7 @@ async function runAgent(options: {
     planRevisionId: options.plan.planRevisionId,
     workspaceReference: options.repository,
   };
+  await options.beforeStart();
   const startReceipt = await options.engineHost.start(
     startAttemptRequestSchema.parse({
       schemaVersion: "1.0.0",
@@ -761,6 +901,7 @@ export async function runRealManagedChange(
     );
   }
   const snapshot = await inspectGitRepository(options.repository);
+  assertTargetIdentity(inputRequest.target, snapshot);
   if (snapshot.status.length > 0) {
     throw new RealManagedChangeBlockedError(
       "DIRTY_WORKTREE",
@@ -909,6 +1050,7 @@ export async function runRealManagedChange(
   let writerLeaseReleased = false;
   try {
     const lockedSnapshot = await inspectGitRepository(snapshot.repository);
+    assertTargetIdentity(inputRequest.target, lockedSnapshot);
     if (
       lockedSnapshot.status.length > 0 ||
       lockedSnapshot.baseCommit !== snapshot.baseCommit ||
@@ -943,6 +1085,7 @@ export async function runRealManagedChange(
       attemptId: attempt1Id,
       startedAt: now(),
     });
+    await assertTargetReadyForAgent(snapshot, inputRequest.target, false);
     const firstAgent = await runAgent({
       engineHost: options.engineHost,
       kernel,
@@ -953,6 +1096,7 @@ export async function runRealManagedChange(
       repository: snapshot.repository,
       prompt,
       now,
+      beforeStart: () => assertTargetReadyForAgent(snapshot, inputRequest.target, false),
     });
     allAgentRuns.push(firstAgent);
     allEvidence.push(firstAgent.evidence);
@@ -1016,6 +1160,7 @@ export async function runRealManagedChange(
         workspaceDriftDetected: false,
         startedAt: now(),
       });
+      await assertTargetReadyForAgent(snapshot, inputRequest.target, true);
       const secondAgent = await runAgent({
         engineHost: options.engineHost,
         kernel,
@@ -1026,6 +1171,7 @@ export async function runRealManagedChange(
         repository: snapshot.repository,
         prompt: `${prompt}\nA previous bounded attempt did not pass the check. Inspect the current state and apply one more minimal fix within the same allowed paths.`,
         now,
+        beforeStart: () => assertTargetReadyForAgent(snapshot, inputRequest.target, true),
       });
       allAgentRuns.push(secondAgent);
       allEvidence.push(secondAgent.evidence);
@@ -1263,7 +1409,7 @@ export async function runRealManagedChange(
     const releasedWriterLease = await writerLease.release();
     writerLeaseReleased = true;
     const portableBeforeScore = {
-      schemaVersion: "hpi-managed-change.v1" as const,
+      schemaVersion: "hpi-managed-change.v2" as const,
       observedAt: now(),
       taskResult: "STOP" as const,
       productSource: options.productSource,
@@ -1283,6 +1429,7 @@ export async function runRealManagedChange(
         baseCommit: snapshot.baseCommit,
         workspaceFingerprint: snapshot.workspaceFingerprint,
         sourceFingerprint: snapshot.sourceFingerprint,
+        target: inputRequest.target,
       },
       plan: {
         planRevisionId: plan.planRevisionId,

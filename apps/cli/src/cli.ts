@@ -106,24 +106,31 @@ export interface HpiCliDependencies {
   readonly readTextFile?: (path: string) => Promise<string>;
 }
 
-function runGit(cwd: string, arguments_: readonly string[]): string {
-  const result = spawnSync("git", ["-C", cwd, ...arguments_], {
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    shell: false,
-    timeout: 10_000,
-    windowsHide: true,
-  });
-  if (result.error !== undefined || result.status !== 0) {
+export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
+  const rootResult = runPilotGit(cwd, ["rev-parse", "--show-toplevel"]);
+  const branchResult = runPilotGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const filterResult = runPilotGit(cwd, [
+    "config",
+    "--local",
+    "--name-only",
+    "--get-regexp",
+    "^filter\\..*\\.(clean|process|smudge)$",
+  ]);
+  if (
+    !rootResult.ok ||
+    !branchResult.ok ||
+    (filterResult.status !== 0 && filterResult.status !== 1) ||
+    filterResult.stdout.trim().length > 0
+  ) {
     throw new Error("Git repository inspection failed.");
   }
-  return result.stdout.trim();
-}
-
-export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
-  const root = runGit(cwd, ["rev-parse", "--show-toplevel"]);
-  const branch = runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  const dirty = runGit(cwd, ["status", "--porcelain=v1"]).length > 0;
+  const statusResult = runPilotGit(cwd, ["status", "--porcelain=v1"]);
+  if (!statusResult.ok) {
+    throw new Error("Git repository inspection failed.");
+  }
+  const root = rootResult.stdout.trim();
+  const branch = branchResult.stdout.trim();
+  const dirty = statusResult.stdout.length > 0;
   return Promise.resolve({ root, name: basename(root), branch, dirty });
 }
 
@@ -1007,7 +1014,7 @@ async function realChangeCommand(
   if (!parsedPlan.success) {
     errorLine(
       dependencies.io,
-      "ManagedChangeStatus=BLOCKED Reason=PLAN_INVALID NextAction=Use hpi-managed-change-request.v1 with an explicit check and allowedPaths.",
+      "ManagedChangeStatus=BLOCKED Reason=PLAN_INVALID NextAction=Use hpi-managed-change-request.v2 with an explicit check, allowedPaths, and frozen target identity.",
     );
     return 2;
   }

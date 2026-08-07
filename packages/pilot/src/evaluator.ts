@@ -300,6 +300,8 @@ export class PilotEvaluator {
     if (!evidence.providerLatencySeparated) {
       missingEvidence.push("Provider/model latency is not separately observed from Hunter latency");
     }
+    const frozenProviderRequestPolicy =
+      plan?.operatorScope.providerRequestPolicy ?? evidence.operatorScope.providerRequestPolicy;
     const zeroToleranceFailures: string[] = [];
     if (
       evidence.taskResults.some(
@@ -309,6 +311,14 @@ export class PilotEvaluator {
     ) {
       zeroToleranceFailures.push(
         "source loss, raw secret leakage, or unacknowledged Provider send",
+      );
+    }
+    if (
+      frozenProviderRequestPolicy === "NO_PROVIDER_REQUESTS" &&
+      evidence.taskResults.some((result) => result.providerSendAcknowledged)
+    ) {
+      zeroToleranceFailures.push(
+        "Provider request was acknowledged under a no-request pilot scope",
       );
     }
     if (

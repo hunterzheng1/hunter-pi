@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runHpiCli, type HpiCliDependencies, type HpiCliIo } from "@hunter-pi/cli";
+import { createPilotRepositoryTargetReceipt } from "@hunter-pi/pilot";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -65,6 +66,7 @@ async function createDependencies(
     readonly confirmed?: boolean;
     readonly authConfigured?: boolean;
     readonly launch?: (plan: PiLaunchPlan) => Promise<number>;
+    readonly inspectPilotTarget?: HpiCliDependencies["inspectPilotTarget"];
     readonly readTextFile?: HpiCliDependencies["readTextFile"];
     readonly readProviderAuthStatus?: HpiCliDependencies["readProviderAuthStatus"];
     readonly getVersionInfo?: HpiCliDependencies["getVersionInfo"];
@@ -86,6 +88,19 @@ async function createDependencies(
     now: () => "2026-08-03T13:00:00.000Z",
     inspectRepository: () =>
       Promise.resolve({ root: repository, name: "repository", branch: "main", dirty: false }),
+    inspectPilotTarget:
+      options.inspectPilotTarget ??
+      (() =>
+        Promise.resolve(
+          createPilotRepositoryTargetReceipt({
+            targetId: "repository-alpha",
+            canonicalRepositoryIdentity: repository,
+            branch: "main",
+            baseCommit: "a".repeat(40),
+            baseTree: "b".repeat(40),
+            dirty: false,
+          }),
+        )),
     readProviderAuthStatus:
       options.readProviderAuthStatus ??
       (() => Promise.resolve({ configured: options.authConfigured ?? false, source: "stored" })),
@@ -154,6 +169,61 @@ describe("hpi command", () => {
         "hpi pilot evaluate --plan <file> --evidence <file> --json",
       );
     }
+  });
+
+  it("inspects an explicitly selected pilot target without launching Pi or checking Provider auth", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const selectedRepository = join(root, "selected-private-repository");
+    let launched = false;
+    let authChecked = false;
+    const target = createPilotRepositoryTargetReceipt({
+      targetId: "repository-alpha",
+      canonicalRepositoryIdentity: selectedRepository,
+      branch: "main",
+      baseCommit: "a".repeat(40),
+      baseTree: "b".repeat(40),
+      dirty: false,
+    });
+
+    const targetDependencies: HpiCliDependencies = {
+      ...dependencies,
+      inspectPilotTarget: (repository, targetId) => {
+        expect(repository).toBe(selectedRepository);
+        expect(targetId).toBe("repository-alpha");
+        return Promise.resolve(target);
+      },
+      launch: () => {
+        launched = true;
+        return Promise.resolve(0);
+      },
+      readProviderAuthStatus: () => {
+        authChecked = true;
+        return Promise.resolve({ configured: true, source: "stored" });
+      },
+    };
+
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "target",
+          "--repo",
+          selectedRepository,
+          "--target-id",
+          "repository-alpha",
+          "--json",
+        ],
+        targetDependencies,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(io.stdout.join(""))).toMatchObject({
+      schemaVersion: "hpi-pilot-repository-target.v1",
+      status: "READY",
+      targetId: "repository-alpha",
+    });
+    expect(io.stdout.join("")).not.toContain(selectedRepository);
+    expect(launched).toBe(false);
+    expect(authChecked).toBe(false);
   });
 
   it("runs only the safe pilot preflight and never echoes an invalid plan", async () => {

@@ -2,14 +2,75 @@ import { describe, expect, it } from "vitest";
 
 import {
   PilotPlanCompiler,
+  createPilotRepositoryTargetReceipt,
   pilotExecutionPlanSchema,
   pilotPreflightReceiptSchema,
+  pilotRepositoryTargetReceiptSchema,
   type PilotPlanInput,
 } from "@hunter-pi/pilot";
 
 import { completePilotPlanInput, secondSourceFingerprint } from "./support/task12-plan-fixture.js";
 
 describe("Task 12 pilot plan compiler", () => {
+  it("creates a path-free target receipt from a clean explicit repository identity", () => {
+    const receipt = createPilotRepositoryTargetReceipt({
+      targetId: "repository-alpha",
+      canonicalRepositoryIdentity: "C:\\private\\operator-repository",
+      branch: "main",
+      baseCommit: "a".repeat(40),
+      baseTree: "b".repeat(40),
+      dirty: false,
+    });
+
+    expect(receipt).toMatchObject({
+      schemaVersion: "hpi-pilot-repository-target.v1",
+      status: "READY",
+      targetId: "repository-alpha",
+      selectionMode: "EXPLICIT_OPERATOR_SELECTED",
+      reasons: ["PILOT_TARGET_SCOPE_FROZEN"],
+    });
+    expect(receipt.repositoryFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(receipt.sourceFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(receipt.targetReferenceFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(JSON.stringify(receipt)).not.toContain("C:\\private");
+    expect(() => pilotRepositoryTargetReceiptSchema.parse(receipt)).not.toThrow();
+  });
+
+  it("blocks a dirty target without emitting any repository identity", () => {
+    const receipt = createPilotRepositoryTargetReceipt({
+      targetId: "repository-alpha",
+      canonicalRepositoryIdentity: "C:\\private\\operator-repository",
+      branch: "main",
+      baseCommit: "a".repeat(40),
+      baseTree: "b".repeat(40),
+      dirty: true,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "BLOCKED",
+      reasons: ["PILOT_TARGET_DIRTY"],
+      repositoryFingerprint: null,
+      sourceFingerprint: null,
+      targetReferenceFingerprint: null,
+    });
+    expect(JSON.stringify(receipt)).not.toContain("C:\\private");
+  });
+
+  it("rejects a target receipt that combines a frozen scope with another reason", () => {
+    expect(() =>
+      pilotRepositoryTargetReceiptSchema.parse({
+        schemaVersion: "hpi-pilot-repository-target.v1",
+        status: "READY",
+        targetId: "repository-alpha",
+        selectionMode: "EXPLICIT_OPERATOR_SELECTED",
+        repositoryFingerprint: `sha256:${"a".repeat(64)}`,
+        sourceFingerprint: `sha256:${"b".repeat(64)}`,
+        targetReferenceFingerprint: `sha256:${"c".repeat(64)}`,
+        reasons: ["PILOT_TARGET_SCOPE_FROZEN", "PILOT_TARGET_DIRTY"],
+      }),
+    ).toThrow(/one fixed reason|scope/u);
+  });
+
   it("freezes explicit targets and tasks without carrying paths or credentials into the plan", () => {
     const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
 

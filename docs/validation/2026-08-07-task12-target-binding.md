@@ -51,3 +51,7 @@ The repair gives the `repository doctor` integration suite the same finite 30-se
 ## Repair verification
 
 PR #45 passed all Windows/Ubuntu quality, Pi Evidence, Task 7 containment, and Task 7 Evidence gates. The exact repaired main run [`31167482153`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31167482153) for merge `17993a1` passed the same six jobs, including the previously failing Windows Doctor CLI test. This restores `MAIN_CI_PASS` for the checked-in implementation while leaving the real Task 12 pilot `NOT_PROVEN`.
+
+## Provider-scope evaluator hardening (2026-08-07)
+
+The Task 12 evaluator now fails closed with zero-tolerance `STOP` when a pilot Evidence set records an acknowledged Provider send while its frozen operator scope is `NO_PROVIDER_REQUESTS`; it uses the frozen plan policy even if the Evidence scope is forged. `NO_PROVIDER_REQUESTS` is reserved for preflight/negative fixtures and cannot produce daily-use `GO`; a real daily-use run requires explicit operator authorization. Focused regression tests reproduced the prior incorrect `GO` and `NOT_PROVEN` outcomes and now pass with the new gate. This is provider-policy contract hardening only; no Provider request, credential, or external repository was used, and the real pilot remains `NOT_RUN` / `NOT_PROVEN` pending its separately authorized target and observation Archive.

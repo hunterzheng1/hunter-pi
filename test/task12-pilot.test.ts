@@ -52,6 +52,49 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.reasons.join(" ")).toMatch(/CI|latency|Provider/u);
   });
 
+  it("stops when Evidence claims a Provider send under a no-request scope", () => {
+    const plan = new PilotPlanCompiler().compile({
+      ...completePilotPlanInput(),
+      operatorScope: {
+        repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
+        providerRequestPolicy: "NO_PROVIDER_REQUESTS",
+        providerEndpointFingerprint: null,
+        credentialScopeFingerprint: null,
+        acknowledged: false,
+        workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
+      },
+    });
+
+    const decision = new PilotEvaluator().evaluate(completeEvidence(plan), plan);
+
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/Provider.*request|no-request/u);
+  });
+
+  it("uses the frozen plan policy when Evidence forges an authorized Provider scope", () => {
+    const plan = new PilotPlanCompiler().compile({
+      ...completePilotPlanInput(),
+      operatorScope: {
+        repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
+        providerRequestPolicy: "NO_PROVIDER_REQUESTS",
+        providerEndpointFingerprint: null,
+        credentialScopeFingerprint: null,
+        acknowledged: false,
+        workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
+      },
+    });
+    const evidence = completeEvidence(plan);
+    const forgedEvidence = {
+      ...evidence,
+      operatorScope: completePilotExecutionPlan().operatorScope,
+    };
+
+    const decision = new PilotEvaluator().evaluate(forgedEvidence, plan);
+
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/Provider.*request|no-request/u);
+  });
+
   it("returns STOP for an observed zero-tolerance source-loss failure", () => {
     const evidence = completeEvidence();
     const decision = new PilotEvaluator().evaluate(

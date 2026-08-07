@@ -50,9 +50,6 @@ jobs:
       - name: Unit tests (excluding host-sensitive platform suite)
         run: npm test -- --exclude test/managed-process-platform.test.ts
 
-      - name: Managed process platform tests
-        run: npx vitest run test/managed-process-platform.test.ts
-
       - name: Strict compiler fixture
         run: npm run strict:check
 

@@ -54,6 +54,7 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(workflow).toContain("run: npm run probe:pi:compiled");
     expect(workflow).toContain("run: npm run probe:task7:compiled");
     expect(workflow).toContain("npm run compare:task7-evidence:compiled");
+    expect(workflow).not.toContain("name: Managed process platform tests");
     expect(workflow).not.toMatch(
       /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7)(?:\s|$)/u,
     );

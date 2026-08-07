@@ -6,7 +6,9 @@ inspection into a high-frequency API poller.
 ## Workflow policy
 
 - `quality` is the first hosted stage. The host-sensitive Task 7 matrix starts
-  only after quality passes and runs one platform at a time.
+  only after quality passes and runs one platform at a time; it is the sole
+  hosted execution of the managed-process platform suite and emits the bound
+  Task 7 receipts.
 - Locked installs use npm's offline-preferred mode and disable audit/fund
   network work. Compiled checks reuse the build already produced by the same
   job instead of rebuilding before each smoke.

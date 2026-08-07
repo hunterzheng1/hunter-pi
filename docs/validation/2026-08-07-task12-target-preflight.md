@@ -12,10 +12,10 @@ The pilot plan requires two explicitly selected repository identities, exact sou
 hpi pilot target --repo <directory> --target-id <id> --json
 ```
 
-checks the selected directory as one canonical physical Git repository root, reads the current branch, `HEAD`, tree, and porcelain status twice under a minimal Git environment, and emits either:
+checks the selected directory as one canonical physical Git repository root, rejects configured external clean/process/smudge filters, reads the current branch, `HEAD`, tree, and porcelain status twice under a minimal Git environment, and emits either:
 
 - a `READY` `hpi-pilot-repository-target.v1` receipt containing path-free repository/source/reference fingerprints; or
-- a `BLOCKED` receipt with null fingerprints and one fixed reason for a non-root path, non-canonical path, dirty worktree, detached `HEAD`, an identity change during inspection, or inspection failure.
+- a `BLOCKED` receipt with null fingerprints and one fixed reason for a non-root path, non-canonical path, dirty worktree, detached `HEAD`, an identity change during inspection, configured external filters, or inspection failure.
 
 The canonical repository identity is hashed before it enters the receipt. Git runs with global/system configuration and inherited `GIT_*` overrides removed, external fsmonitor/untracked-cache execution disabled, and no terminal/network prompt. No path, branch text, Git error text, credential, Provider metadata, Pi launch, network request, worktree creation, or repository mutation is emitted or initiated by this command.
 

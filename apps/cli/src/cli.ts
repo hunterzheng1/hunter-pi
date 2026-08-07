@@ -146,7 +146,7 @@ function minimalPilotGitEnvironment(): NodeJS.ProcessEnv {
 function runPilotGit(
   repository: string,
   arguments_: readonly string[],
-): { readonly ok: boolean; readonly stdout: string } {
+): { readonly ok: boolean; readonly stdout: string; readonly status: number | null } {
   const result = spawnSync(
     "git",
     [
@@ -170,6 +170,7 @@ function runPilotGit(
   return {
     ok: result.error === undefined && result.status === 0,
     stdout: result.stdout,
+    status: result.status,
   };
 }
 
@@ -214,20 +215,33 @@ function capturePilotTargetSnapshot(repository: string): PilotTargetSnapshot {
           : "PILOT_TARGET_INSPECTION_FAILED",
     };
   }
-  const workspaceStatus = runPilotGit(repository, [
+  const filterConfiguration = runPilotGit(repository, [
+    "config",
+    "--local",
+    "--name-only",
+    "--get-regexp",
+    "^filter\\..*\\.(clean|process|smudge)$",
+  ]);
+  if (filterConfiguration.status !== 0 && filterConfiguration.status !== 1) {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  if (filterConfiguration.stdout.trim().length > 0) {
+    return { ok: false, reason: "PILOT_TARGET_EXTERNAL_FILTER_CONFIGURED" };
+  }
+  const status = runPilotGit(repository, [
     "status",
     "--porcelain=v1",
     "-z",
     "--untracked-files=all",
   ]);
-  if (!workspaceStatus.ok) return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  if (!status.ok) return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
   return {
     ok: true,
     repository,
     branch: branch.stdout.trim(),
     baseCommit: baseCommit.stdout.trim(),
     baseTree: baseTree.stdout.trim(),
-    dirty: workspaceStatus.stdout.length > 0,
+    dirty: status.stdout.length > 0,
   };
 }
 

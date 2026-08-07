@@ -109,6 +109,21 @@ describe("Task 12 pilot target inspection", () => {
     await expect(access(marker)).rejects.toThrow();
   });
 
+  it("blocks a repository-configured external filter before reading worktree status", async () => {
+    const repository = await createGitFixture();
+    runGit(repository, ["config", "filter.hpiunsafe.process", "node -e exit(0)"]);
+
+    const receipt = await inspectHpiPilotTarget(repository, "repository-alpha");
+
+    expect(receipt).toMatchObject({
+      status: "BLOCKED",
+      reasons: ["PILOT_TARGET_EXTERNAL_FILTER_CONFIGURED"],
+      repositoryFingerprint: null,
+      sourceFingerprint: null,
+      targetReferenceFingerprint: null,
+    });
+  });
+
   it("blocks a non-root path without exposing the selected path", async () => {
     const repository = await createGitFixture();
 

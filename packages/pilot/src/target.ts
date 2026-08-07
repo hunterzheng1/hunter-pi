@@ -20,6 +20,7 @@ export const pilotTargetReasonSchema = z.enum([
   "PILOT_TARGET_NOT_CANONICAL",
   "PILOT_TARGET_DETACHED_HEAD",
   "PILOT_TARGET_CHANGED_DURING_INSPECTION",
+  "PILOT_TARGET_EXTERNAL_FILTER_CONFIGURED",
   "PILOT_TARGET_INSPECTION_FAILED",
 ]);
 export type PilotTargetReason = z.infer<typeof pilotTargetReasonSchema>;

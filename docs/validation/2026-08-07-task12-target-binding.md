@@ -26,3 +26,16 @@ All repositories used by these tests were temporary Git fixtures. No user reposi
 The first exact merged-head main run `31150894319` failed only on Windows: the out-of-scope-path integration test at `test/real-managed-change.test.ts` exceeded Vitest's default 5-second test timeout while performing its Git and child-process fixture work. The assertion did not fail; the subsequent Pi receipt upload was absent because the test step had already stopped. The same PR run had passed, and the test completes locally, but the hosted timing variance exposed an under-sized test timeout.
 
 The real Managed Change and CLI integration suites now use an explicit finite 30-second Vitest suite timeout, matching the existing Git/process integration-suite policy. This changes test-harness tolerance only; product command and Engine timeouts remain unchanged.
+
+## Task 7 hosted scheduling resilience
+
+The exact merged-head main run `31153056987` retained one independent Ubuntu Task 7 failure at `TEST_EXECUTION`: the platform probe exited after the host-sensitive process-tree test exceeded its bounded 180-second test budget. Windows quality, Ubuntu quality, Windows containment, and Pi Evidence had passed; the failure was not a GitHub API rate-limit response, source-identity mismatch, or Evidence-parser failure. The structured Linux failure receipt was preserved as an append-only artifact.
+
+CI commit `6cef8ba` adds a narrow one-retry policy to the Task 7 containment job:
+
+- attempt 1 is always run and its receipt is preserved when it is a structured `FAIL` at `TEST_EXECUTION`;
+- only that exact receipt class is retried once;
+- source-identity, report-parse, pre-publication, build, and retry failures remain blocking;
+- the job has an explicit final `PASS` receipt gate, and uploads both the retained attempt history and the canonical receipt.
+
+PR #42 run `31156567656` passed Windows/Ubuntu quality, both Task 7 containment jobs, Pi Evidence, and Task 7 Evidence. Both platform jobs passed on attempt 1, so the retry branch was skipped while the new gates executed on hosted Windows and Ubuntu. The exact merge-head main run `31157880366` passed the same gates. This reduces manual reruns for the previously observed transient hosted scheduling class without converting a real failure into a PASS.

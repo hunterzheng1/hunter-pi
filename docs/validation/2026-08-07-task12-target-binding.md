@@ -39,3 +39,5 @@ CI commit `6cef8ba` adds a narrow one-retry policy to the Task 7 containment job
 - the job has an explicit final `PASS` receipt gate, and uploads both the retained attempt history and the canonical receipt.
 
 PR #42 run `31156567656` passed Windows/Ubuntu quality, both Task 7 containment jobs, Pi Evidence, and Task 7 Evidence. Both platform jobs passed on attempt 1, so the retry branch was skipped while the new gates executed on hosted Windows and Ubuntu. The exact merge-head main run `31157880366` passed the same gates. This reduces manual reruns for the previously observed transient hosted scheduling class without converting a real failure into a PASS.
+
+The follow-on documentation head `7bbce75` also passed the exact merged-head main run [`31160657104`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31160657104) across Windows/Ubuntu quality, Pi Evidence, both Task 7 containment jobs, and Task 7 Evidence. The real-pilot disposition is unchanged: hosted CI proves the checked-in implementation, not daily-use acceptance against real repositories.

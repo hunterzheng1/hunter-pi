@@ -5,9 +5,14 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { inspectHpiPilotTarget } from "@hunter-pi/cli";
 import type { EngineHost } from "@hunter-pi/engine-contracts";
 import { createFileLeaseManager, type LeaseManager } from "@hunter-pi/execution";
-import { realManagedChangeRequestSchema, runRealManagedChange } from "@hunter-pi/managed-change";
+import {
+  realManagedChangeRequestSchema,
+  runRealManagedChange,
+  type RealManagedChangeTarget,
+} from "@hunter-pi/managed-change";
 import { Task6PiEngineHost } from "@hunter-pi/pi-host";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
@@ -57,6 +62,25 @@ async function createRepository(): Promise<{ readonly root: string; readonly rep
   return { root, repository };
 }
 
+async function targetFor(repository: string): Promise<RealManagedChangeTarget> {
+  const receipt = await inspectHpiPilotTarget(repository, "repository-alpha");
+  if (
+    receipt.status !== "READY" ||
+    receipt.repositoryFingerprint === null ||
+    receipt.sourceFingerprint === null ||
+    receipt.targetReferenceFingerprint === null
+  ) {
+    throw new Error(`target fixture was not ready: ${JSON.stringify(receipt)}`);
+  }
+  return {
+    targetId: receipt.targetId,
+    selectionMode: receipt.selectionMode,
+    repositoryFingerprint: receipt.repositoryFingerprint,
+    sourceFingerprint: receipt.sourceFingerprint,
+    targetReferenceFingerprint: receipt.targetReferenceFingerprint,
+  };
+}
+
 async function createWriterLease(root: string): Promise<{
   readonly manager: LeaseManager;
   readonly ownerFingerprint: typeof fingerprintB;
@@ -71,7 +95,7 @@ async function createWriterLease(root: string): Promise<{
 
 function createMutationHost(
   extraMutation?: (workspace: string) => Promise<void>,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): EngineHost {
   return new Task6PiEngineHost({
     launchPlanForWorkspace: (workspace) =>
@@ -113,7 +137,7 @@ describe("real-project Managed Change runner", () => {
   it("rejects control characters in the independent check definition", () => {
     expect(
       realManagedChangeRequestSchema.safeParse({
-        schemaVersion: "hpi-managed-change-request.v1",
+        schemaVersion: "hpi-managed-change-request.v2",
         title: "Reject control characters",
         goal: "The declared check must be terminal-safe.",
         nonGoals: [],
@@ -124,6 +148,13 @@ describe("real-project Managed Change runner", () => {
           executable: "node",
           argv: ["verify.mjs\n"],
         },
+        target: {
+          targetId: "repository-alpha",
+          selectionMode: "EXPLICIT_OPERATOR_SELECTED",
+          repositoryFingerprint: fingerprintA,
+          sourceFingerprint: fingerprintA,
+          targetReferenceFingerprint: fingerprintA,
+        },
       }).success,
     ).toBe(false);
   });
@@ -131,8 +162,9 @@ describe("real-project Managed Change runner", () => {
   it("runs against an explicitly selected Git repository, verifies the result, and leaves the change for review", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
     const request = realManagedChangeRequestSchema.parse({
-      schemaVersion: "hpi-managed-change-request.v1",
+      schemaVersion: "hpi-managed-change-request.v2",
       title: "Make the real-project check pass",
       goal: "Change result.txt so the declared project check passes.",
       nonGoals: ["Commit, push, publish, or deploy"],
@@ -143,6 +175,7 @@ describe("real-project Managed Change runner", () => {
         executable: "node",
         argv: ["verify.mjs"],
       },
+      target,
     });
 
     const artifact = await runRealManagedChange({
@@ -164,7 +197,7 @@ describe("real-project Managed Change runner", () => {
     });
 
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v1",
+      schemaVersion: "hpi-managed-change.v2",
       taskResult: "GO",
       repository: { scope: "EXPLICIT_OPERATOR_SELECTED" },
       productSource: { state: "CLEAN" },
@@ -173,14 +206,192 @@ describe("real-project Managed Change runner", () => {
     });
     expect(artifact.projection.change.lifecycle).toBe("READY");
     expect(artifact.review.changedPaths).toEqual(["result.txt"]);
+    expect(artifact.repository.target).toEqual(target);
     expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
     expect(JSON.stringify(artifact)).not.toContain(root);
     expect(runGit(repository, ["status", "--porcelain=v1"]).trim()).toBe("M result.txt");
   });
 
+  it("blocks a frozen target identity mismatch before starting the Agent", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject a changed pilot target",
+      goal: "Do not run when the frozen target identity no longer matches the selected repository.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target: {
+        targetId: "repository-alpha",
+        selectionMode: "EXPLICIT_OPERATOR_SELECTED",
+        repositoryFingerprint: fingerprintA,
+        sourceFingerprint: fingerprintA,
+        targetReferenceFingerprint: fingerprintA,
+      },
+    });
+    let providerStarted = false;
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: createMutationHost(() => {
+          providerStarted = true;
+          return Promise.resolve();
+        }),
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      }),
+    ).rejects.toThrow(/TARGET_IDENTITY_MISMATCH/u);
+    expect(providerStarted).toBe(false);
+  });
+
+  it("blocks a repository-configured external Git filter without executing it", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const filterScript = join(root, "unexpected-filter.mjs");
+    const marker = join(root, "filter-executed.marker");
+    await writeFile(
+      filterScript,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "executed");\n`,
+      "utf8",
+    );
+    runGit(repository, ["config", "filter.hpiunsafe.process", `node "${filterScript}"`]);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject an external Git filter",
+      goal: "Do not execute repository-configured external code during target inspection.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: createMutationHost(),
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      }),
+    ).rejects.toThrow(/EXTERNAL_FILTER_CONFIGURED/u);
+    await expect(readFile(marker, "utf8")).rejects.toThrow();
+  });
+
+  it("rechecks the frozen target before a fixback Agent starts", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    let processCalls = 0;
+    const host = createMutationHost(
+      async (workspace) => {
+        if (processCalls === 1) {
+          await writeFile(join(workspace, "result.txt"), "NOT_READY\n", "utf8");
+          runGit(repository, ["checkout", "--quiet", "-b", "unexpected-target"]);
+        }
+      },
+      () => {
+        processCalls += 1;
+      },
+    );
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Stop fixback after target drift",
+      goal: "Do not start a fixback Agent after the selected branch changes.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: host,
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      }),
+    ).rejects.toThrow(/TARGET_IDENTITY_MISMATCH/u);
+    expect(processCalls).toBe(1);
+  });
+
+  it("rechecks the frozen target after the Engine capability probe", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const baseHost = createMutationHost();
+    let startCalls = 0;
+    const host: EngineHost = {
+      probe: async (input) => {
+        const receipt = await baseHost.probe(input);
+        runGit(repository, ["checkout", "--quiet", "-b", "probe-drift"]);
+        return receipt;
+      },
+      start: async (input) => {
+        startCalls += 1;
+        return baseHost.start(input);
+      },
+      send: (handle, input) => baseHost.send(handle, input),
+      observe: (handle, cursor) => baseHost.observe(handle, cursor),
+      interrupt: (handle, input) => baseHost.interrupt(handle, input),
+      checkpoint: (handle, input) => baseHost.checkpoint(handle, input),
+      reconcile: (input) => baseHost.reconcile(input),
+      close: (handle, input) => baseHost.close(handle, input),
+    };
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Stop after probe-time target drift",
+      goal: "Do not start an Agent after the selected branch changes during capability probing.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: host,
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      }),
+    ).rejects.toThrow(/TARGET_IDENTITY_MISMATCH/u);
+    expect(startCalls).toBe(0);
+  });
+
   it("blocks a concurrent Managed Change on the same physical repository before a second Provider send", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
     let markProviderStarted = (): void => undefined;
     const providerStarted = new Promise<void>((resolve) => {
       markProviderStarted = resolve;
@@ -190,13 +401,14 @@ describe("real-project Managed Change runner", () => {
       releaseFirstProvider = resolve;
     });
     const request = realManagedChangeRequestSchema.parse({
-      schemaVersion: "hpi-managed-change-request.v1",
+      schemaVersion: "hpi-managed-change-request.v2",
       title: "Hold the selected repository change",
       goal: "Change result.txt so the declared project check passes.",
       nonGoals: [],
       constraints: [],
       allowedPaths: ["result.txt"],
       check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
     });
     const first = runRealManagedChange({
       repository,
@@ -237,15 +449,17 @@ describe("real-project Managed Change runner", () => {
   it("fails closed before the Provider operation when the explicitly selected repository is dirty", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
     await writeFile(join(repository, "unrelated.txt"), "operator work\n", "utf8");
     const request = realManagedChangeRequestSchema.parse({
-      schemaVersion: "hpi-managed-change-request.v1",
+      schemaVersion: "hpi-managed-change-request.v2",
       title: "Should not run on dirty source",
       goal: "Make the declared project check pass.",
       nonGoals: [],
       constraints: [],
       allowedPaths: ["result.txt"],
       check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
     });
     let providerOperationStarted = false;
     const host = createMutationHost();
@@ -283,14 +497,16 @@ describe("real-project Managed Change runner", () => {
   it("returns STOP when the Agent changes a path outside the explicit allowed scope", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
     const request = realManagedChangeRequestSchema.parse({
-      schemaVersion: "hpi-managed-change-request.v1",
+      schemaVersion: "hpi-managed-change-request.v2",
       title: "Reject an out-of-scope mutation",
       goal: "Make the declared project check pass.",
       nonGoals: [],
       constraints: ["Only result.txt may change"],
       allowedPaths: ["result.txt"],
       check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
     });
     const artifact = await runRealManagedChange({
       repository,
@@ -318,14 +534,16 @@ describe("real-project Managed Change runner", () => {
   it("refuses private path material in a plan before starting the Agent", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
     const request = realManagedChangeRequestSchema.parse({
-      schemaVersion: "hpi-managed-change-request.v1",
+      schemaVersion: "hpi-managed-change-request.v2",
       title: "Private path must not enter the plan",
       goal: `Do not echo ${repository} in the Provider prompt.`,
       nonGoals: [],
       constraints: [],
       allowedPaths: ["result.txt"],
       check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
     });
     let started = false;
     const host = createMutationHost();

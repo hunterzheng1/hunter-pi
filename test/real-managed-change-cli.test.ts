@@ -7,11 +7,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  inspectHpiRepository,
   inspectHpiPilotTarget,
   runHpiCli,
   type HpiCliDependencies,
   type HpiCliIo,
 } from "@hunter-pi/cli";
+import type { RealManagedChangeTarget } from "@hunter-pi/managed-change";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -124,23 +126,59 @@ async function createCliFixture(): Promise<{
   return { root, repository, io, dependencies };
 }
 
-function plan(): Record<string, unknown> {
+async function targetFor(repository: string): Promise<RealManagedChangeTarget> {
+  const receipt = await inspectHpiPilotTarget(repository, "repository-alpha");
+  if (
+    receipt.status !== "READY" ||
+    receipt.repositoryFingerprint === null ||
+    receipt.sourceFingerprint === null ||
+    receipt.targetReferenceFingerprint === null
+  ) {
+    throw new Error(`target fixture was not ready: ${JSON.stringify(receipt)}`);
+  }
   return {
-    schemaVersion: "hpi-managed-change-request.v1",
+    targetId: receipt.targetId,
+    selectionMode: receipt.selectionMode,
+    repositoryFingerprint: receipt.repositoryFingerprint,
+    sourceFingerprint: receipt.sourceFingerprint,
+    targetReferenceFingerprint: receipt.targetReferenceFingerprint,
+  };
+}
+
+function plan(target: RealManagedChangeTarget): Record<string, unknown> {
+  return {
+    schemaVersion: "hpi-managed-change-request.v2",
     title: "Make the CLI project check pass",
     goal: "Change result.txt so the declared project check passes.",
     nonGoals: ["Commit, push, publish, or deploy"],
     constraints: ["Only result.txt may change"],
     allowedPaths: ["result.txt"],
     check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+    target,
   };
 }
 
 describe("hpi change command", () => {
+  it("rejects external Git filters during CLI repository inspection without executing them", async () => {
+    const { root, repository } = await createCliFixture();
+    const filterScript = join(root, "cli-filter.mjs");
+    const marker = join(root, "cli-filter-executed.marker");
+    await writeFile(
+      filterScript,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "executed");\n`,
+      "utf8",
+    );
+    runGit(repository, ["config", "filter.hpiunsafe.process", `node "${filterScript}"`]);
+
+    expect(() => inspectHpiRepository(repository)).toThrow(/Git repository inspection failed/u);
+    await expect(readFile(marker, "utf8")).rejects.toThrow();
+  });
+
   it("requires explicit Provider authorization before it can inspect or run a target", async () => {
     const { dependencies, io, root } = await createCliFixture();
     const planPath = join(root, "change-plan.json");
-    await writeFile(planPath, JSON.stringify(plan()), "utf8");
+    const target = await targetFor(join(root, "repository"));
+    await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
 
     expect(
       await runHpiCli(["change", "--repo", root, "--plan", planPath, "--json"], dependencies),
@@ -152,7 +190,8 @@ describe("hpi change command", () => {
   it("runs an explicitly scoped real-project change and emits portable Evidence", async () => {
     const { dependencies, io, root, repository } = await createCliFixture();
     const planPath = join(root, "change-plan.json");
-    await writeFile(planPath, JSON.stringify(plan()), "utf8");
+    const target = await targetFor(repository);
+    await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
     let processRequests = 0;
     const runTask6Process = async (
       request: Task6PiProcessRequest,
@@ -183,7 +222,7 @@ describe("hpi change command", () => {
     expect(processRequests).toBe(1);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v1",
+      schemaVersion: "hpi-managed-change.v2",
       taskResult: "GO",
       repository: { scope: "EXPLICIT_OPERATOR_SELECTED" },
       cleanup: { status: "NOT_APPLICABLE", targetWorkingTree: "PRESERVED_CHANGED" },
@@ -195,12 +234,13 @@ describe("hpi change command", () => {
   it("uses the qualified process and writer-lease path by default", async () => {
     const { dependencies, io, root, repository } = await createCliFixture();
     const planPath = join(root, "change-plan.json");
+    const target = await targetFor(repository);
     await writeFile(
       join(root, "pi-cli.js"),
       "const fs = require('node:fs');\nfs.writeFileSync('result.txt', 'READY\\n');\nprocess.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');\n",
       "utf8",
     );
-    await writeFile(planPath, JSON.stringify(plan()), "utf8");
+    await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
 
     expect(
       await runHpiCli(
@@ -210,7 +250,7 @@ describe("hpi change command", () => {
     ).toBe(0);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v1",
+      schemaVersion: "hpi-managed-change.v2",
       taskResult: "GO",
       writerLease: { acquireOutcome: "ACQUIRED", releaseOutcome: "RELEASED" },
     });

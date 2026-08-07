@@ -6,7 +6,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runHpiCli, type HpiCliDependencies, type HpiCliIo } from "@hunter-pi/cli";
+import {
+  inspectHpiPilotTarget,
+  runHpiCli,
+  type HpiCliDependencies,
+  type HpiCliIo,
+} from "@hunter-pi/cli";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -80,6 +85,7 @@ async function createCliFixture(): Promise<{
     now: () => "2026-08-06T00:00:10.000Z",
     inspectRepository: (target) =>
       Promise.resolve({ root: target, name: "repository", branch: "main", dirty: false }),
+    inspectPilotTarget: inspectHpiPilotTarget,
     readProviderAuthStatus: () => Promise.resolve({ configured: true, source: "stored" }),
     resolveProviderDestination: () =>
       Promise.resolve({

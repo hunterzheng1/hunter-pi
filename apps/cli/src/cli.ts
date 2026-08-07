@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -51,9 +51,13 @@ import {
   task6OutputCaptureLimits,
 } from "@hunter-pi/managed-change";
 import {
+  createPilotRepositoryTargetBlockedReceipt,
+  createPilotRepositoryTargetReceipt,
   PilotEvaluator,
   PilotPlanCompiler,
+  pilotTargetIdSchema,
   type PilotPlanInput,
+  type PilotRepositoryTargetReceipt,
   type PilotPreflightFailure,
 } from "@hunter-pi/pilot";
 
@@ -79,6 +83,10 @@ export interface HpiCliDependencies {
   readonly io: HpiCliIo;
   readonly now: () => string;
   readonly inspectRepository: (cwd: string) => Promise<HpiRepositoryState>;
+  readonly inspectPilotTarget?: (
+    repository: string,
+    targetId: string,
+  ) => Promise<PilotRepositoryTargetReceipt>;
   readonly readProviderAuthStatus: (
     paths: HpiPaths,
     providerId: string,
@@ -119,6 +127,167 @@ export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
   return Promise.resolve({ root, name: basename(root), branch, dirty });
 }
 
+function minimalPilotGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "PATH", "TEMP", "TMP"]) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return {
+    ...environment,
+    GIT_CONFIG_NOGLOBAL: "1",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    NO_COLOR: "1",
+  };
+}
+
+function runPilotGit(
+  repository: string,
+  arguments_: readonly string[],
+): { readonly ok: boolean; readonly stdout: string; readonly status: number | null } {
+  const result = spawnSync(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "-C",
+      repository,
+      ...arguments_,
+    ],
+    {
+      env: minimalPilotGitEnvironment(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      shell: false,
+      timeout: 10_000,
+      windowsHide: true,
+    },
+  );
+  return {
+    ok: result.error === undefined && result.status === 0,
+    stdout: result.stdout,
+    status: result.status,
+  };
+}
+
+type PilotTargetSnapshot =
+  | {
+      readonly ok: true;
+      readonly repository: string;
+      readonly branch: string;
+      readonly baseCommit: string;
+      readonly baseTree: string;
+      readonly dirty: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: Parameters<typeof createPilotRepositoryTargetBlockedReceipt>[1];
+    };
+
+function capturePilotTargetSnapshot(repository: string): PilotTargetSnapshot {
+  const topLevel = runPilotGit(repository, ["rev-parse", "--show-toplevel"]);
+  if (!topLevel.ok) return { ok: false, reason: "PILOT_TARGET_NOT_GIT_ROOT" };
+  let topLevelPath: string;
+  try {
+    topLevelPath = resolve(topLevel.stdout.trim());
+  } catch {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  if (topLevelPath !== repository) return { ok: false, reason: "PILOT_TARGET_NOT_GIT_ROOT" };
+
+  const baseCommit = runPilotGit(repository, ["rev-parse", "HEAD"]);
+  const baseTree = runPilotGit(repository, ["rev-parse", "HEAD^{tree}"]);
+  if (!baseCommit.ok || !baseTree.ok) {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  const branch = runPilotGit(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (!branch.ok) {
+    const headName = runPilotGit(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    return {
+      ok: false,
+      reason:
+        headName.ok && headName.stdout.trim() === "HEAD"
+          ? "PILOT_TARGET_DETACHED_HEAD"
+          : "PILOT_TARGET_INSPECTION_FAILED",
+    };
+  }
+  const filterConfiguration = runPilotGit(repository, [
+    "config",
+    "--local",
+    "--name-only",
+    "--get-regexp",
+    "^filter\\..*\\.(clean|process|smudge)$",
+  ]);
+  if (filterConfiguration.status !== 0 && filterConfiguration.status !== 1) {
+    return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  }
+  if (filterConfiguration.stdout.trim().length > 0) {
+    return { ok: false, reason: "PILOT_TARGET_EXTERNAL_FILTER_CONFIGURED" };
+  }
+  const status = runPilotGit(repository, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  if (!status.ok) return { ok: false, reason: "PILOT_TARGET_INSPECTION_FAILED" };
+  return {
+    ok: true,
+    repository,
+    branch: branch.stdout.trim(),
+    baseCommit: baseCommit.stdout.trim(),
+    baseTree: baseTree.stdout.trim(),
+    dirty: status.stdout.length > 0,
+  };
+}
+
+export async function inspectHpiPilotTarget(
+  repositoryInput: string,
+  targetId: string,
+): Promise<PilotRepositoryTargetReceipt> {
+  pilotTargetIdSchema.parse(targetId);
+  const blocked = (reason: Parameters<typeof createPilotRepositoryTargetBlockedReceipt>[1]) =>
+    createPilotRepositoryTargetBlockedReceipt(targetId, reason);
+  try {
+    const resolved = resolve(repositoryInput);
+    const stats = await lstat(resolved).catch(() => undefined);
+    if (stats === undefined || !stats.isDirectory() || stats.isSymbolicLink()) {
+      return blocked("PILOT_TARGET_NOT_GIT_ROOT");
+    }
+    const repository = await realpath(resolved).catch(() => undefined);
+    if (repository === undefined) return blocked("PILOT_TARGET_NOT_GIT_ROOT");
+    if (repository !== resolved) return blocked("PILOT_TARGET_NOT_CANONICAL");
+
+    const first = capturePilotTargetSnapshot(repository);
+    if (!first.ok) return blocked(first.reason);
+    const second = capturePilotTargetSnapshot(repository);
+    if (!second.ok) return blocked(second.reason);
+    if (
+      first.repository !== second.repository ||
+      first.branch !== second.branch ||
+      first.baseCommit !== second.baseCommit ||
+      first.baseTree !== second.baseTree ||
+      first.dirty !== second.dirty
+    ) {
+      return blocked("PILOT_TARGET_CHANGED_DURING_INSPECTION");
+    }
+    return createPilotRepositoryTargetReceipt({
+      targetId,
+      canonicalRepositoryIdentity: repository,
+      branch: first.branch,
+      baseCommit: first.baseCommit,
+      baseTree: first.baseTree,
+      dirty: first.dirty,
+    });
+  } catch {
+    return blocked("PILOT_TARGET_INSPECTION_FAILED");
+  }
+}
+
 function createProcessIo(): HpiCliIo {
   return {
     writeStdout: (text) => process.stdout.write(text),
@@ -146,6 +315,7 @@ function defaultDependencies(): HpiCliDependencies {
     io: createProcessIo(),
     now: () => new Date().toISOString(),
     inspectRepository: inspectHpiRepository,
+    inspectPilotTarget: inspectHpiPilotTarget,
     readProviderAuthStatus: readPiProviderAuthMetadata,
     resolveProviderDestination: resolvePiProviderDestination,
     launch: launchPi,
@@ -230,6 +400,14 @@ function assertPilotJsonOptions(
   if (!jsonSeen || seen.size !== requiredValueOptions.size) throw new HpiCliUsageError();
 }
 
+function assertPilotTargetOptions(arguments_: readonly string[]): void {
+  assertPilotJsonOptions(arguments_, new Set(["--repo", "--target-id"]));
+  const targetId = optionValue(arguments_, "--target-id");
+  if (targetId === undefined || !pilotTargetIdSchema.safeParse(targetId).success) {
+    throw new HpiCliUsageError();
+  }
+}
+
 function assertChangeOptions(arguments_: readonly string[]): void {
   const seen = new Set<string>();
   let jsonSeen = false;
@@ -300,6 +478,10 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (command === "pilot" && arguments_[1] === "compile") {
     assertPilotJsonOptions(arguments_.slice(2), new Set(["--input"]));
+    return;
+  }
+  if (command === "pilot" && arguments_[1] === "target") {
+    assertPilotTargetOptions(arguments_.slice(2));
     return;
   }
   if (command === "pilot" && arguments_[1] === "evaluate") {
@@ -1219,6 +1401,7 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin doctor | plugin disable <id>");
   line(io, "       hpi pilot compile --input <file> --json");
+  line(io, "       hpi pilot target --repo <directory> --target-id <id> --json");
   line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --json");
   line(io, "       hpi pilot preflight --plan <file> --json");
 }
@@ -1226,6 +1409,21 @@ function printHelp(io: HpiCliIo): void {
 interface PilotJsonFile {
   readonly value: unknown;
   readonly failure?: PilotPreflightFailure;
+}
+
+async function pilotTargetCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+): Promise<number> {
+  const repository = optionValue(arguments_, "--repo");
+  const targetId = optionValue(arguments_, "--target-id");
+  if (repository === undefined || targetId === undefined) throw new HpiCliUsageError();
+  const receipt = await (dependencies.inspectPilotTarget ?? inspectHpiPilotTarget)(
+    repository,
+    targetId,
+  );
+  line(dependencies.io, JSON.stringify(receipt));
+  return receipt.status === "READY" ? 0 : 2;
 }
 
 async function readPilotJsonFile(
@@ -1314,6 +1512,9 @@ export async function runHpiCli(
     }
     if (command === "pilot" && arguments_[1] === "preflight") {
       return await pilotPreflightCommand(arguments_.slice(2), dependencies);
+    }
+    if (command === "pilot" && arguments_[1] === "target") {
+      return await pilotTargetCommand(arguments_.slice(2), dependencies);
     }
     if (command === "pilot" && arguments_[1] === "compile") {
       return await pilotCompileCommand(arguments_.slice(2), dependencies);

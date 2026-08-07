@@ -1,4 +1,5 @@
 export {
+  inspectHpiPilotTarget,
   inspectHpiRepository,
   runHpiCli,
   type HpiCliDependencies,

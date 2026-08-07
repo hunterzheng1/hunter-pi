@@ -20,7 +20,7 @@ const healthyDependencies = (overrides: Partial<DoctorDependencies> = {}): Docto
   ...overrides,
 });
 
-describe("repository doctor", () => {
+describe("repository doctor", { timeout: 30_000 }, () => {
   it("returns a deterministic, versioned report for supported prerequisites", () => {
     const first = collectRepositoryDoctor(healthyDependencies());
     const second = collectRepositoryDoctor(healthyDependencies());

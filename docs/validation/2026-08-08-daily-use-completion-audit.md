@@ -43,10 +43,10 @@ Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 Status: `PARTIAL`; user Plugin activation remains blocked.
 
 The current module proves metadata parsing, an append-only lifecycle journal, and policy-shaped
-Compatibility/Trust/Isolation values in fixtures. It does not yet prove standard Pi package
-installation, effective post-load resource graphs, two representative external packages, or OS
-containment. The completion audit also found that query/fragment credentials and `file:`
-references can pass some manifest reference fields. Until those paths are closed and exact
+Compatibility/Trust/Isolation values in fixtures. The manifest boundary now rejects `file:`,
+non-HTTPS, userinfo-bearing, query-bearing, and fragment-bearing package/provenance URLs. It does
+not yet prove standard Pi package installation, effective post-load resource graphs, two
+representative external packages, or OS containment. Until exact
 release/Engine/platform/configuration/verifier identities are durable, no arbitrary package may
 be called compatible, trusted, or isolated.
 

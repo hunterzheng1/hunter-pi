@@ -4,11 +4,17 @@ import { join, parse, resolve } from "node:path";
 
 import type { z } from "zod";
 
-import { fingerprintSchema, type DistributionReleaseId, type Fingerprint } from "@hunter-pi/domain";
+import {
+  fingerprintSchema,
+  operationIdSchema,
+  type DistributionReleaseId,
+  type Fingerprint,
+} from "@hunter-pi/domain";
 import { redactPortableText, withDurableMutationLock } from "@hunter-pi/evidence";
 
 import {
   releaseCandidateSchema,
+  releaseCheckResultSchema,
   updateApplyRequestSchema,
   updateJournalEntrySchema,
   updateReceiptSchema,
@@ -16,6 +22,7 @@ import {
   type ReleaseAdapter,
   type ReleaseArtifactSource,
   type ReleaseCandidate,
+  type ReleaseCheckResult,
   type StagedRelease,
   type UpdateApplyRequest,
   type UpdateJournalEntry,
@@ -299,6 +306,7 @@ export interface FileUpdateManagerOptions {
   readonly adapter: ReleaseAdapter;
   readonly artifacts: ReleaseArtifactSource;
   readonly qualificationVerifierFingerprint: Fingerprint;
+  readonly now?: () => string;
 }
 
 export class FileUpdateManager implements UpdateManager {
@@ -308,6 +316,7 @@ export class FileUpdateManager implements UpdateManager {
   readonly #artifacts: ReleaseArtifactSource;
   readonly #qualificationVerifierFingerprint: Fingerprint;
   readonly #operationKey: string;
+  readonly #now: () => string;
 
   public constructor(options: FileUpdateManagerOptions) {
     this.#journal = new FileUpdateJournal(join(resolve(options.stateRoot), "journal"));
@@ -318,13 +327,48 @@ export class FileUpdateManager implements UpdateManager {
     this.#qualificationVerifierFingerprint = fingerprintSchema.parse(
       options.qualificationVerifierFingerprint,
     );
+    this.#now = options.now ?? (() => new Date().toISOString());
+  }
+
+  public async check(candidateInput: ReleaseCandidate): Promise<ReleaseCheckResult> {
+    const candidate = releaseCandidateSchema.parse(candidateInput);
+    return withUpdateManagerOperationLock(this.#operationKey, () =>
+      withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), async () => {
+        const gateReason = this.#gateReason(candidate);
+        if (gateReason !== undefined) {
+          return releaseCheckResultSchema.parse({
+            status: "BLOCKED",
+            reason: gateReason,
+          });
+        }
+        let artifact: Uint8Array;
+        try {
+          artifact = await this.#artifacts.read(candidate);
+        } catch (error) {
+          return releaseCheckResultSchema.parse({
+            status: "BLOCKED",
+            reason: safeFailureReason(error, "release artifact could not be read"),
+          });
+        }
+        if (
+          artifact.byteLength !== candidate.artifact.byteLength ||
+          digestBytes(artifact) !== candidate.artifact.fingerprint
+        ) {
+          return releaseCheckResultSchema.parse({
+            status: "BLOCKED",
+            reason: "release artifact bytes do not match the declared candidate digest",
+          });
+        }
+        return releaseCheckResultSchema.parse({ status: "AVAILABLE", candidate });
+      }),
+    );
   }
 
   public async apply(request: UpdateApplyRequest): Promise<UpdateReceipt> {
     const parsed = updateApplyRequestSchema.parse(request);
     return withUpdateManagerOperationLock(this.#operationKey, () =>
       withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), () =>
-        this.#applyParsed(parsed),
+        this.#reconcile().then(() => this.#applyParsed(parsed)),
       ),
     );
   }
@@ -456,9 +500,14 @@ export class FileUpdateManager implements UpdateManager {
       });
     }
     let migrationRollback: (() => Promise<void>) | undefined;
+    let migrationCommit: (() => Promise<void>) | undefined;
     try {
       const migration = await this.#adapter.migrate?.(staged, previousReleaseId);
       migrationRollback = migration === undefined ? undefined : () => migration.rollback();
+      migrationCommit =
+        migration?.commit === undefined
+          ? undefined
+          : () => migration.commit?.() ?? Promise.resolve();
     } catch (error) {
       const cleanupReason = await this.#discard(staged);
       return this.#append({
@@ -483,6 +532,8 @@ export class FileUpdateManager implements UpdateManager {
       const activeReleaseId = await this.#adapter.current();
       if (activeReleaseId !== candidate.releaseId) {
         activationFailure = "release activation did not publish the candidate identity";
+      } else if (migrationCommit !== undefined) {
+        await migrationCommit();
       }
     } catch (error) {
       activationFailure = safeFailureReason(error, "release activation failed");
@@ -538,7 +589,7 @@ export class FileUpdateManager implements UpdateManager {
     const parsed = updateRollbackRequestSchema.parse(request);
     return withUpdateManagerOperationLock(this.#operationKey, () =>
       withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), () =>
-        this.#rollbackParsed(parsed),
+        this.#reconcile().then(() => this.#rollbackParsed(parsed)),
       ),
     );
   }
@@ -579,7 +630,7 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
-    const candidate = (await this.history()).find(
+    const candidate = (await this.#history()).find(
       (entry) => entry.releaseId === parsed.targetReleaseId,
     );
     const qualificationReason = candidate === undefined ? undefined : this.#gateReason(candidate);
@@ -720,11 +771,33 @@ export class FileUpdateManager implements UpdateManager {
     });
   }
 
+  public async reconcile(): Promise<readonly UpdateReceipt[]> {
+    return withUpdateManagerOperationLock(this.#operationKey, () =>
+      withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), () =>
+        this.#reconcile(),
+      ),
+    );
+  }
+
   public async current(): Promise<{ readonly releaseId: DistributionReleaseId | undefined }> {
-    return { releaseId: await this.#adapter.current() };
+    return withUpdateManagerOperationLock(this.#operationKey, () =>
+      withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), async () => {
+        await this.#reconcile();
+        return { releaseId: await this.#adapter.current() };
+      }),
+    );
   }
 
   public async history(): Promise<readonly ReleaseCandidate[]> {
+    return withUpdateManagerOperationLock(this.#operationKey, () =>
+      withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), async () => {
+        await this.#reconcile();
+        return this.#history();
+      }),
+    );
+  }
+
+  async #history(): Promise<readonly ReleaseCandidate[]> {
     const candidates = new Map<string, ReleaseCandidate>();
     for (const entry of await this.#journal.read()) {
       if (
@@ -736,6 +809,44 @@ export class FileUpdateManager implements UpdateManager {
       }
     }
     return [...candidates.values()];
+  }
+
+  async #reconcile(): Promise<readonly UpdateReceipt[]> {
+    const reconciliation = await this.#adapter.reconcile?.();
+    if (reconciliation === undefined || reconciliation.status === "NONE") return [];
+    const entries = await this.#journal.read();
+    if (
+      reconciliation.status === "RECOVERED" &&
+      reconciliation.candidate !== undefined &&
+      entries.some(
+        (entry) =>
+          entry.receipt.action === "APPLY" &&
+          entry.receipt.outcome === "APPLIED" &&
+          entry.candidate?.releaseId === reconciliation.candidate?.releaseId,
+      )
+    ) {
+      return [];
+    }
+    const operationId = operationIdSchema.parse(`op_update-reconcile-${randomUUID()}`);
+    const receipt = await this.#append({
+      operationId,
+      operationFingerprint: digestOf({
+        action: "RECONCILE",
+        reconciliation,
+      }),
+      action: "APPLY",
+      ...(reconciliation.candidate === undefined ? {} : { candidate: reconciliation.candidate }),
+      outcome: reconciliation.status === "RECOVERED" ? "APPLIED" : "FAILED",
+      ...(reconciliation.previousReleaseId === undefined
+        ? {}
+        : { previousReleaseId: reconciliation.previousReleaseId }),
+      ...(reconciliation.activeReleaseId === undefined
+        ? {}
+        : { activeReleaseId: reconciliation.activeReleaseId }),
+      ...(reconciliation.reason === undefined ? {} : { reason: reconciliation.reason }),
+      observedAt: this.#now(),
+    });
+    return [receipt];
   }
 
   #gateReason(candidate: ReleaseCandidate): string | undefined {

@@ -52,8 +52,12 @@ describe("GitHub Actions CI efficiency policy", () => {
       ),
     ).toBe(true);
 
+    expect(workflow).toContain("timeout-minutes: 55");
     expect(workflow).toContain("run: npm run package-smoke:compiled");
     expect(workflow).toContain("run: npm run pack:preview:compiled");
+    expect(workflow).toContain("npm run pack:windows-portable:compiled");
+    expect(workflow).toContain("name: Build exact Windows x64 portable update artifact");
+    expect(workflow).toContain("if: runner.os == 'Windows'");
     expect(workflow).toContain("run: npm run probe:pi:compiled");
     expect(workflow).toContain("run: npm run probe:task7:compiled");
     expect(workflow).toContain("npm run probe:task9:compiled");

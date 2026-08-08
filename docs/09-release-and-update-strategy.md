@@ -79,14 +79,21 @@ Publish or pack an exact CLI artifact that depends on or bundles the qualified P
 
 ### Stage C — Windows daily-use preview
 
-Provide a Windows x64 installer or portable artifact. Installer technology remains an open decision until the CLI slice proves value. The artifact must:
+Provide a Windows x64 installer or portable artifact. The current Task 11 implementation selects a portable directory as the first usable shape; installer technology remains an open decision. The artifact must:
 
 - expose `hpi` predictably;
+- pin the Node 24 runtime and exact CLI dependency tree;
+- select one active release through a Hunter-owned atomic pointer;
+- keep releases side-by-side so a failed update can return to the previous one;
 - preserve side-by-side raw Pi/OMP installs;
 - identify publisher/signing status honestly;
 - verify integrity before update;
+- verify the active identity after activation and after rollback;
+- reconcile interrupted activation or migration on the next launch;
 - uninstall without deleting projects or user-selected archives;
 - support rollback.
+
+Task 11's portable artifact is intentionally unsigned `developer-preview` with `qualification=NOT_PROVEN`. It is suitable for bounded local evaluation of the Hunter-owned launcher/update path; it is not a Stable or publisher-qualified release. The supported update commands are `hpi update status --json`, `hpi update check`, `hpi update apply`, and `hpi update rollback`. The Windows CI job builds this artifact from the already completed quality build and retains it for 14 days; Ubuntu validates the provider-neutral and cross-platform contracts but does not emit a Windows package.
 
 Windows ARM64, macOS, and Linux installers remain unclaimed until separately validated.
 

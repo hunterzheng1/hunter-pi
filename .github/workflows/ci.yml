@@ -18,9 +18,10 @@ jobs:
   quality:
     name: ${{ matrix.os }} / Node 24
     runs-on: ${{ matrix.os }}
-    # Windows runs two isolated npm installation smokes; observed network variance
-    # can exceed 20 minutes even when every completed assertion passes.
-    timeout-minutes: 40
+    # Windows runs two isolated npm installation smokes plus the exact portable
+    # artifact assembly; hosted filesystem variance can exceed 40 minutes even
+    # when every completed assertion passes.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -70,6 +71,21 @@ jobs:
         with:
           name: hpi-developer-preview-${{ runner.os }}
           path: .artifacts/hpi-developer-preview/hunter-pi-cli-0.1.0-dev.0.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build exact Windows x64 portable update artifact
+        if: runner.os == 'Windows'
+        run: >-
+          npm run pack:windows-portable:compiled --
+          --output .artifacts/hpi-windows-x64-portable
+
+      - name: Upload Windows x64 portable update artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hpi-windows-x64-portable
+          path: .artifacts/hpi-windows-x64-portable/
           if-no-files-found: error
           retention-days: 14
 

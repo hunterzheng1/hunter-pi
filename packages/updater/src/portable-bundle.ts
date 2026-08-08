@@ -94,6 +94,16 @@ function splitTarPath(path: string): { readonly name: string; readonly prefix: s
   throw new Error("portable bundle path is too long for the ustar format");
 }
 
+function trySplitTarPath(
+  path: string,
+): { readonly name: string; readonly prefix: string } | undefined {
+  try {
+    return splitTarPath(path);
+  } catch {
+    return undefined;
+  }
+}
+
 function paxPathRecord(path: string): Buffer {
   let recordLength = Buffer.byteLength(`path=${path}\n`, "utf8") + 1;
   let record = Buffer.from(`${String(recordLength)} path=${path}\n`, "utf8");
@@ -127,7 +137,7 @@ function createTar(files: readonly PortableBundleFile[]): Buffer {
   const chunks: Buffer[] = [];
   for (const [index, file] of files.entries()) {
     const bytes = Buffer.from(file.bytes);
-    if (Buffer.byteLength(file.path, "utf8") > 255) {
+    if (trySplitTarPath(file.path) === undefined) {
       const extendedPath = paxPathRecord(file.path);
       chunks.push(
         tarHeader(`PaxHeaders/${String(index)}`, extendedPath.byteLength, 0x78),

@@ -501,6 +501,80 @@ describe("Task 9 Run Archive", () => {
     }
   });
 
+  it("rejects credential-shaped text even when portable Evidence metadata is forged safe", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-archive-credential-scan-",
+    );
+    const fixture = await createTerminalProjection(root);
+    const source = new FileRunArchiveStore({
+      stateRoot: join(root, "source"),
+      kernel: new InMemoryWorkflowKernel([fixture.events]),
+    });
+    const manifest = await source.finalize({
+      schemaVersion: "hpi-archive-finalize.v1",
+      operationId: "op_archive-credential-finalize",
+      operationFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-credential-scan",
+      distributionReleaseId: "release_task9",
+      projection: fixture.projection,
+      events: [...fixture.events],
+      evidence: [...fixture.evidence],
+      recoveryLimits: { maxAttempts: 2, maxElapsedMs: 60_000 },
+      archivedAt: fixtureTimestamp,
+    });
+    const archive = archivePackageSchema.parse({
+      schemaVersion: "hpi-archive-package.v1",
+      manifest,
+      projection: fixture.projection,
+      events: [...fixture.events],
+      evidence: [...fixture.evidence],
+      portability: {
+        activeAttemptIds: [],
+        activeOperationReceiptIds: [],
+        unknownOperationIds: [],
+        heldWriterLeaseIds: [],
+        processReferences: [],
+        deviceLocalPaths: [],
+        credentialMaterial: false,
+      },
+    });
+    const evidence = archive.evidence[0];
+    if (evidence === undefined) throw new Error("archive fixture has no Evidence");
+
+    for (const poisonedEvidence of [
+      {
+        ...evidence,
+        summary: "verification token=super-secret-value",
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
+      {
+        ...evidence,
+        capture: {
+          ...evidence.capture,
+          capturedText: "Cookie: session=super-secret-value",
+          capturedBytes: 41,
+          totalBytes: 41,
+        },
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
+    ]) {
+      expect(() => {
+        assertPortableArchive({ ...archive, evidence: [poisonedEvidence] });
+      }).toThrow(/credential|sensitive|portable Archive/u);
+    }
+  });
+
   it("imports only a portable terminal Archive into a clean device profile", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-");
     const fixture = await createTerminalProjection(root);

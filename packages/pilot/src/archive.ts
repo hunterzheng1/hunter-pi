@@ -131,6 +131,10 @@ export const pilotArchiveSchema = z
   });
 export type PilotArchive = z.infer<typeof pilotArchiveSchema>;
 
+export interface TrustedPilotArchive {
+  readonly archive: PilotArchive;
+}
+
 export interface PilotArchiveWriteInput {
   readonly archiveId: string;
   readonly planFingerprint: Fingerprint;
@@ -151,6 +155,7 @@ const packageFilename = "package.json";
 const archiveIdentityFilenameSuffix = ".identity.json";
 const archiveCommitFilenameSuffix = ".committed.json";
 const trustedStoreToken = Symbol("trusted-pilot-archive-store");
+type PilotArchiveReceiptKind = "PACKAGE" | "IDENTITY" | "COMMIT";
 
 function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -161,12 +166,14 @@ function deepFreeze<T>(value: T): T {
 
 function storeProof(
   key: Uint8Array,
+  receiptKind: PilotArchiveReceiptKind,
   archiveId: string,
   archiveFingerprint: Fingerprint,
   observedAt: string,
 ): Fingerprint {
   const payload = canonicalJson({
-    schemaVersion: "hpi-pilot-store-proof.v1",
+    schemaVersion: "hpi-pilot-store-proof.v2",
+    receiptKind,
     archiveId,
     archiveFingerprint,
     observedAt,
@@ -285,7 +292,7 @@ function parseIdentityReceipt(path: string, key: Uint8Array): PilotArchiveIdenti
   }
   if (
     receipt.proof !==
-    storeProof(key, receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
+    storeProof(key, "IDENTITY", receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
   ) {
     throw new PilotArchiveStoreError("pilot Archive identity receipt proof is invalid");
   }
@@ -303,7 +310,7 @@ function identityReceiptFor(
     archiveId,
     archiveFingerprint,
     observedAt,
-    proof: storeProof(key, archiveId, archiveFingerprint, observedAt),
+    proof: storeProof(key, "IDENTITY", archiveId, archiveFingerprint, observedAt),
   });
 }
 
@@ -318,7 +325,7 @@ function commitReceiptFor(
     archiveId,
     archiveFingerprint,
     observedAt,
-    proof: storeProof(key, archiveId, archiveFingerprint, observedAt),
+    proof: storeProof(key, "COMMIT", archiveId, archiveFingerprint, observedAt),
   });
 }
 
@@ -364,7 +371,7 @@ function parseCommitReceipt(path: string, key: Uint8Array): PilotArchiveCommitRe
   }
   if (
     receipt.proof !==
-    storeProof(key, receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
+    storeProof(key, "COMMIT", receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
   ) {
     throw new PilotArchiveStoreError("pilot Archive commit receipt proof is invalid");
   }
@@ -389,7 +396,7 @@ function ensureCommitReceipt(
 }
 
 function createTrustedPilotArchive(archive: PilotArchive): TrustedPilotArchive {
-  return TrustedPilotArchive.fromStore(deepFreeze(archive), trustedStoreToken);
+  return TrustedPilotArchiveHandle.fromStore(deepFreeze(archive), trustedStoreToken);
 }
 
 function parseTrustedPackage(path: string, key: Uint8Array): TrustedPilotArchive {
@@ -410,6 +417,7 @@ function parseTrustedPackage(path: string, key: Uint8Array): TrustedPilotArchive
   }
   const expectedProof = storeProof(
     key,
+    "PACKAGE",
     archive.archiveId,
     archive.archiveFingerprint,
     archive.observedAt,
@@ -442,16 +450,18 @@ function parseBoundArchive(
   return trusted;
 }
 
-export class TrustedPilotArchive {
+class TrustedPilotArchiveHandle implements TrustedPilotArchive {
   readonly #archive: PilotArchive;
 
-  private constructor(archive: PilotArchive) {
+  private constructor(archive: PilotArchive, token: symbol) {
+    if (token !== trustedStoreToken)
+      throw new PilotArchiveStoreError("pilot Archive is not trusted");
     this.#archive = archive;
     Object.freeze(this);
   }
 
   public static isTrusted(value: unknown): value is TrustedPilotArchive {
-    if (!(value instanceof TrustedPilotArchive)) return false;
+    if (!(value instanceof TrustedPilotArchiveHandle)) return false;
     try {
       return value.#archive === value.archive;
     } catch {
@@ -459,10 +469,10 @@ export class TrustedPilotArchive {
     }
   }
 
-  public static fromStore(archive: PilotArchive, token: symbol): TrustedPilotArchive {
+  public static fromStore(archive: PilotArchive, token: symbol): TrustedPilotArchiveHandle {
     if (token !== trustedStoreToken)
       throw new PilotArchiveStoreError("pilot Archive is not trusted");
-    return new TrustedPilotArchive(archive);
+    return new TrustedPilotArchiveHandle(archive, token);
   }
 
   public get archive(): PilotArchive {
@@ -471,7 +481,7 @@ export class TrustedPilotArchive {
 }
 
 export function isTrustedPilotArchive(value: unknown): value is TrustedPilotArchive {
-  return TrustedPilotArchive.isTrusted(value);
+  return TrustedPilotArchiveHandle.isTrusted(value);
 }
 
 export class FilePilotArchiveStore {
@@ -522,7 +532,7 @@ export class FilePilotArchiveStore {
         archiveId: facts.archiveId,
         archiveFingerprint,
         observedAt: facts.observedAt,
-        proof: storeProof(key, facts.archiveId, archiveFingerprint, facts.observedAt),
+        proof: storeProof(key, "PACKAGE", facts.archiveId, archiveFingerprint, facts.observedAt),
       },
     });
     const path = packagePath(this.#stateRoot, archive.archiveId);

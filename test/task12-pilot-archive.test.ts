@@ -51,6 +51,14 @@ describe("Task 12 trusted pilot Archive store", () => {
     expect(store.read("pilot-archive-real-test").archive.archiveFingerprint).toBe(
       trusted.archive.archiveFingerprint,
     );
+    expect(
+      store.write({
+        archiveId: "pilot-archive-real-test",
+        planFingerprint: plan.planFingerprint,
+        capture: testPilotEvidenceCapture(evidence),
+        observedAt: evidence.observedAt,
+      }).archive.archiveFingerprint,
+    ).toBe(trusted.archive.archiveFingerprint);
 
     const packagePath = join(root, "archives", "pilot-archive-real-test", "package.json");
     const package_ = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
@@ -191,6 +199,30 @@ describe("Task 12 trusted pilot Archive store", () => {
         observedAt: evidence.observedAt,
       }),
     ).toThrow(/bound|reserved|identity|immutable/u);
+  });
+
+  it("binds the Archive receipt role into the local HMAC proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-archive-"));
+    roots.push(root);
+    const plan = completePilotExecutionPlan();
+    const evidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const store = new FilePilotArchiveStore({ stateRoot: root });
+    store.write({
+      archiveId: "pilot-archive-receipt-role-test",
+      planFingerprint: plan.planFingerprint,
+      capture: testPilotEvidenceCapture(evidence),
+      observedAt: evidence.observedAt,
+    });
+    const identityPath = join(root, "archives", "pilot-archive-receipt-role-test.identity.json");
+    const commitPath = join(root, "archives", "pilot-archive-receipt-role-test.committed.json");
+    const identity = JSON.parse(readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(
+      commitPath,
+      JSON.stringify({ ...identity, schemaVersion: "hpi-pilot-archive-commit.v1" }),
+      "utf8",
+    );
+
+    expect(() => store.read("pilot-archive-receipt-role-test")).toThrow(/proof|commit|invalid/u);
   });
 
   it("can finish an interrupted reservation before its commit receipt exists", () => {

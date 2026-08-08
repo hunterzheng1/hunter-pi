@@ -77,6 +77,11 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
     const trustedArchive = trustedArchiveFor(evidence, plan, "pilot-archive-forged-handle-test");
     const forgedArchive = { archive: trustedArchive.archive } as never;
+    const runtimeConstructor = (trustedArchive as object).constructor;
+
+    expect(() => {
+      Reflect.construct(runtimeConstructor, [trustedArchive.archive]);
+    }).toThrow(/trust/u);
 
     const decision = new PilotEvaluator().evaluate(evidence, plan, forgedArchive);
 

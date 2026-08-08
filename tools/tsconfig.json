@@ -8,8 +8,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts"],
-  "references": [
-    { "path": "../packages/pi-host" },
-    { "path": "../packages/managed-change" }
-  ]
+  "references": [{ "path": "../packages/pi-host" }, { "path": "../packages/managed-change" }]
 }

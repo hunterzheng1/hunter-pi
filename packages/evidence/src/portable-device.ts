@@ -35,6 +35,12 @@ const profileIdSchema = z
   .trim()
   .regex(/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u, "device profile must be a stable identifier");
 const readinessSchema = z.enum(["PASS", "BLOCKED", "NOT_PROVEN"]);
+const policyResolutionSchema = z.enum([
+  "CLONED",
+  "RECONCILED_EXACT",
+  "RECONCILED_CONFLICT",
+  "RECONCILIATION_NOT_PROVEN",
+]);
 const archivedRunOutcomeSchema = z.enum(["READY", "BLOCKED", "FAILED", "CANCELLED", "INCOMPLETE"]);
 
 export const portableDeviceImportRequestSchema = z.strictObject({
@@ -101,7 +107,7 @@ const portableDeviceImportIntentSchema = z
 type PortableDeviceImportIntent = z.infer<typeof portableDeviceImportIntentSchema>;
 
 const portableDeviceImportReceiptFactsSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-device-import-receipt.v2"),
+  schemaVersion: z.literal("hpi-device-import-receipt.v3"),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   profileId: profileIdSchema,
@@ -115,6 +121,8 @@ const portableDeviceImportReceiptFactsSchema = z.strictObject({
   readOnlyProjectionFingerprint: fingerprintSchema,
   recordedArchiveOutcome: z.enum(["APPLIED", "NOOP"]),
   policyOutcome: readinessSchema,
+  policyResolution: policyResolutionSchema,
+  policyResolutionFingerprint: fingerprintSchema,
   doctorStatus: readinessSchema,
   loginReadiness: readinessSchema,
   outcome: z.enum(["READY", "BLOCKED", "NOT_PROVEN"]),
@@ -141,6 +149,8 @@ function portableDeviceReceiptFingerprint(
         readOnlyProjectionFingerprint: value.readOnlyProjectionFingerprint,
         recordedArchiveOutcome: value.recordedArchiveOutcome,
         policyOutcome: value.policyOutcome,
+        policyResolution: value.policyResolution,
+        policyResolutionFingerprint: value.policyResolutionFingerprint,
         doctorStatus: value.doctorStatus,
         loginReadiness: value.loginReadiness,
         outcome: value.outcome,
@@ -179,7 +189,21 @@ export const projectPolicyCloneResultSchema = z.strictObject({
 });
 export type ProjectPolicyCloneResult = z.infer<typeof projectPolicyCloneResultSchema>;
 
+export const projectPolicyReconciliationResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("ABSENT"), policyFingerprint: z.null() }),
+  z.strictObject({ status: z.literal("EXACT"), policyFingerprint: fingerprintSchema }),
+  z.strictObject({ status: z.literal("CONFLICT"), policyFingerprint: fingerprintSchema }),
+  z.strictObject({ status: z.literal("NOT_PROVEN"), policyFingerprint: z.null() }),
+]);
+export type ProjectPolicyReconciliationResult = z.infer<
+  typeof projectPolicyReconciliationResultSchema
+>;
+
 export interface ProjectPolicyCloner {
+  reconcile(input: {
+    readonly profileId: string;
+    readonly policyFingerprint: string;
+  }): Promise<ProjectPolicyReconciliationResult>;
   clone(input: {
     readonly profileId: string;
     readonly policyFingerprint: string;
@@ -276,6 +300,24 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
       join(this.#stateRoot, ".operation-receipts", ".device-import-lock"),
       async () => {
         const [receipts, intents] = await Promise.all([this.#readReceipts(), this.#readIntents()]);
+        const persistCreatedReceipt = async (): Promise<PortableDeviceImportReceiptResolution> => {
+          const receipt = portableDeviceImportReceiptSchema.parse(await createReceipt());
+          assertBindingIdentity(receipt, parsed);
+          if (receipt.archiveOutcome !== receipt.recordedArchiveOutcome) {
+            throw new DurableStoreError(
+              "STORE_CORRUPT",
+              "Only the immutable first device import outcome can be persisted.",
+            );
+          }
+          await this.#storage.writeCritical(() =>
+            writeImmutableAtomically({
+              directory: receiptDirectory(this.#stateRoot),
+              filename: `${receipt.profileId}.json`,
+              content: `${canonicalJson(receipt)}\n`,
+            }),
+          );
+          return { receipt, replayed: false };
+        };
         const byOperation = receipts.find((receipt) => receipt.operationId === parsed.operationId);
         const byProfile = receipts.find((receipt) => receipt.profileId === parsed.profileId);
         const intentByOperation = intents.find(
@@ -329,10 +371,7 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
               "The device import operation or profile has a conflicting immutable intent.",
             );
           }
-          throw new DurableStoreError(
-            "STORE_BUSY",
-            "A prior device import is incomplete; policy, Doctor, and login external checks will not be repeated.",
-          );
+          return persistCreatedReceipt();
         }
         const intent = createImportIntent(parsed);
         await this.#storage.writeCritical(() =>
@@ -342,22 +381,7 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
             content: `${canonicalJson(intent)}\n`,
           }),
         );
-        const receipt = portableDeviceImportReceiptSchema.parse(await createReceipt());
-        assertBindingIdentity(receipt, parsed);
-        if (receipt.archiveOutcome !== receipt.recordedArchiveOutcome) {
-          throw new DurableStoreError(
-            "STORE_CORRUPT",
-            "Only the immutable first device import outcome can be persisted.",
-          );
-        }
-        await this.#storage.writeCritical(() =>
-          writeImmutableAtomically({
-            directory: receiptDirectory(this.#stateRoot),
-            filename: `${receipt.profileId}.json`,
-            content: `${canonicalJson(receipt)}\n`,
-          }),
-        );
-        return { receipt, replayed: false };
+        return persistCreatedReceipt();
       },
     );
   }
@@ -480,8 +504,8 @@ function overallOutcome(
   loginReadiness: z.infer<typeof readinessSchema>,
 ): "READY" | "BLOCKED" | "NOT_PROVEN" {
   const statuses = [policyOutcome, doctorStatus, loginReadiness];
-  if (statuses.includes("NOT_PROVEN")) return "NOT_PROVEN";
   if (statuses.includes("BLOCKED")) return "BLOCKED";
+  if (statuses.includes("NOT_PROVEN")) return "NOT_PROVEN";
   return "READY";
 }
 
@@ -547,25 +571,73 @@ export class PortableDeviceImporter {
   ): Promise<PortableDeviceImportReceipt> {
     const archiveReceipt = await this.#importArchive(request);
     const projection = await this.#projectImported(binding);
-    let cloneResult: ProjectPolicyCloneResult;
+    let reconciliation: ProjectPolicyReconciliationResult;
     try {
-      cloneResult = projectPolicyCloneResultSchema.parse(
-        await this.#clonePolicy.clone({
+      reconciliation = projectPolicyReconciliationResultSchema.parse(
+        await this.#clonePolicy.reconcile({
           profileId: request.profileId,
           policyFingerprint: request.projectPolicy.policyFingerprint,
         }),
       );
     } catch (error) {
       throw new Error(
-        "device policy clone result must include status and the exact policy fingerprint",
+        "device policy reconciliation must prove absent, exact, conflicting, or not-proven state",
         { cause: error },
       );
     }
-    const policyOutcome = cloneResult.status;
-    const rollbackPolicy = cloneResult.rollback;
-    if (cloneResult.policyFingerprint !== request.projectPolicy.policyFingerprint) {
-      await rollbackPolicy?.();
-      throw new Error("device policy clone did not bind the requested policy fingerprint");
+    let policyOutcome: z.infer<typeof readinessSchema>;
+    let policyResolution: z.infer<typeof policyResolutionSchema>;
+    let policyResolutionFingerprint: string;
+    let rollbackPolicy: (() => Promise<void>) | undefined;
+    if (reconciliation.status === "EXACT") {
+      if (reconciliation.policyFingerprint !== request.projectPolicy.policyFingerprint) {
+        throw new Error("device policy reconciliation did not bind the requested fingerprint");
+      }
+      policyOutcome = "PASS";
+      policyResolution = "RECONCILED_EXACT";
+      policyResolutionFingerprint = sha256Fingerprint(canonicalJson(reconciliation));
+    } else if (reconciliation.status === "CONFLICT") {
+      if (reconciliation.policyFingerprint === request.projectPolicy.policyFingerprint) {
+        throw new Error("device policy reconciliation reported a contradictory conflict");
+      }
+      policyOutcome = "BLOCKED";
+      policyResolution = "RECONCILED_CONFLICT";
+      policyResolutionFingerprint = sha256Fingerprint(canonicalJson(reconciliation));
+    } else if (reconciliation.status === "NOT_PROVEN") {
+      policyOutcome = "NOT_PROVEN";
+      policyResolution = "RECONCILIATION_NOT_PROVEN";
+      policyResolutionFingerprint = sha256Fingerprint(canonicalJson(reconciliation));
+    } else {
+      let cloneResult: ProjectPolicyCloneResult;
+      try {
+        cloneResult = projectPolicyCloneResultSchema.parse(
+          await this.#clonePolicy.clone({
+            profileId: request.profileId,
+            policyFingerprint: request.projectPolicy.policyFingerprint,
+          }),
+        );
+      } catch (error) {
+        throw new Error(
+          "device policy clone result must include status and the exact policy fingerprint",
+          { cause: error },
+        );
+      }
+      policyOutcome = cloneResult.status;
+      policyResolution = "CLONED";
+      policyResolutionFingerprint = sha256Fingerprint(
+        canonicalJson({
+          reconciliation,
+          cloneResult: {
+            status: cloneResult.status,
+            policyFingerprint: cloneResult.policyFingerprint,
+          },
+        }),
+      );
+      rollbackPolicy = cloneResult.rollback;
+      if (cloneResult.policyFingerprint !== request.projectPolicy.policyFingerprint) {
+        await rollbackPolicy?.();
+        throw new Error("device policy clone did not bind the requested policy fingerprint");
+      }
     }
     try {
       let doctorStatus: z.infer<typeof readinessSchema> = "NOT_PROVEN";
@@ -581,6 +653,8 @@ export class PortableDeviceImporter {
         archiveReceipt,
         projection,
         policyOutcome,
+        policyResolution,
+        policyResolutionFingerprint,
         doctorStatus,
         loginReadiness,
       );
@@ -622,11 +696,13 @@ export class PortableDeviceImporter {
     archiveReceipt: ArchiveImportReceipt,
     projection: ImportedArchiveProjection,
     policyOutcome: z.infer<typeof readinessSchema>,
+    policyResolution: z.infer<typeof policyResolutionSchema>,
+    policyResolutionFingerprint: string,
     doctorStatus: z.infer<typeof readinessSchema>,
     loginReadiness: z.infer<typeof readinessSchema>,
   ): PortableDeviceImportReceipt {
     const facts = portableDeviceImportReceiptFactsSchema.parse({
-      schemaVersion: "hpi-device-import-receipt.v2",
+      schemaVersion: "hpi-device-import-receipt.v3",
       operationId: request.operationId,
       operationFingerprint: request.operationFingerprint,
       profileId: request.profileId,
@@ -640,6 +716,8 @@ export class PortableDeviceImporter {
       readOnlyProjectionFingerprint: projection.projectionFingerprint,
       recordedArchiveOutcome: archiveReceipt.outcome,
       policyOutcome,
+      policyResolution,
+      policyResolutionFingerprint,
       doctorStatus,
       loginReadiness,
       outcome: overallOutcome(policyOutcome, doctorStatus, loginReadiness),

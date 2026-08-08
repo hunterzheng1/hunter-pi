@@ -703,15 +703,15 @@ describe("Task 9 Run Archive", () => {
       "execution stopped with cwd=/home/alice/private-project",
       "execution stopped with token=super-secret-value",
     ]) {
-      expect(() =>
+      expect(() => {
         assertPortableArchive({
           ...archive,
           projection: {
             ...archive.projection,
             run: { ...archive.projection.run, terminalReason },
           },
-        }),
-      ).toThrow(/credential|private|path|portable Archive/u);
+        });
+      }).toThrow(/credential|private|path|portable Archive/u);
     }
   });
 
@@ -752,7 +752,7 @@ describe("Task 9 Run Archive", () => {
 
     const receipt = await importer.import(request);
     expect(receipt).toMatchObject({
-      schemaVersion: "hpi-device-import-receipt.v2",
+      schemaVersion: "hpi-device-import-receipt.v3",
       outcome: "BLOCKED",
       archiveOutcome: "APPLIED",
       recordedArchiveOutcome: "APPLIED",
@@ -762,6 +762,7 @@ describe("Task 9 Run Archive", () => {
       sourceFingerprint: fixture.projection.run.sourceFingerprint,
       archivedRunOutcome: "INCOMPLETE",
       policyOutcome: "PASS",
+      policyResolution: "CLONED",
       doctorStatus: "PASS",
       loginReadiness: "BLOCKED",
     });
@@ -1406,6 +1407,7 @@ describe("Task 9 Run Archive", () => {
       archiveOutcome: "NOOP",
       outcome: "READY",
       policyOutcome: "PASS",
+      policyResolution: "RECONCILED_EXACT",
       doctorStatus: "PASS",
       loginReadiness: "PASS",
     });
@@ -1427,8 +1429,7 @@ describe("Task 9 Run Archive", () => {
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
       clonePolicy: {
         clone: () => Promise.resolve("PASS" as never),
-        reconcile: () =>
-          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
       },
       doctor: { run: () => Promise.resolve("PASS") },
       loginReadiness: { check: () => Promise.resolve("PASS") },
@@ -1460,8 +1461,7 @@ describe("Task 9 Run Archive", () => {
             status: "BLOCKED" as const,
             policyFingerprint: `sha256:${"0".repeat(64)}`,
           }),
-        reconcile: () =>
-          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
       },
       doctor: { run: mismatchedDoctor },
       loginReadiness: { check: mismatchedLogin },
@@ -1502,8 +1502,7 @@ describe("Task 9 Run Archive", () => {
       }),
       clonePolicy: {
         clone: clonePolicy,
-        reconcile: () =>
-          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
       },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },

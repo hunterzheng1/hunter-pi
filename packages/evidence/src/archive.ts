@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { lstat, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -193,6 +194,17 @@ export const archiveImportRequestSchema = z.strictObject({
 });
 export type ArchiveImportRequest = z.input<typeof archiveImportRequestSchema>;
 
+const archiveImportReceiptV1Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-archive-import-receipt.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  archiveId: archiveIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  outcome: z.enum(["APPLIED", "NOOP"]),
+  observedAt: timestampSchema,
+});
+type ArchiveImportReceiptV1 = z.infer<typeof archiveImportReceiptV1Schema>;
+
 const archiveImportReceiptFactsSchema = z.strictObject({
   schemaVersion: z.literal("hpi-archive-import-receipt.v2"),
   operationId: operationIdSchema,
@@ -237,6 +249,56 @@ export const archiveImportReceiptSchema = z
     }
   });
 export type ArchiveImportReceipt = z.infer<typeof archiveImportReceiptSchema>;
+
+const archiveImportReceiptRecordSchema = z.union([
+  archiveImportReceiptSchema,
+  archiveImportReceiptV1Schema,
+]);
+type ArchiveImportReceiptRecord = z.infer<typeof archiveImportReceiptRecordSchema>;
+
+const archiveImportIntentFactsSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-archive-import-intent.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  archiveId: archiveIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  readOnlyProjectionFingerprint: fingerprintSchema,
+  recordedOutcome: z.enum(["APPLIED", "NOOP"]),
+  observedAt: timestampSchema,
+});
+
+function archiveImportIntentFingerprint(value: z.infer<typeof archiveImportIntentFactsSchema>) {
+  return sha256Fingerprint(
+    canonicalJson(
+      archiveImportIntentFactsSchema.parse({
+        schemaVersion: value.schemaVersion,
+        operationId: value.operationId,
+        operationFingerprint: value.operationFingerprint,
+        archiveId: value.archiveId,
+        artifactFingerprint: value.artifactFingerprint,
+        readOnlyProjectionFingerprint: value.readOnlyProjectionFingerprint,
+        recordedOutcome: value.recordedOutcome,
+        observedAt: value.observedAt,
+      }),
+    ),
+  );
+}
+
+const archiveImportIntentSchema = z
+  .strictObject({
+    ...archiveImportIntentFactsSchema.shape,
+    intentFingerprint: fingerprintSchema,
+  })
+  .superRefine((intent, context) => {
+    if (intent.intentFingerprint !== archiveImportIntentFingerprint(intent)) {
+      context.addIssue({
+        code: "custom",
+        path: ["intentFingerprint"],
+        message: "Archive import intent fingerprint does not match its immutable facts",
+      });
+    }
+  });
+type ArchiveImportIntent = z.infer<typeof archiveImportIntentSchema>;
 
 export const importedArchiveProjectionRequestSchema = z.strictObject({
   schemaVersion: z.literal("hpi-imported-archive-projection-request.v1"),
@@ -489,7 +551,61 @@ function asReplayReceipt(receipt: ArchiveImportReceipt): ArchiveImportReceipt {
   return archiveImportReceiptSchema.parse({ ...receipt, outcome: "NOOP" });
 }
 
-function operationReceiptPath(stateRoot: string, kind: "imports" | "deletes", key: string): string {
+function reconcileLegacyImportReceipt(
+  legacy: ArchiveImportReceiptV1,
+  archive: ArchivePackage,
+): ArchiveImportReceipt {
+  const artifactFingerprint = archivePackageFingerprint(archive);
+  if (
+    legacy.archiveId !== archive.manifest.archiveId ||
+    legacy.artifactFingerprint !== artifactFingerprint
+  ) {
+    throw new DurableStoreError(
+      "IDENTITY_CONFLICT",
+      "The legacy Archive import receipt does not bind the exact immutable package.",
+    );
+  }
+  const projection = createImportedArchiveProjection({
+    archive,
+    artifactFingerprint,
+    operationId: legacy.operationId,
+    operationFingerprint: legacy.operationFingerprint,
+  });
+  return createArchiveImportReceipt({
+    operationId: legacy.operationId,
+    operationFingerprint: legacy.operationFingerprint,
+    archiveId: legacy.archiveId,
+    artifactFingerprint,
+    readOnlyProjectionFingerprint: projection.projectionFingerprint,
+    recordedOutcome: legacy.outcome,
+    observedAt: legacy.observedAt,
+  });
+}
+
+function createArchiveImportIntent(input: {
+  readonly operationId: string;
+  readonly operationFingerprint: string;
+  readonly archiveId: string;
+  readonly artifactFingerprint: string;
+  readonly readOnlyProjectionFingerprint: string;
+  readonly recordedOutcome: "APPLIED" | "NOOP";
+  readonly observedAt: string;
+}): ArchiveImportIntent {
+  const facts = archiveImportIntentFactsSchema.parse({
+    schemaVersion: "hpi-archive-import-intent.v1",
+    ...input,
+  });
+  return archiveImportIntentSchema.parse({
+    ...facts,
+    intentFingerprint: archiveImportIntentFingerprint(facts),
+  });
+}
+
+function operationReceiptPath(
+  stateRoot: string,
+  kind: "imports" | "import-intents" | "deletes",
+  key: string,
+): string {
   return join(stateRoot, ".operation-receipts", kind, `${key}.json`);
 }
 
@@ -597,6 +713,23 @@ export function assertPortableArchive(archive: ArchivePackage): void {
     throw new DurableStoreError(
       "INVALID_TARGET",
       "A portable Archive cannot contain a device-local path.",
+    );
+  }
+  const archiveTextCategories = redactPortableText(serialized).categories;
+  if (
+    archiveTextCategories.some((category) =>
+      [
+        "CREDENTIAL",
+        "SENSITIVE_QUERY",
+        "ENVIRONMENT_DUMP",
+        "PRIVATE_PATH",
+        "PRIVATE_PROMPT",
+      ].includes(category),
+    )
+  ) {
+    throw new DurableStoreError(
+      "INVALID_TARGET",
+      "A portable Archive cannot contain credential, private prompt, environment, or device-path text in workflow facts.",
     );
   }
   for (const evidence of archive.evidence) {
@@ -928,7 +1061,7 @@ export class FileRunArchiveStore implements RunArchiveStore {
       await this.#assertCanonicalArchive(package_);
       return package_.manifest;
     }
-    const receipt = await this.#readImportReceiptOptional(parsedArchiveId);
+    const receipt = await this.#readImportReceiptOptional(parsedArchiveId, package_);
     if (receipt === undefined) {
       throw new DurableStoreError(
         "INVALID_TARGET",
@@ -1050,9 +1183,15 @@ export class FileRunArchiveStore implements RunArchiveStore {
       operationId: parsed.operationId,
       operationFingerprint: parsed.operationFingerprint,
     });
-    const priorReceipt = await this.#readImportReceiptOptional(archiveId);
-    if (priorReceipt !== undefined) {
-      assertOperationIdentity(priorReceipt, parsed);
+    await this.#assertImportOperationBinding(parsed);
+    const [priorRecord, priorIntent, existing] = await Promise.all([
+      this.#readImportReceiptRecordOptional(archiveId),
+      this.#readImportIntentOptional(archiveId),
+      this.#readPackageOptional(archiveId),
+    ]);
+    if (priorRecord !== undefined) {
+      assertOperationIdentity(priorRecord, parsed);
+      const priorReceipt = this.#resolveImportReceipt(priorRecord, existing ?? parsed.archive);
       if (
         priorReceipt.artifactFingerprint !== artifactFingerprint ||
         priorReceipt.readOnlyProjectionFingerprint !== importedProjection.projectionFingerprint
@@ -1062,7 +1201,6 @@ export class FileRunArchiveStore implements RunArchiveStore {
           "The imported Archive identity is already bound to different facts.",
         );
       }
-      const existing = await this.#readPackageOptional(archiveId);
       if (existing === undefined) await this.#writePackage(parsed.archive);
       else if (canonicalJson(existing) !== canonicalJson(parsed.archive)) {
         throw new DurableStoreError(
@@ -1072,37 +1210,47 @@ export class FileRunArchiveStore implements RunArchiveStore {
       }
       return asReplayReceipt(priorReceipt);
     }
-    const existing = await this.#readPackageOptional(archiveId);
-    if (existing !== undefined) {
-      if (canonicalJson(existing) !== canonicalJson(parsed.archive)) {
-        throw new DurableStoreError(
-          "IDENTITY_CONFLICT",
-          "Imported Archive identity is already bound to other facts.",
-        );
-      }
-      const receipt = createArchiveImportReceipt({
+    if (existing !== undefined && canonicalJson(existing) !== canonicalJson(parsed.archive)) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "Imported Archive identity is already bound to other facts.",
+      );
+    }
+    const intent =
+      priorIntent ??
+      createArchiveImportIntent({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
-        archiveId: parsed.archive.manifest.archiveId,
+        archiveId,
         artifactFingerprint,
         readOnlyProjectionFingerprint: importedProjection.projectionFingerprint,
-        recordedOutcome: "NOOP",
+        recordedOutcome: existing === undefined ? "APPLIED" : "NOOP",
         observedAt: new Date().toISOString(),
       });
-      await this.#writeImportReceipt(receipt);
-      return receipt;
+    if (
+      intent.operationId !== parsed.operationId ||
+      intent.operationFingerprint !== parsed.operationFingerprint ||
+      intent.archiveId !== archiveId ||
+      intent.artifactFingerprint !== artifactFingerprint ||
+      intent.readOnlyProjectionFingerprint !== importedProjection.projectionFingerprint
+    ) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "The immutable Archive import intent is bound to different facts.",
+      );
     }
+    if (priorIntent === undefined) await this.#writeImportIntent(intent);
+    if (existing === undefined) await this.#writePackage(parsed.archive);
     const receipt = createArchiveImportReceipt({
-      operationId: parsed.operationId,
-      operationFingerprint: parsed.operationFingerprint,
-      archiveId: parsed.archive.manifest.archiveId,
-      artifactFingerprint,
-      readOnlyProjectionFingerprint: importedProjection.projectionFingerprint,
-      recordedOutcome: "APPLIED",
-      observedAt: new Date().toISOString(),
+      operationId: intent.operationId,
+      operationFingerprint: intent.operationFingerprint,
+      archiveId: intent.archiveId,
+      artifactFingerprint: intent.artifactFingerprint,
+      readOnlyProjectionFingerprint: intent.readOnlyProjectionFingerprint,
+      recordedOutcome: intent.recordedOutcome,
+      observedAt: intent.observedAt,
     });
     await this.#writeImportReceipt(receipt);
-    await this.#writePackage(parsed.archive);
     return receipt;
   }
 
@@ -1117,7 +1265,8 @@ export class FileRunArchiveStore implements RunArchiveStore {
       );
     }
     await assertSafeDirectoryPath(this.#stateRoot);
-    const receipt = await this.#readImportReceiptOptional(parsed.archiveId);
+    const archive = await this.#readPackage(parsed.archiveId);
+    const receipt = await this.#readImportReceiptOptional(parsed.archiveId, archive);
     if (receipt === undefined) {
       throw new DurableStoreError(
         "NOT_FOUND",
@@ -1131,7 +1280,6 @@ export class FileRunArchiveStore implements RunArchiveStore {
         "Imported Archive projection is bound to a different artifact fingerprint.",
       );
     }
-    const archive = await this.#readPackage(parsed.archiveId);
     const artifactFingerprint = archivePackageFingerprint(archive);
     if (
       artifactFingerprint !== parsed.artifactFingerprint ||
@@ -1382,10 +1530,21 @@ export class FileRunArchiveStore implements RunArchiveStore {
     }
   }
 
-  async #readImportReceiptOptional(archiveId: string) {
+  #resolveImportReceipt(
+    record: ArchiveImportReceiptRecord,
+    archive: ArchivePackage,
+  ): ArchiveImportReceipt {
+    return record.schemaVersion === "hpi-archive-import-receipt.v1"
+      ? reconcileLegacyImportReceipt(record, archive)
+      : record;
+  }
+
+  async #readImportReceiptRecordOptional(
+    archiveId: string,
+  ): Promise<ArchiveImportReceiptRecord | undefined> {
     const receipt = await readImmutableJsonOptional(
       operationReceiptPath(this.#stateRoot, "imports", archiveId),
-      archiveImportReceiptSchema,
+      archiveImportReceiptRecordSchema,
     );
     if (receipt !== undefined && receipt.archiveId !== archiveId) {
       throw new DurableStoreError(
@@ -1393,13 +1552,91 @@ export class FileRunArchiveStore implements RunArchiveStore {
         "An import receipt is bound to a different Archive identity than its path.",
       );
     }
-    if (receipt !== undefined && receipt.outcome !== receipt.recordedOutcome) {
+    if (
+      receipt?.schemaVersion === "hpi-archive-import-receipt.v2" &&
+      receipt.outcome !== receipt.recordedOutcome
+    ) {
       throw new DurableStoreError(
         "STORE_CORRUPT",
         "A persisted Archive import receipt cannot contain a replay-only outcome.",
       );
     }
     return receipt;
+  }
+
+  async #readImportReceiptOptional(
+    archiveId: string,
+    archive: ArchivePackage,
+  ): Promise<ArchiveImportReceipt | undefined> {
+    const record = await this.#readImportReceiptRecordOptional(archiveId);
+    return record === undefined ? undefined : this.#resolveImportReceipt(record, archive);
+  }
+
+  async #readImportIntentOptional(archiveId: string): Promise<ArchiveImportIntent | undefined> {
+    const intent = await readImmutableJsonOptional(
+      operationReceiptPath(this.#stateRoot, "import-intents", archiveId),
+      archiveImportIntentSchema,
+    );
+    if (intent !== undefined && intent.archiveId !== archiveId) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "An Archive import intent is bound to a different Archive identity than its path.",
+      );
+    }
+    return intent;
+  }
+
+  async #assertImportOperationBinding(
+    request: z.infer<typeof archiveImportRequestSchema>,
+  ): Promise<void> {
+    for (const kind of ["imports", "import-intents"] as const) {
+      const directory = join(this.#stateRoot, ".operation-receipts", kind);
+      let entries: Dirent[];
+      try {
+        await assertSafeDirectoryPath(directory);
+        entries = await readdir(directory, { withFileTypes: true });
+      } catch (error) {
+        if (isErrnoException(error) && error.code === "ENOENT") continue;
+        throw storeErrorFrom(error, "STORE_CORRUPT");
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".pending-")) continue;
+        if (!entry.isFile() || !entry.name.endsWith(".json")) {
+          throw new DurableStoreError(
+            "STORE_CORRUPT",
+            "The Archive import operation directory contains an unexpected entry.",
+          );
+        }
+        const archiveId = archiveIdSchema.parse(entry.name.slice(0, -".json".length));
+        const binding =
+          kind === "imports"
+            ? await this.#readImportReceiptRecordOptional(archiveId)
+            : await this.#readImportIntentOptional(archiveId);
+        if (binding?.operationId !== request.operationId) continue;
+        if (
+          binding.operationFingerprint !== request.operationFingerprint ||
+          binding.archiveId !== request.archive.manifest.archiveId
+        ) {
+          throw new DurableStoreError(
+            "IDENTITY_CONFLICT",
+            "One Archive import operation identity cannot be rebound to another Archive.",
+          );
+        }
+      }
+    }
+  }
+
+  async #writeImportIntent(intent: ArchiveImportIntent): Promise<void> {
+    const parsed = archiveImportIntentSchema.parse(intent);
+    await this.#storage.writeCritical(() =>
+      writeImmutableAtomically({
+        directory: dirname(
+          operationReceiptPath(this.#stateRoot, "import-intents", parsed.archiveId),
+        ),
+        filename: `${parsed.archiveId}.json`,
+        content: `${canonicalJson(parsed)}\n`,
+      }),
+    );
   }
 
   async #writeImportReceipt(receipt: ArchiveImportReceipt): Promise<void> {

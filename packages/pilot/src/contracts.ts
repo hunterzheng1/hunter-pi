@@ -15,6 +15,7 @@ const stableIdSchema = z
   .regex(/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u, "pilot identities must be stable and path-free");
 const nonnegativeIntegerSchema = z.number().int().nonnegative();
 const nonnegativeNumberSchema = z.number().nonnegative();
+const positiveIntegerSchema = z.number().int().positive();
 
 export const pilotMachineProfileSchema = z.strictObject({
   schemaVersion: z.literal("hpi-pilot-machine.v2"),
@@ -37,6 +38,8 @@ export const pilotMachineProfileSchema = z.strictObject({
 export type PilotMachineProfile = z.infer<typeof pilotMachineProfileSchema>;
 
 export const pilotModeSchema = z.enum(["QUICK", "MANAGED"]);
+export const pilotCaptureProvenanceSchema = z.enum(["LIVE_WINDOWS_PILOT", "FIXTURE", "TEST"]);
+export type PilotCaptureProvenance = z.infer<typeof pilotCaptureProvenanceSchema>;
 export const pilotOutcomeSchema = z.enum([
   "READY",
   "BLOCKED",
@@ -57,7 +60,11 @@ export const pilotOperatorScopeSchema = z.strictObject({
   repositorySelection: z.literal("EXPLICIT_OPERATOR_SELECTED"),
   providerRequestPolicy: pilotProviderRequestPolicySchema,
   providerEndpointFingerprint: fingerprintSchema.nullable(),
+  providerModelFingerprint: fingerprintSchema.nullable(),
   credentialScopeFingerprint: fingerprintSchema.nullable(),
+  maxProviderRequests: positiveIntegerSchema.nullable(),
+  maxProviderTokens: positiveIntegerSchema.nullable(),
+  maxProviderCostMinor: positiveIntegerSchema.nullable(),
   acknowledged: z.boolean(),
   workspacePolicy: z.literal("DISPOSABLE_PILOT_WORKTREES"),
 });
@@ -279,12 +286,17 @@ function validatePilotPlanBody(
   if (providerScope.providerRequestPolicy === "EXPLICIT_OPERATOR_AUTHORIZED") {
     if (
       providerScope.providerEndpointFingerprint === null ||
-      providerScope.credentialScopeFingerprint === null
+      providerScope.providerModelFingerprint === null ||
+      providerScope.credentialScopeFingerprint === null ||
+      providerScope.maxProviderRequests === null ||
+      providerScope.maxProviderTokens === null ||
+      providerScope.maxProviderCostMinor === null
     ) {
       context.addIssue({
         code: "custom",
         path: ["operatorScope"],
-        message: "explicit Provider requests require endpoint and credential scope fingerprints",
+        message:
+          "explicit Provider requests require endpoint, model, credential, and finite request/token/cost scope",
       });
     }
     if (!providerScope.acknowledged) {
@@ -296,7 +308,11 @@ function validatePilotPlanBody(
     }
   } else if (
     providerScope.providerEndpointFingerprint !== null ||
+    providerScope.providerModelFingerprint !== null ||
     providerScope.credentialScopeFingerprint !== null ||
+    providerScope.maxProviderRequests !== null ||
+    providerScope.maxProviderTokens !== null ||
+    providerScope.maxProviderCostMinor !== null ||
     providerScope.acknowledged
   ) {
     context.addIssue({
@@ -312,7 +328,7 @@ type PilotPlanBody = z.infer<z.ZodObject<typeof pilotPlanBodyShape>>;
 
 export const pilotPlanInputSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-plan-input.v1"),
+    schemaVersion: z.literal("hpi-pilot-plan-input.v2"),
     ...pilotPlanBodyShape,
   })
   .superRefine((input, context) => {
@@ -322,7 +338,7 @@ export type PilotPlanInput = z.infer<typeof pilotPlanInputSchema>;
 
 export const pilotExecutionPlanSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-execution-plan.v1"),
+    schemaVersion: z.literal("hpi-pilot-execution-plan.v2"),
     ...pilotPlanBodyShape,
     planFingerprint: fingerprintSchema,
   })
@@ -401,6 +417,9 @@ export const pilotTaskResultSchema = z
     sourcePreserved: z.boolean(),
     rawSecretLeakage: z.boolean(),
     providerSendAcknowledged: z.boolean(),
+    providerRequestCount: nonnegativeIntegerSchema,
+    providerTokenCount: nonnegativeIntegerSchema,
+    providerCostMinor: nonnegativeIntegerSchema,
     applicableFactCount: z.number().int().positive(),
     capturedFactCount: nonnegativeIntegerSchema,
     manualInterventions: nonnegativeIntegerSchema,
@@ -423,8 +442,29 @@ export const pilotTaskResultSchema = z
         message: "correct must be derived from terminalOutcome and oracleOutcome",
       });
     }
+    if (result.providerSendAcknowledged !== result.providerRequestCount > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["providerRequestCount"],
+        message: "Provider send acknowledgement must match the observed request count",
+      });
+    }
   });
 export type PilotTaskResult = z.infer<typeof pilotTaskResultSchema>;
+
+export const pilotRunArchiveReceiptSchema = z.strictObject({
+  runId: stableIdSchema,
+  taskId: stableIdSchema,
+  replacementOfRunId: stableIdSchema.nullable(),
+  archiveId: stableIdSchema,
+  archiveFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  terminalOutcome: pilotOutcomeSchema,
+  providerRequestCount: nonnegativeIntegerSchema,
+  providerTokenCount: nonnegativeIntegerSchema,
+  providerCostMinor: nonnegativeIntegerSchema,
+});
+export type PilotRunArchiveReceipt = z.infer<typeof pilotRunArchiveReceiptSchema>;
 
 export const pilotInstallationSchema = z.strictObject({
   status: z.literal("PASS"),
@@ -436,7 +476,11 @@ export type PilotInstallation = z.infer<typeof pilotInstallationSchema>;
 
 export const pilotInterruptionSchema = z.strictObject({
   interruptionId: stableIdSchema,
+  taskId: stableIdSchema,
   kind: z.enum(["FORCED_PROCESS_KILL", "TERMINAL_CLOSE", "POWER_INTERRUPTION"]),
+  interruptedRunId: stableIdSchema,
+  replacementRunId: stableIdSchema,
+  replacementArchiveFingerprint: fingerprintSchema,
   historyPreserved: z.boolean(),
   sourcePreserved: z.boolean(),
   resumeOutcome: pilotOutcomeSchema,
@@ -512,13 +556,15 @@ export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
 export const pilotEvidenceSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-evidence.v4"),
+    schemaVersion: z.literal("hpi-pilot-evidence.v5"),
+    captureProvenance: pilotCaptureProvenanceSchema,
     planFingerprint: fingerprintSchema,
     operatorScope: pilotOperatorScopeSchema,
     machine: pilotMachineProfileSchema,
     installation: pilotInstallationSchema,
     taskOracles: z.array(pilotTaskOracleSchema).length(10),
     taskResults: z.array(pilotTaskResultSchema).length(10),
+    runArchives: z.array(pilotRunArchiveReceiptSchema).min(10).max(100),
     interruptions: z.array(pilotInterruptionSchema).length(3),
     discardedWarmups: z.literal(5),
     warmStartSamplesMs: z.array(nonnegativeNumberSchema).min(20),
@@ -605,6 +651,98 @@ export const pilotEvidenceSchema = z
       });
     }
     const oracleById = new Map(evidence.taskOracles.map((oracle) => [oracle.taskId, oracle]));
+    const resultByTaskId = new Map(evidence.taskResults.map((result) => [result.taskId, result]));
+    const runById = new Map(evidence.runArchives.map((run) => [run.runId, run]));
+    if (runById.size !== evidence.runArchives.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["runArchives"],
+        message: "linked Run Archive identities must be unique",
+      });
+    }
+    if (
+      new Set(evidence.runArchives.map((run) => run.archiveId)).size !== evidence.runArchives.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["runArchives"],
+        message: "linked Run Archive identities must be unique",
+      });
+    }
+    for (const run of evidence.runArchives) {
+      const oracle = oracleById.get(run.taskId);
+      const predecessor =
+        run.replacementOfRunId === null ? undefined : runById.get(run.replacementOfRunId);
+      const predecessorMatches =
+        run.replacementOfRunId === null ||
+        (predecessor?.taskId === run.taskId && predecessor.runId !== run.runId);
+      if (run.sourceFingerprint !== oracle?.sourceFingerprint || !predecessorMatches) {
+        context.addIssue({
+          code: "custom",
+          path: ["runArchives"],
+          message: "linked Run Archive receipts must bind frozen task/source identities",
+        });
+      }
+    }
+    for (const result of evidence.taskResults) {
+      const chain = evidence.runArchives.filter((run) => run.taskId === result.taskId);
+      const rootRuns = chain.filter((run) => run.replacementOfRunId === null);
+      const childIds = new Set(
+        chain.flatMap((run) => (run.replacementOfRunId === null ? [] : [run.replacementOfRunId])),
+      );
+      const childByParentId = new Map(
+        chain.flatMap((run) =>
+          run.replacementOfRunId === null ? [] : [[run.replacementOfRunId, run] as const],
+        ),
+      );
+      const reachableRunIds = new Set<string>();
+      let reachableRun = rootRuns[0];
+      while (reachableRun !== undefined && !reachableRunIds.has(reachableRun.runId)) {
+        reachableRunIds.add(reachableRun.runId);
+        reachableRun = childByParentId.get(reachableRun.runId);
+      }
+      const terminalRuns = chain.filter(
+        (run) => !chain.some((candidate) => candidate.replacementOfRunId === run.runId),
+      );
+      const requestCount = chain.reduce((total, run) => total + run.providerRequestCount, 0);
+      const tokenCount = chain.reduce((total, run) => total + run.providerTokenCount, 0);
+      const costMinor = chain.reduce((total, run) => total + run.providerCostMinor, 0);
+      if (
+        chain.length === 0 ||
+        rootRuns.length !== 1 ||
+        reachableRunIds.size !== chain.length ||
+        childIds.size !== chain.filter((run) => run.replacementOfRunId !== null).length ||
+        terminalRuns.length !== 1 ||
+        terminalRuns[0]?.terminalOutcome !== result.terminalOutcome ||
+        requestCount !== result.providerRequestCount ||
+        tokenCount !== result.providerTokenCount ||
+        costMinor !== result.providerCostMinor
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["runArchives"],
+          message: "task Results must aggregate the exact linked Run Archive chain",
+        });
+      }
+    }
+    for (const interruption of evidence.interruptions) {
+      const interruptedRun = runById.get(interruption.interruptedRunId);
+      const replacementRun = runById.get(interruption.replacementRunId);
+      if (
+        resultByTaskId.get(interruption.taskId) === undefined ||
+        interruptedRun?.taskId !== interruption.taskId ||
+        replacementRun?.taskId !== interruption.taskId ||
+        replacementRun.replacementOfRunId !== interruption.interruptedRunId ||
+        replacementRun.archiveFingerprint !== interruption.replacementArchiveFingerprint ||
+        replacementRun.terminalOutcome !== interruption.resumeOutcome
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["interruptions"],
+          message: "forced interruptions must bind an exact linked replacement Run Archive",
+        });
+      }
+    }
     if (
       evidence.taskResults.some((result) => {
         const oracle = oracleById.get(result.taskId);

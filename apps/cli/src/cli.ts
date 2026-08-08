@@ -74,12 +74,14 @@ import {
 import {
   createPilotRepositoryTargetBlockedReceipt,
   createPilotRepositoryTargetReceipt,
+  FilePilotArchiveStore,
   PilotEvaluator,
   PilotPlanCompiler,
   pilotTargetIdSchema,
   type PilotPlanInput,
   type PilotRepositoryTargetReceipt,
   type PilotPreflightFailure,
+  type TrustedPilotArchive,
 } from "@hunter-pi/pilot";
 import { operationIdSchema } from "@hunter-pi/domain";
 import {
@@ -119,6 +121,7 @@ export interface HpiCliDependencies {
     repository: string,
     targetId: string,
   ) => Promise<PilotRepositoryTargetReceipt>;
+  readonly readPilotArchive?: (path: string) => Promise<TrustedPilotArchive>;
   readonly readProviderAuthStatus: (
     paths: HpiPaths,
     providerId: string,
@@ -360,6 +363,7 @@ function defaultDependencies(): HpiCliDependencies {
     now: () => new Date().toISOString(),
     inspectRepository: inspectHpiRepository,
     inspectPilotTarget: inspectHpiPilotTarget,
+    readPilotArchive: (path) => Promise.resolve(FilePilotArchiveStore.readPackageFile(path)),
     readProviderAuthStatus: readPiProviderAuthMetadata,
     resolveProviderDestination: resolvePiProviderDestination,
     launch: launchPi,
@@ -863,7 +867,7 @@ function validateCliArguments(arguments_: readonly string[]): void {
     return;
   }
   if (command === "pilot" && arguments_[1] === "evaluate") {
-    assertPilotJsonOptions(arguments_.slice(2), new Set(["--plan", "--evidence"]));
+    assertPilotJsonOptions(arguments_.slice(2), new Set(["--plan", "--evidence", "--archive"]));
     return;
   }
   if (command === "pilot" && arguments_[1] === "preflight") {
@@ -2135,7 +2139,7 @@ function printHelp(io: HpiCliIo): void {
   );
   line(io, "       hpi pilot compile --input <file> --json");
   line(io, "       hpi pilot target --repo <directory> --target-id <id> --json");
-  line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --json");
+  line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json");
   line(io, "       hpi pilot preflight --plan <file> --json");
 }
 
@@ -2214,12 +2218,24 @@ async function pilotEvaluateCommand(
 ): Promise<number> {
   const planPath = optionValue(arguments_, "--plan");
   const evidencePath = optionValue(arguments_, "--evidence");
-  if (planPath === undefined || evidencePath === undefined) throw new HpiCliUsageError();
+  const archivePath = optionValue(arguments_, "--archive");
+  if (planPath === undefined || evidencePath === undefined || archivePath === undefined) {
+    throw new HpiCliUsageError();
+  }
   const [plan, evidence] = await Promise.all([
     readPilotJsonFile(planPath, dependencies),
     readPilotJsonFile(evidencePath, dependencies),
   ]);
-  const decision = new PilotEvaluator().evaluate(evidence.value, plan.value);
+  let trustedArchive: TrustedPilotArchive | undefined;
+  try {
+    const readPilotArchive =
+      dependencies.readPilotArchive ??
+      ((path: string) => Promise.resolve(FilePilotArchiveStore.readPackageFile(path)));
+    trustedArchive = await readPilotArchive(archivePath);
+  } catch {
+    trustedArchive = undefined;
+  }
+  const decision = new PilotEvaluator().evaluate(evidence.value, plan.value, trustedArchive);
   line(dependencies.io, JSON.stringify(decision));
   return decision.outcome === "GO" ? 0 : 2;
 }

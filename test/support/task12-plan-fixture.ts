@@ -34,7 +34,7 @@ export function completePilotPlanInput(): PilotPlanInput {
     },
   ];
   return {
-    schemaVersion: "hpi-pilot-plan-input.v1",
+    schemaVersion: "hpi-pilot-plan-input.v2",
     platform: "win32",
     architecture: "x64",
     sourceFingerprint: firstSourceFingerprint,
@@ -68,7 +68,11 @@ export function completePilotPlanInput(): PilotPlanInput {
       repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
       providerRequestPolicy: "EXPLICIT_OPERATOR_AUTHORIZED",
       providerEndpointFingerprint: fixtureFingerprint,
+      providerModelFingerprint: fixtureFingerprint,
       credentialScopeFingerprint: `sha256:${"3".repeat(64)}`,
+      maxProviderRequests: 20,
+      maxProviderTokens: 20_000,
+      maxProviderCostMinor: 500,
       acknowledged: true,
       workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
     },

@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  FilePilotArchiveStore,
   PilotPlanCompiler,
   PilotEvaluator,
   nearestRank,
@@ -17,12 +22,150 @@ import {
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence as completeEvidence } from "./support/task12-evidence-fixture.js";
 
+const archiveRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of archiveRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function trustedArchiveFor(
+  evidence: ReturnType<typeof completeEvidence>,
+  plan: ReturnType<typeof completePilotExecutionPlan>,
+  archiveId: string,
+) {
+  const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-evaluator-"));
+  archiveRoots.push(root);
+  return new FilePilotArchiveStore({ stateRoot: root }).write({
+    archiveId,
+    planFingerprint: plan.planFingerprint,
+    evidence,
+    observedAt: evidence.observedAt,
+  });
+}
+
 describe("Task 12 Windows daily-use pilot evaluator", () => {
-  it("uses nearest-rank p95 and returns GO only for a complete passing evidence set", () => {
-    expect(nearestRank([3, 1, 2], 2)).toBe(2);
+  it("does not grant GO to bare fixture-shaped JSON without a trusted pilot Archive", () => {
     const decision = new PilotEvaluator().evaluate(
       completeEvidence(),
       completePilotExecutionPlan(),
+    );
+
+    expect(decision.outcome).toBe("NOT_PROVEN");
+    expect(decision.reasons.join(" ")).toMatch(/Archive|trusted|immutable/u);
+  });
+
+  it("grants GO only when the trusted Archive binds the exact Evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-evaluator-"));
+    archiveRoots.push(root);
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const trustedArchive = new FilePilotArchiveStore({ stateRoot: root }).write({
+      archiveId: "pilot-archive-evaluator-test",
+      planFingerprint: plan.planFingerprint,
+      evidence,
+      observedAt: evidence.observedAt,
+    });
+
+    const decision = new PilotEvaluator().evaluate(evidence, plan, trustedArchive);
+
+    expect(decision.outcome).toBe("GO");
+  });
+
+  it("stops when linked Provider usage exceeds the frozen request/token/cost budget", () => {
+    const plan = new PilotPlanCompiler().compile({
+      ...completePilotPlanInput(),
+      operatorScope: {
+        ...completePilotPlanInput().operatorScope,
+        maxProviderRequests: 12,
+        maxProviderTokens: 1_200,
+        maxProviderCostMinor: 12,
+      },
+    });
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const decision = new PilotEvaluator().evaluate(
+      evidence,
+      plan,
+      trustedArchiveFor(evidence, plan, "pilot-archive-provider-budget-test"),
+    );
+
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/Provider.*budget|maximum.*request|token|cost/u);
+  });
+
+  it("counts only READY linked replacement Runs as successful interruptions", () => {
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const failedRecoveryEvidence = pilotEvidenceSchema.parse({
+      ...evidence,
+      taskResults: evidence.taskResults.map((result, index) =>
+        index === 0 ? { ...result, terminalOutcome: "FAILED" as const, correct: false } : result,
+      ),
+      runArchives: evidence.runArchives.map((run) =>
+        run.runId === "run-pilot-01-replacement"
+          ? { ...run, terminalOutcome: "FAILED" as const }
+          : run,
+      ),
+      interruptions: evidence.interruptions.map((interruption, index) =>
+        index === 0 ? { ...interruption, resumeOutcome: "FAILED" as const } : interruption,
+      ),
+    });
+    const decision = new PilotEvaluator().evaluate(
+      failedRecoveryEvidence,
+      plan,
+      trustedArchiveFor(failedRecoveryEvidence, plan, "pilot-archive-recovery-count-test"),
+    );
+
+    expect(decision.metrics.resumedInterruptionCount).toBe(2);
+    expect(decision.outcome).toBe("GO");
+  });
+
+  it("rejects a detached Run cycle that is not part of the single linked chain", () => {
+    const evidence = completeEvidence();
+    const task = evidence.taskOracles[0];
+    if (task === undefined) throw new Error("fixture task oracle missing");
+
+    const parsed = pilotEvidenceSchema.safeParse({
+      ...evidence,
+      runArchives: [
+        ...evidence.runArchives,
+        {
+          runId: "run-pilot-detached-cycle-a",
+          taskId: task.taskId,
+          replacementOfRunId: "run-pilot-detached-cycle-b",
+          archiveId: "archive-pilot-detached-cycle-a",
+          archiveFingerprint: fixtureFingerprint,
+          sourceFingerprint: task.sourceFingerprint,
+          terminalOutcome: "READY",
+          providerRequestCount: 0,
+          providerTokenCount: 0,
+          providerCostMinor: 0,
+        },
+        {
+          runId: "run-pilot-detached-cycle-b",
+          taskId: task.taskId,
+          replacementOfRunId: "run-pilot-detached-cycle-a",
+          archiveId: "archive-pilot-detached-cycle-b",
+          archiveFingerprint: fixtureFingerprint,
+          sourceFingerprint: task.sourceFingerprint,
+          terminalOutcome: "READY",
+          providerRequestCount: 0,
+          providerTokenCount: 0,
+          providerCostMinor: 0,
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("uses nearest-rank p95 and returns GO only for a complete passing evidence set", () => {
+    expect(nearestRank([3, 1, 2], 2)).toBe(2);
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const decision = new PilotEvaluator().evaluate(
+      evidence,
+      plan,
+      trustedArchiveFor(evidence, plan, "pilot-archive-p95-test"),
     );
     expect(decision.outcome).toBe("GO");
     expect(decision.metrics).toMatchObject({
@@ -36,7 +179,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   });
 
   it("fails closed as NOT_PROVEN when the real-use or remote evidence is incomplete", () => {
-    const evidence = completeEvidence();
+    const evidence = completeEvidence(completePilotExecutionPlan(), "LIVE_WINDOWS_PILOT");
     const decision = new PilotEvaluator().evaluate(
       {
         ...evidence,
@@ -59,7 +202,11 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
         providerRequestPolicy: "NO_PROVIDER_REQUESTS",
         providerEndpointFingerprint: null,
+        providerModelFingerprint: null,
         credentialScopeFingerprint: null,
+        maxProviderRequests: null,
+        maxProviderTokens: null,
+        maxProviderCostMinor: null,
         acknowledged: false,
         workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
       },
@@ -78,7 +225,11 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         repositorySelection: "EXPLICIT_OPERATOR_SELECTED",
         providerRequestPolicy: "NO_PROVIDER_REQUESTS",
         providerEndpointFingerprint: null,
+        providerModelFingerprint: null,
         credentialScopeFingerprint: null,
+        maxProviderRequests: null,
+        maxProviderTokens: null,
+        maxProviderCostMinor: null,
         acknowledged: false,
         workspacePolicy: "DISPOSABLE_PILOT_WORKTREES",
       },
@@ -125,7 +276,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   it("requires an explicit no-manual-state-edit receipt before evaluating daily-use readiness", () => {
     const evidence = {
       ...completeEvidence(),
-      schemaVersion: "hpi-pilot-evidence.v4" as const,
+      schemaVersion: "hpi-pilot-evidence.v5" as const,
       manualStateEditingRequired: false,
     };
     expect(() => pilotEvidenceSchema.parse(evidence)).not.toThrow();
@@ -141,7 +292,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   it("rejects legacy Evidence and incomplete v4 receipts fail closed", () => {
     const evidence = completeEvidence();
     expect(() =>
-      pilotEvidenceSchema.parse({ ...evidence, schemaVersion: "hpi-pilot-evidence.v3" }),
+      pilotEvidenceSchema.parse({ ...evidence, schemaVersion: "hpi-pilot-evidence.v4" }),
     ).toThrow(/schemaVersion|v4/u);
 
     const withoutManualStateReceipt: Record<string, unknown> = { ...evidence };
@@ -233,7 +384,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   });
 
   it("requires intervention reduction or contained ambiguity and never waives overhead", () => {
-    const evidence = completeEvidence();
+    const evidence = completeEvidence(completePilotExecutionPlan(), "LIVE_WINDOWS_PILOT");
     const noComparatorValue = new PilotEvaluator().evaluate(
       {
         ...evidence,
@@ -252,23 +403,26 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
       completePilotExecutionPlan(),
     );
     expect(noComparatorValue.outcome).toBe("STOP");
+    const overheadPlan = completePilotExecutionPlan();
+    const overheadEvidence = pilotEvidenceSchema.parse({
+      ...evidence,
+      taskResults: evidence.taskResults.map((result, index) =>
+        [0, 5, 6].includes(index)
+          ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 }
+          : result,
+      ),
+      pairedComparators: evidence.pairedComparators.map((comparator) => ({
+        ...comparator,
+        rawPiManualInterventions: 3,
+        hunterManualInterventions: 3,
+        hunterAdditionalOverheadMinutes: 11,
+        containedFalseCompletion: true,
+      })),
+    });
     const overheadMiss = new PilotEvaluator().evaluate(
-      {
-        ...evidence,
-        taskResults: evidence.taskResults.map((result, index) =>
-          [0, 5, 6].includes(index)
-            ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 }
-            : result,
-        ),
-        pairedComparators: evidence.pairedComparators.map((comparator) => ({
-          ...comparator,
-          rawPiManualInterventions: 3,
-          hunterManualInterventions: 3,
-          hunterAdditionalOverheadMinutes: 11,
-          containedFalseCompletion: true,
-        })),
-      },
-      completePilotExecutionPlan(),
+      overheadEvidence,
+      overheadPlan,
+      trustedArchiveFor(overheadEvidence, overheadPlan, "pilot-archive-overhead-test"),
     );
     expect(overheadMiss.outcome).toBe("REVISE");
     expect(overheadMiss.reasons.join(" ")).toMatch(/overhead/u);

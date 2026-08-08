@@ -7,6 +7,7 @@ import {
   type PilotEvidence,
   type PilotMetrics,
 } from "./contracts.js";
+import type { TrustedPilotArchive } from "./archive.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 
 const invalidEvidenceFingerprint = pilotFingerprint({
@@ -58,6 +59,19 @@ function median(samples: readonly number[]): number {
   return value;
 }
 
+function successfullyResumedInterruptionCount(evidence: PilotEvidence): number {
+  const runById = new Map(evidence.runArchives.map((run) => [run.runId, run]));
+  return evidence.interruptions.filter((interruption) => {
+    const replacement = runById.get(interruption.replacementRunId);
+    return (
+      interruption.resumeOutcome === "READY" &&
+      replacement?.replacementOfRunId === interruption.interruptedRunId &&
+      replacement.archiveFingerprint === interruption.replacementArchiveFingerprint &&
+      replacement.terminalOutcome === "READY"
+    );
+  }).length;
+}
+
 function metricsFor(evidence: PilotEvidence): PilotMetrics {
   const applicableFacts = evidence.pairedComparators.reduce(
     (total, comparator) => total + comparator.applicableFactCount,
@@ -81,9 +95,7 @@ function metricsFor(evidence: PilotEvidence): PilotMetrics {
       (result) => result.terminalOutcome === result.oracleOutcome,
     ).length,
     interruptionCount: evidence.interruptions.length,
-    resumedInterruptionCount: evidence.interruptions.filter(
-      (interruption) => !["BLOCKED", "NOT_PROVEN"].includes(interruption.resumeOutcome),
-    ).length,
+    resumedInterruptionCount: successfullyResumedInterruptionCount(evidence),
     warmStartP95Ms: p95(evidence.warmStartSamplesMs),
     acknowledgementP95Ms: p95(evidence.acknowledgementSamplesMs),
     memoryP95MiB: p95(evidence.memorySamplesMiB),
@@ -236,8 +248,34 @@ function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | nu
   return reasons;
 }
 
+function archiveProblems(
+  evidence: PilotEvidence,
+  plan: PilotExecutionPlan | null,
+  trustedArchive: TrustedPilotArchive | undefined,
+): string[] {
+  if (trustedArchive === undefined) return [];
+  const archive = trustedArchive.archive;
+  const reasons: string[] = [];
+  if (
+    archive.provenance !== "REAL_WINDOWS_PILOT" ||
+    archive.fixture ||
+    archive.evidenceFingerprint !== safePilotFingerprint(evidence) ||
+    !sameCanonicalValue(archive.evidence, evidence)
+  ) {
+    reasons.push("trusted pilot Archive does not bind the exact immutable Evidence");
+  }
+  if (plan !== null && archive.planFingerprint !== plan.planFingerprint) {
+    reasons.push("trusted pilot Archive does not bind the exact frozen pilot plan");
+  }
+  return reasons;
+}
+
 export class PilotEvaluator {
-  public evaluate(input: unknown, planInput?: unknown): PilotDecision {
+  public evaluate(
+    input: unknown,
+    planInput?: unknown,
+    trustedArchive?: TrustedPilotArchive,
+  ): PilotDecision {
     const parsed = safeParseEvidence(input);
     if (parsed?.success !== true) {
       return pilotDecisionSchema.parse({
@@ -289,10 +327,19 @@ export class PilotEvaluator {
     const evidence = parsed.data;
     const plan = parsedPlan?.data ?? null;
     const metrics = metricsFor(evidence);
-    const reasons = identityProblems(evidence, plan);
+    const reasons = [
+      ...identityProblems(evidence, plan),
+      ...archiveProblems(evidence, plan, trustedArchive),
+    ];
     const missingEvidence: string[] = [];
     if (plan === null) {
       missingEvidence.push("the exact frozen pilot execution plan was not supplied");
+    }
+    if (trustedArchive === undefined) {
+      missingEvidence.push("the immutable pilot Archive was not resolved from the trusted store");
+    }
+    if (evidence.captureProvenance !== "LIVE_WINDOWS_PILOT") {
+      missingEvidence.push("Evidence is not marked as a live Windows pilot capture");
     }
     if (evidence.ci.windows.status !== "PASS" || evidence.ci.ubuntu.status !== "PASS") {
       missingEvidence.push("exact Windows and Ubuntu CI are not both PASS");
@@ -302,6 +349,14 @@ export class PilotEvaluator {
     }
     const frozenProviderRequestPolicy =
       plan?.operatorScope.providerRequestPolicy ?? evidence.operatorScope.providerRequestPolicy;
+    const providerUsage = evidence.runArchives.reduce(
+      (usage, run) => ({
+        requests: usage.requests + run.providerRequestCount,
+        tokens: usage.tokens + run.providerTokenCount,
+        costMinor: usage.costMinor + run.providerCostMinor,
+      }),
+      { requests: 0, tokens: 0, costMinor: 0 },
+    );
     const zeroToleranceFailures: string[] = [];
     if (
       evidence.taskResults.some(
@@ -315,10 +370,25 @@ export class PilotEvaluator {
     }
     if (
       frozenProviderRequestPolicy === "NO_PROVIDER_REQUESTS" &&
-      evidence.taskResults.some((result) => result.providerSendAcknowledged)
+      (evidence.taskResults.some((result) => result.providerSendAcknowledged) ||
+        providerUsage.requests > 0)
     ) {
       zeroToleranceFailures.push(
         "Provider request was acknowledged under a no-request pilot scope",
+      );
+    }
+    const providerScope = plan?.operatorScope ?? evidence.operatorScope;
+    if (
+      providerScope.providerRequestPolicy === "EXPLICIT_OPERATOR_AUTHORIZED" &&
+      (providerScope.maxProviderRequests === null ||
+        providerScope.maxProviderTokens === null ||
+        providerScope.maxProviderCostMinor === null ||
+        providerUsage.requests > providerScope.maxProviderRequests ||
+        providerUsage.tokens > providerScope.maxProviderTokens ||
+        providerUsage.costMinor > providerScope.maxProviderCostMinor)
+    ) {
+      zeroToleranceFailures.push(
+        "Provider usage exceeds the frozen maximum request, token, or cost authorization",
       );
     }
     if (

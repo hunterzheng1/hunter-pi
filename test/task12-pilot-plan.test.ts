@@ -74,7 +74,7 @@ describe("Task 12 pilot plan compiler", () => {
   it("freezes explicit targets and tasks without carrying paths or credentials into the plan", () => {
     const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
 
-    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v1");
+    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v2");
     expect(plan.planFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(plan.repositoryTargets).toHaveLength(2);
     expect(plan.tasks).toHaveLength(10);

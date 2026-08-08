@@ -165,3 +165,27 @@ The artifact remains unsigned and `qualification=NOT_PROVEN`; publication, signi
 promotion, existing-user state migration, real-repository safety, broad Provider reliability,
 and the Task 12 real-use Archive remain unproven. The overall daily-use disposition remains
 `NOT_PROVEN`.
+
+## Addendum (2026-08-09) — Task 12 Archive authority hardening
+
+The earlier Task 12 section is retained as the pre-hardening boundary snapshot. The provider-neutral
+implementation now closes the specific authority gaps identified there:
+
+- plan-input/execution-plan v2 and `hpi-pilot-evidence.v5` require explicit capture provenance;
+- `FilePilotArchiveStore` resolves an append-only Archive package from an exact local directory and
+  regular file, verifies immutable facts, the Evidence digest, observed time, and a local store proof,
+  and returns a trusted handle only for `REAL_WINDOWS_PILOT` / `LIVE_WINDOWS_PILOT` data;
+- the evaluator and CLI require the trusted Archive and exact frozen plan before a decision can be
+  considered complete, so fixture-shaped JSON or a plain Evidence file cannot yield daily-use `GO`;
+- linked Run Archive receipts require one reachable root and one terminal Run per task, aggregate
+  replacement Runs without rewriting history, and bind successful interruption counts to READY
+  replacement outcomes and matching Archive fingerprints;
+- explicit Provider authorization now binds finite maximum request, token, and cost budgets, with
+  over-budget usage as a zero-tolerance STOP. The CLI requires
+  `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json`.
+
+Local focused and static checks pass on the isolated Windows worktree. Hosted PR/main verification is
+pending for this new head. This hardening is not a real pilot: no external repository, credential, or
+Provider request was inferred or touched. The daily-use disposition therefore remains
+`NOT_RUN / NOT_PROVEN` until the separately authorized Windows pilot produces its complete Archive,
+exact Windows/Ubuntu receipts, and real observations.

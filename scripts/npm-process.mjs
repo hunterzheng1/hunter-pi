@@ -183,9 +183,17 @@ export const summarizeNpmFailure = (failure, context) => {
  * @returns {boolean} whether one final attempt is allowed.
  */
 export const shouldRetryNpmFailure = (arguments_, failure, attemptNumber) => {
-  if (attemptNumber !== 1 || arguments_[0] !== "install") return false;
-  const output = `${failure.stdout}\n${failure.stderr}`;
-  return /^npm (?:error|ERR!) code ECONNRESET\s*$/imu.test(output);
+  if (
+    attemptNumber !== 1 ||
+    arguments_[0] !== "install" ||
+    !arguments_.includes("--ignore-scripts")
+  ) {
+    return false;
+  }
+  const codes = [
+    ...failure.stderr.matchAll(/^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/gimu),
+  ].map((match) => match[1]);
+  return codes.length === 1 && codes[0] === "ECONNRESET";
 };
 
 /**

@@ -127,19 +127,42 @@ describe("isolated npm process support", () => {
         1,
       ),
     ).toBe(true);
-    expect(shouldRetryNpmFailure(["install"], transportFailure, 2)).toBe(false);
+    expect(shouldRetryNpmFailure(["install", "--ignore-scripts"], transportFailure, 2)).toBe(false);
+    expect(shouldRetryNpmFailure(["install"], transportFailure, 1)).toBe(false);
     expect(shouldRetryNpmFailure(["pack", "."], transportFailure, 1)).toBe(false);
     expect(
       shouldRetryNpmFailure(
-        ["install"],
+        ["install", "--ignore-scripts"],
         { status: 1, stderr: "npm error code E429", stdout: "" },
         1,
       ),
     ).toBe(false);
     expect(
       shouldRetryNpmFailure(
-        ["install"],
+        ["install", "--ignore-scripts"],
         { status: 1, stderr: "npm error code EACCES", stdout: "" },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code ECONNRESET\nnpm error code E429",
+          stdout: "",
+        },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code EACCES",
+          stdout: "npm error code ECONNRESET",
+        },
         1,
       ),
     ).toBe(false);
@@ -169,7 +192,9 @@ describe("isolated npm process support", () => {
       );
       process.env["npm_execpath"] = fakeNpmEntryPoint;
 
-      expect(runNpm(["install"], root, join(root, "npm"))).toBe("retry-succeeded\n");
+      expect(runNpm(["install", "--ignore-scripts"], root, join(root, "npm"))).toBe(
+        "retry-succeeded\n",
+      );
       expect(stderr).toHaveBeenCalledTimes(1);
       expect(String(stderr.mock.calls[0]?.[0])).toMatch(
         /^Preserved transient npm failure; retrying once\. npm CLI failed \(status 1, npmCode ECONNRESET, syscall read, outputBytes \d+, outputSha256 [a-f0-9]{64}\)\.\n$/u,

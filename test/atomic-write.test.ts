@@ -251,7 +251,7 @@ describe("durable mutation-lock recovery", () => {
     await expect(owner.completion).resolves.toMatchObject({ code: 0, signal: null });
   });
 
-  it("reclaims a lock only after its exact owner PID no longer exists", async () => {
+  it("reclaims a lock only after its exact signed owner endpoint no longer exists", async () => {
     const root = await createRoot();
     const lockPath = join(root, ".mutation-lock");
     const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");

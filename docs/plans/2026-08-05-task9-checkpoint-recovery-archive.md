@@ -47,14 +47,21 @@ Make interruption handling and Run finalization durable without rewriting workfl
 
 ## 2026-08-08 hardening status
 
-The provider-neutral local contract now rejects cancellation after only `AGENT_RETURNED` or `PROCESS_EXITED`, rejects recovery when a process or Writer Lease identity is missing from the finality reconciliation, persists the Attempt Finality Receipt across durable reopen, and includes its Evidence in Archive completeness checks. Second-device projection proof and exact Windows/Ubuntu Task 9 Evidence remain open; Task 9 therefore remains `PARTIAL` rather than production-proven.
+The provider-neutral contract now rejects cancellation after only `AGENT_RETURNED` or
+`PROCESS_EXITED`, rejects recovery when a process or Writer Lease identity is missing from finality
+reconciliation, persists process-final, lease-release, and Attempt Finality Receipts across reopen,
+and retains their Evidence in Archive completeness checks. A clean-profile import creates an exact
+archive-bound `READ_ONLY` projection; its v3 device receipt records exact policy reconciliation and
+resumes an interrupted import without manual state editing. The importer rescans the complete
+canonical Archive text and rejects path- or credential-shaped content even when metadata is forged.
 
-The durable mutation-lock seam now publishes a complete, synchronized owner record through an
-atomic no-replace hard link instead of exposing an empty lock directory. Reconciliation ignores
-age, never sends a signal, and is eligible only when the exact owner PID probe returns `ESRCH`;
-live, inaccessible, ownerless, directory-shaped, and malformed owners fail closed. An atomic
-reconciliation claim elects one contender, and the winner records a path-free immutable receipt
-before removing the exact old file identity. The Windows fixture covers a naturally exited owner,
-an externally forced owner kill, concurrent contenders, receipt replay, privacy, and replacement
-safety. Hosted Ubuntu execution, real power loss, and a second forced kill inside the narrower
-reconciliation-claim window remain open, so Task 9 remains `PARTIAL`.
+The durable mutation-lock seam publishes a complete owner record through an atomic no-replace hard
+link. Process identity is a signed Ed25519 challenge-response endpoint; PID is informational and PID
+reuse cannot authorize recovery. One physical-path-normalized reconciliation claim elects the
+winner, immutable receipts bind every recovery fact, and a successor recovers after forced process
+termination at each of the three claim/receipt/removal boundaries. File-backed Writer Leases reuse
+this seam rather than maintaining a weaker second lock implementation. The exact Windows-local v2
+matrix passes 87/87 tests across eight files and binds forced-termination recovery, lease reopen,
+second-device projection, finality replay, and privacy. Hosted Windows/Ubuntu execution for the
+final source, real OS power loss, real repositories, and Provider recovery remain open; Task 9 stays
+`PARTIAL` until the hosted receipts and comparator pass.

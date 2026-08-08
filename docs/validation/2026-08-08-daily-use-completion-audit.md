@@ -20,21 +20,19 @@ Status: `PARTIAL`.
 The durable event, Checkpoint, Archive, export, import, and exact-target deletion modules are
 real implementations. The following daily-use gates remain open:
 
-- the canonical Kernel and RecoveryCoordinator now require an immutable Attempt Finality
-  Receipt with exact Checkpoint process/Writer Lease sets, but a real platform recovery adapter
-  has not yet bound Task 7 final receipts and lease releases into it;
-- stale mutation-lock reconciliation now has a Windows-local contract and real child-process
-  fixture: owner metadata is atomically published, only an exact missing PID is reclaimed, one
-  contender records an immutable path-free receipt, and an externally forced owner kill recovers
-  without manual deletion. Hosted Ubuntu execution, a kill inside the narrower reconciliation
-  window, real power loss, and a platform-bound Task 9 Evidence comparator remain unproven;
-- import/export/delete receipt replay and the second-device read-only projection need stronger
-  immutable reconciliation semantics.
+- the platform Finality adapter now binds exact process-final and Writer Lease release receipts
+  into an immutable Attempt Finality Receipt and replays it after reopen; the final hosted Windows
+  and Ubuntu receipts still need to bind this exact source;
+- mutation-lock recovery now uses signed process liveness rather than PID ownership, elects one
+  reconciler at a canonical physical path, and recovers after forced termination at all three
+  claim/receipt/removal boundaries. Windows-local Evidence passes; hosted Ubuntu, exact aggregate
+  comparison, and real OS power loss remain unproven;
+- import/export/delete replay and clean-profile second-device projection now use immutable intents,
+  exact archive/operation identities, v3 policy reconciliation, and interrupted-import resume.
+  A physically separate operator-device pilot remains unproven.
 
-The hardening source also rejects cancellation after only `AGENT_RETURNED` or `PROCESS_EXITED`,
-retains finality Evidence in Archive completeness checks, and preserves the finality Receipt
-across durable reopen. These are provider-neutral local contract results, not a platform recovery
-claim.
+The Windows-local v2 receipt binds 87/87 fixed daily-use assertions and six direct finality/privacy
+checks. It is provider-neutral local Evidence, not a hosted cross-platform or real-repository claim.
 
 The Archive boundary now independently rescans retained Evidence summary and capture text. A
 caller cannot bypass credential/private-text rejection merely by setting `contentClass=LOG`,
@@ -42,6 +40,8 @@ caller cannot bypass credential/private-text rejection merely by setting `conten
 privacy path only; it does not close the remaining platform recovery gates.
 
 Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
+[`portable-device.ts`](../../packages/evidence/src/portable-device.ts),
+[`atomic-write.ts`](../../packages/evidence/src/atomic-write.ts),
 [`recovery.ts`](../../packages/workflow-kernel/src/recovery.ts), and
 [`in-memory-workflow-kernel.ts`](../../packages/workflow-kernel/src/in-memory-workflow-kernel.ts).
 

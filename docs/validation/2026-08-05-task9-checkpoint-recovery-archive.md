@@ -41,7 +41,7 @@ second-device read-only projection, quoted-JSON privacy rejection, interrupted i
 durable recovery, cancellation, Checkpoint, and Attempt Finality cases.
 The direct finality fixture adds process-final, Writer Lease release, Attempt Finality, durable
 reopen, and privacy checks, for six fact-bound checks in the receipt. The non-duplicated CI test set
-also passes locally (46 files / 393 tests), full `npm run verify` passes (55 files / 493 tests plus
+also passes locally (46 files / 394 tests), full `npm run verify` passes (55 files / 494 tests plus
 strict compile, build, format, external package install, single-artifact smoke, clean locked install,
 and Pi probe), the focused lock/lease/Archive regression passes (3 files / 61 tests), and the
 concurrent reconciler case passed 15 consecutive Windows stress iterations.
@@ -49,7 +49,13 @@ The implementation never terminates an owner outside the test harness.
 
 Historical Task 6 Evidence remains parseable through the backward-compatible empty
 finality-receipt projection default. Earlier failed and v1 local receipts remain preserved in the
-ignored Evidence workspace. Remote CI for this source is `PENDING`. Exact merged-head main CI
+ignored Evidence workspace. PR #51 first hosted run
+[`31250110366`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31250110366) is also preserved:
+Ubuntu passed its quality and Task 9 v2 receipt, while Windows passed unit, package, clean-install,
+Doctor, and Pi gates before the Task 9 contract matrix failed; aggregate jobs therefore skipped.
+The replacement keeps a finite 30-second test timeout for process-heavy hosted fixtures and emits
+only fixed test-file identity, assertion index, status, and duration when a matrix fails. Remote CI
+for the replacement source remains `PENDING`. Exact merged-head main CI
 [`31244419248`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31244419248) passes the prior
 rate-limit/CI hardening baseline but does not prove this Task 9 v2 source. Earlier replacement and
 merged-head runs remain recorded as

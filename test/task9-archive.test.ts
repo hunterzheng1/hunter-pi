@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -109,7 +109,9 @@ async function leaveInterruptedAtomicWrite(options: {
   const completion = new Promise<{ readonly code: number | null; readonly signal: string | null }>(
     (resolvePromise, reject) => {
       child.once("error", reject);
-      child.once("close", (code, signal) => resolvePromise({ code, signal }));
+      child.once("close", (code, signal) => {
+        resolvePromise({ code, signal });
+      });
     },
   );
   const marker = '"event":"ATOMIC_WRITE_PAUSED"';
@@ -1629,14 +1631,69 @@ describe("Task 9 Run Archive", () => {
         expect(resolution.replayed).toBe(publishedBeforeTermination);
         expect(createReceipt).toHaveBeenCalledTimes(publishedBeforeTermination ? 0 : 1);
         for (const directory of [intentRoot, receiptRoot]) {
-          const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
-            if (error.code === "ENOENT") return [];
+          const entries = await readdir(directory).catch((error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
             throw error;
           });
           expect(entries.filter((entry) => entry.startsWith(".pending-"))).toEqual([]);
         }
       }
     }
+  });
+
+  it("fails closed without deleting foreign device atomic-write remnants", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-foreign-pending-",
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: "op_device-import-foreign-pending",
+      operationFingerprint: fixtureFingerprint,
+      profileId: "device-profile-foreign-pending",
+      projectPolicyFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-device-foreign-pending",
+      artifactFingerprint: fixtureFingerprint,
+      runId: "run_task9-device-foreign-pending",
+      planRevisionId: "plan_task9-device-foreign-pending",
+      sourceFingerprint: fixtureFingerprint,
+      archivedRunOutcome: "READY",
+    });
+    const createReceipt = vi.fn(() => {
+      throw new Error("foreign pending state must fail before receipt creation");
+    });
+
+    const malformedRoot = join(root, "malformed-name");
+    const malformedDirectory = join(malformedRoot, ".operation-receipts", "device-import-intents");
+    const malformedPath = join(malformedDirectory, ".pending-not-a-writer-identity");
+    await mkdir(malformedDirectory, { recursive: true });
+    await writeFile(malformedPath, "foreign", { flag: "wx" });
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: malformedRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(access(malformedPath)).resolves.toBeUndefined();
+
+    const linkedRoot = join(root, "linked-remnant");
+    const linkedDirectory = join(linkedRoot, ".operation-receipts", "device-import-intents");
+    const linkedPath = join(linkedDirectory, ".pending-00000000-0000-4000-8000-000000000000");
+    const outsideLink = join(linkedRoot, "foreign-hardlink");
+    await mkdir(linkedDirectory, { recursive: true });
+    await writeFile(linkedPath, "{}\n", { flag: "wx" });
+    await link(linkedPath, outsideLink);
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: linkedRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(Promise.all([access(linkedPath), access(outsideLink)])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(createReceipt).not.toHaveBeenCalled();
   });
 
   it("rejects legacy or mismatched policy clone results", async () => {

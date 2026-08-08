@@ -1,4 +1,5 @@
-import { lstat, readFile, readdir } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { lstat, readFile, readdir, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -243,6 +244,64 @@ function intentDirectory(stateRoot: string): string {
   return join(stateRoot, ".operation-receipts", "device-import-intents");
 }
 
+const atomicWritePendingNamePattern =
+  /^\.pending-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+async function reconcileAtomicWriteRemnants<Output>(
+  directory: string,
+  schema: z.ZodType<Output>,
+  finalFilename: (value: Output) => string,
+): Promise<void> {
+  let entries: Dirent[];
+  try {
+    await assertSafeDirectoryPath(directory);
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.name.startsWith(".pending-")) continue;
+    if (!atomicWritePendingNamePattern.test(entry.name)) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A device import directory contains an invalid atomic-write remnant.",
+      );
+    }
+    const pendingPath = join(directory, entry.name);
+    const pendingStats = await lstat(pendingPath, { bigint: true });
+    if (
+      !pendingStats.isFile() ||
+      pendingStats.isSymbolicLink() ||
+      pendingStats.ino === 0n ||
+      (pendingStats.nlink !== 1n && pendingStats.nlink !== 2n)
+    ) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A device import atomic-write remnant is not an exact private staging file.",
+      );
+    }
+    if (pendingStats.nlink === 2n) {
+      const value = schema.parse(JSON.parse(await readFile(pendingPath, "utf8")) as unknown);
+      const finalPath = join(directory, finalFilename(value));
+      const finalStats = await lstat(finalPath, { bigint: true });
+      if (
+        !finalStats.isFile() ||
+        finalStats.isSymbolicLink() ||
+        finalStats.nlink !== 2n ||
+        finalStats.dev !== pendingStats.dev ||
+        finalStats.ino !== pendingStats.ino
+      ) {
+        throw new DurableStoreError(
+          "STORE_CORRUPT",
+          "A published device import remnant is not bound to its exact final receipt.",
+        );
+      }
+    }
+    await unlink(pendingPath);
+  }
+}
+
 function createImportIntent(binding: PortableDeviceImportBinding): PortableDeviceImportIntent {
   const facts = portableDeviceImportIntentFactsSchema.parse({
     schemaVersion: "hpi-device-import-intent.v1",
@@ -390,6 +449,11 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
     const directory = receiptDirectory(this.#stateRoot);
     try {
       await assertSafeDirectoryPath(directory);
+      await reconcileAtomicWriteRemnants(
+        directory,
+        portableDeviceImportReceiptSchema,
+        (receipt) => `${receipt.profileId}.json`,
+      );
       const entries = await readdir(directory, { withFileTypes: true });
       const receipts: PortableDeviceImportReceipt[] = [];
       const operationIds = new Set<string>();
@@ -442,6 +506,11 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
     const directory = intentDirectory(this.#stateRoot);
     try {
       await assertSafeDirectoryPath(directory);
+      await reconcileAtomicWriteRemnants(
+        directory,
+        portableDeviceImportIntentSchema,
+        (intent) => `${intent.binding.profileId}.json`,
+      );
       const entries = await readdir(directory, { withFileTypes: true });
       const intents: PortableDeviceImportIntent[] = [];
       const operationIds = new Set<string>();

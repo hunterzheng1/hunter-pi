@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { compareTask9PlatformEvidence } from "../tools/compare-task9-platform-evidence.js";
 import {
   TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+  TASK9_CONTRACT_TEST_COUNT,
   TASK9_CONTRACT_TEST_FILES,
   TASK9_PLATFORM_CHECKS,
   TASK9_SOURCE_PATHSPEC,
@@ -20,8 +21,8 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
       status: "PASS",
       definitionFingerprint: TASK9_CONTRACT_DEFINITION_FINGERPRINT,
       testFileCount: 8,
-      testCount: 87,
-      passedTestCount: os === "WINDOWS" ? 87 : 86,
+      testCount: TASK9_CONTRACT_TEST_COUNT,
+      passedTestCount: os === "WINDOWS" ? TASK9_CONTRACT_TEST_COUNT : TASK9_CONTRACT_TEST_COUNT - 1,
       skippedTestCount: os === "WINDOWS" ? 0 : 1,
       windowsPathAlias: os === "WINDOWS" ? "PASS" : "NOT_APPLICABLE",
       forcedTerminationRecovery: "PASS",
@@ -100,6 +101,7 @@ describe("Task 9 platform Evidence", () => {
         "vitest.config.ts",
         "packages/evidence/package.json",
         "packages/execution/package.json",
+        "test/support/atomic-write-interruption-child.ts",
       ]),
     );
   });

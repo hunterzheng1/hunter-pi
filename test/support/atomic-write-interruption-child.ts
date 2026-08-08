@@ -25,7 +25,9 @@ await writeImmutableAtomically({
     process.stdout.write(`${JSON.stringify({ event: "ATOMIC_WRITE_PAUSED", boundary })}\n`);
     process.stdin.resume();
     await new Promise<void>((resolvePromise) => {
-      process.stdin.once("data", () => resolvePromise());
+      process.stdin.once("data", () => {
+        resolvePromise();
+      });
     });
   },
 });

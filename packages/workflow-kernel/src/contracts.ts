@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  attemptFinalityReceiptSchema,
   attemptIdSchema,
   archiveIdSchema,
   attemptSchema,
@@ -52,6 +53,12 @@ export const recordObservationCommandSchema = z.strictObject({
   ...workflowCommandVersionShape,
   type: z.literal("RECORD_OBSERVATION"),
   observation: observationSchema,
+});
+
+export const recordAttemptFinalityCommandSchema = z.strictObject({
+  ...workflowCommandVersionShape,
+  type: z.literal("RECORD_ATTEMPT_FINALITY"),
+  receipt: attemptFinalityReceiptSchema,
 });
 
 export const recordVerificationCommandSchema = z.strictObject({
@@ -135,6 +142,7 @@ export const workflowCommandSchema = z.discriminatedUnion("type", [
   createRunCommandSchema,
   startAttemptCommandSchema,
   recordObservationCommandSchema,
+  recordAttemptFinalityCommandSchema,
   recordVerificationCommandSchema,
   recordHumanReceiptCommandSchema,
   recordReviewReceiptCommandSchema,
@@ -166,6 +174,12 @@ export const workflowEventSchema = z.discriminatedUnion("type", [
     cursor: z.number().int().positive(),
     type: z.literal("OBSERVATION_RECORDED"),
     observation: observationSchema,
+  }),
+  z.strictObject({
+    schemaVersion: schemaVersionSchema,
+    cursor: z.number().int().positive(),
+    type: z.literal("ATTEMPT_FINALITY_RECORDED"),
+    receipt: attemptFinalityReceiptSchema,
   }),
   z.strictObject({
     schemaVersion: schemaVersionSchema,
@@ -247,6 +261,7 @@ export const runProjectionSchema = z.strictObject({
   run: runSchema,
   attempts: z.array(attemptSchema),
   observations: z.array(observationSchema),
+  attemptFinalityReceipts: z.array(attemptFinalityReceiptSchema).default([]),
   verificationReceipts: z.array(verificationReceiptSchema),
   humanReceipts: z.array(humanReceiptSchema),
   reviewReceipts: z.array(reviewReceiptSchema),
@@ -270,6 +285,7 @@ export const recoveryReasonSchema = z.enum([
   "WORKSPACE_NOT_REVALIDATED",
   "ENGINE_STATE_NOT_RECONCILED",
   "ACTIVE_OPERATIONS_NOT_RECONCILED",
+  "ATTEMPT_FINALITY_NOT_RECONCILED",
   "CHECKPOINT_ID_AMBIGUOUS",
 ]);
 export type RecoveryReason = z.infer<typeof recoveryReasonSchema>;
@@ -305,6 +321,8 @@ export const recoveryReconciliationSchema = z
     activeOperationReceiptIds: z.array(operationReceiptIdSchema),
     unknownOperationIds: z.array(operationIdSchema),
     operations: z.array(operationReconciliationReceiptSchema),
+    attemptFinality: z.literal("PASS"),
+    attemptFinalityReceipt: attemptFinalityReceiptSchema,
     engine: z.literal("PASS"),
     engineIdentity: recoveryIdentitySchema,
   })

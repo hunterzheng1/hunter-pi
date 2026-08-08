@@ -33,6 +33,7 @@ function commandRunId(command: WorkflowCommand): RunId {
     case "RECORD_VERIFICATION":
     case "RECORD_HUMAN_RECEIPT":
     case "RECORD_REVIEW_RECEIPT":
+    case "RECORD_ATTEMPT_FINALITY":
       return command.receipt.runId;
     case "RECORD_CHECKPOINT":
       return command.checkpoint.runId;
@@ -113,6 +114,7 @@ export class DurableWorkflowKernel implements WorkflowKernel {
           "DISTRIBUTION_RELEASE_NOT_REVALIDATED",
           "WORKSPACE_NOT_REVALIDATED",
           "ENGINE_STATE_NOT_RECONCILED",
+          "ATTEMPT_FINALITY_NOT_RECONCILED",
         ],
       });
     }

@@ -14,6 +14,9 @@ export default defineConfig({
       "@hunter-pi/execution": fileURLToPath(
         new URL("./packages/execution/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/evidence/atomic-write": fileURLToPath(
+        new URL("./packages/evidence/src/atomic-write.ts", import.meta.url),
+      ),
       "@hunter-pi/evidence": fileURLToPath(
         new URL("./packages/evidence/src/index.ts", import.meta.url),
       ),
@@ -56,5 +59,6 @@ export default defineConfig({
     passWithNoTests: false,
     restoreMocks: true,
     teardownTimeout: vitestResourcePolicy.teardownTimeoutMs,
+    testTimeout: vitestResourcePolicy.testTimeoutMs,
   },
 });

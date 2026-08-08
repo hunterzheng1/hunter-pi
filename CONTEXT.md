@@ -66,6 +66,10 @@ _Avoid_: terminal tab, naked PID, shell command string
 The reconciled state in which a Managed Process Session's owned tree is empty, output handles are closed, and declared leases are released or not required. It is not Verification or Step success.
 _Avoid_: exit zero, kill acknowledgement, terminal idle
 
+**Attempt Finality Receipt**:
+An immutable aggregate proving that one Attempt's latest Checkpoint has exact final receipts for every recorded process identity and release of every recorded Writer Lease. It is required before interruption recovery or cancellation can treat that Attempt as final.
+_Avoid_: process-exit observation, Agent return, unbound cleanup assertion
+
 **Step**:
 A typed unit in a Plan Revision whose validated output and policy determine the next workflow transition.
 _Avoid_: arbitrary chat turn, untyped model instruction

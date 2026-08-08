@@ -1,17 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rmdir,
-  unlink,
-} from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
 
@@ -25,6 +14,7 @@ import {
   type OperationId,
   type WriterLeaseId,
 } from "@hunter-pi/domain";
+import { DurableStoreError, withDurableMutationLock } from "@hunter-pi/evidence/atomic-write";
 
 import {
   leaseAcquireReceiptSchema,
@@ -764,7 +754,12 @@ class FileLeaseManager implements LeaseManager {
     }
     const rootEntries = await readdir(this.#root, { withFileTypes: true });
     if (
-      rootEntries.some((entry) => entry.name !== "transactions" && entry.name !== ".mutation-lock")
+      rootEntries.some(
+        (entry) =>
+          entry.name !== "transactions" &&
+          entry.name !== ".mutation-lock" &&
+          entry.name !== ".pending-hpi-mutation-lock-metadata",
+      )
     ) {
       throw new LeaseError("LEASE_STORE_CORRUPT", "lease root contains an unknown entry");
     }
@@ -823,24 +818,19 @@ class FileLeaseManager implements LeaseManager {
   }
 
   async #withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
-    let acquired = false;
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      try {
-        await mkdir(this.#lockPath);
-        acquired = true;
-        break;
-      } catch (error) {
-        if (!isErrno(error, "EEXIST")) throw error;
-        await delay(5);
-      }
-    }
-    if (!acquired) {
-      throw new LeaseError("LEASE_STORE_BUSY", "lease mutation lock could not be reconciled");
-    }
     try {
-      return await operation();
-    } finally {
-      await rmdir(this.#lockPath);
+      return await withDurableMutationLock(this.#lockPath, operation);
+    } catch (error) {
+      if (error instanceof DurableStoreError) {
+        if (error.code === "STORE_BUSY") {
+          throw new LeaseError("LEASE_STORE_BUSY", "lease mutation lock could not be reconciled");
+        }
+        throw new LeaseError(
+          "LEASE_STORE_CORRUPT",
+          "lease mutation-lock metadata is invalid or unreadable",
+        );
+      }
+      throw error;
     }
   }
 }

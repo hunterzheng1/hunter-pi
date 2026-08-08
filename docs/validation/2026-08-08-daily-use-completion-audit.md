@@ -15,26 +15,36 @@ receipts support and keeps every prior failure and `NOT_PROVEN` result append-on
 
 ## Task 9 — Checkpoint, recovery, and Archive
 
-Status: `PARTIAL`.
+Status: `COMPLETE` within provider-neutral automatic-fixture and hosted v2 Evidence bounds.
 
-The durable event, Checkpoint, Archive, export, import, and exact-target deletion modules are
-real implementations. The following daily-use gates remain open:
+The completed scope proves:
 
-- recovery does not yet require an exact Task 7 process-finality receipt and released writer
-  lease before it creates a new Attempt;
-- cancellation can become terminal after Agent return without proving process-tree and output
-  finality;
-- recovery replay, stale mutation-lock reconciliation, forced-kill crash windows, and a
-  platform-bound Task 9 Evidence comparator are not yet proven;
-- import/export/delete receipt replay and the second-device read-only projection need stronger
-  immutable reconciliation semantics.
+- exact process-final and Writer Lease release receipts are bound into one immutable Attempt
+  Finality Receipt and replay identically after reopen;
+- mutation-lock recovery uses signed process liveness, elects one reconciler at a canonical
+  physical path, and survives forced termination at all claim/receipt/removal boundaries;
+- import/export/delete replay and clean-profile second-device projection use immutable intents,
+  exact archive/operation identities, v3 policy reconciliation, structured credential rejection,
+  interrupted-import resume, and fail-closed foreign-remnant handling;
+- exact PR run [`31254320490`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31254320490)
+  and merged-head main run
+  [`31255040766`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31255040766) pass Windows,
+  Ubuntu, Task 9 cross-platform Evidence, Task 7 containment, and Task 7 Evidence aggregation.
+
+The merged-head receipts bind source `7d8039358a0e3ac6cf2ead8cee7eba25c47f8f0b`, the fixed 90-test
+contract matrix (Windows 90 pass; Ubuntu 89 pass plus the one Windows-only alias assertion), six
+direct finality/privacy checks per platform, and one passing cross-platform comparator. Every earlier
+failed hosted run remains append-only in the detailed Task 9 validation record.
 
 The Archive boundary now independently rescans retained Evidence summary and capture text. A
 caller cannot bypass credential/private-text rejection merely by setting `contentClass=LOG`,
-`credentialMaterial=false`, and forged redaction metadata. This closes one zero-tolerance
-privacy path only; it does not close the remaining recovery/finality gates.
+`credentialMaterial=false`, and forged redaction metadata. Real OS power loss, an arbitrary user
+repository, a physically separate operator device, and Provider recovery remain `NOT_PROVEN` and
+are not inferred from the automatic fixtures.
 
 Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
+[`portable-device.ts`](../../packages/evidence/src/portable-device.ts),
+[`atomic-write.ts`](../../packages/evidence/src/atomic-write.ts),
 [`recovery.ts`](../../packages/workflow-kernel/src/recovery.ts), and
 [`in-memory-workflow-kernel.ts`](../../packages/workflow-kernel/src/in-memory-workflow-kernel.ts).
 

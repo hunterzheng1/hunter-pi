@@ -73,6 +73,8 @@ describe("portable Evidence capture and redaction", () => {
     const linuxRoot = "/home/alice-example";
     const encodedSecret = Buffer.from(fixtureSecret, "utf8").toString("base64");
     const encodedPath = encodeURIComponent(`${windowsRoot}\\project`);
+    const escapedJsonSecret = "fixture-json-secret-after-escape";
+    const unicodeKeySecret = "fixture-unicode-key-secret";
     const content = [
       `Authorization: Bearer ${fixtureSecret}`,
       "Cookie: session=fixture-cookie-value",
@@ -83,6 +85,10 @@ describe("portable Evidence capture and redaction", () => {
       `linux=${linuxRoot}/repo/file.txt`,
       `prompt=${privatePrompt}`,
       "endpoint=https://user:password@example.invalid/path?token=fixture-query-secret",
+      '{"access_token":"fixture-json-token"}',
+      '{"cookie":"sid=fixture-json-cookie"}',
+      JSON.stringify({ password: `before"${escapedJsonSecret}` }),
+      `{"pass\\u0077ord":"${unicodeKeySecret}"}`,
     ].join("\n");
     const policy: PortableEvidencePolicy = {
       sensitiveValues: [fixtureSecret],
@@ -106,6 +112,10 @@ describe("portable Evidence capture and redaction", () => {
       "fixture-cookie-value",
       "user:password",
       "fixture-query-secret",
+      "fixture-json-token",
+      "fixture-json-cookie",
+      escapedJsonSecret,
+      unicodeKeySecret,
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
@@ -114,6 +124,57 @@ describe("portable Evidence capture and redaction", () => {
     expect(envelope.redaction.categories).toEqual(
       expect.arrayContaining(["CREDENTIAL", "PRIVATE_PATH", "PRIVATE_PROMPT"]),
     );
+  });
+
+  it("fails closed for nested, embedded, and deeply structured JSON credentials", () => {
+    const doubleEncodedSecret = "fixture-double-encoded-json-secret";
+    const prefixedSecret = "fixture-prefixed-json-secret";
+    const multilineSecret = "fixture-multiline-json-secret";
+    const objectStringSecret = "fixture-object-string-json-secret";
+    const overEncodedSecret = "fixture-over-encoded-json-secret";
+    const deeplyNestedSecret = "fixture-deep-json-secret";
+    const doubleEncoded = JSON.stringify(JSON.stringify({ password: doubleEncodedSecret }));
+    const prefixed = `prefix={"pass\\u0077ord":"${prefixedSecret}"} suffix`;
+    const multiline = `prefix {\n  "pass\\u0077ord": "${multilineSecret}"\n} suffix`;
+    const objectString = JSON.stringify({
+      message: JSON.stringify({ password: objectStringSecret }),
+    });
+    let overEncoded = JSON.stringify({ password: overEncodedSecret });
+    for (let layer = 0; layer < 10; layer += 1) overEncoded = JSON.stringify(overEncoded);
+    const deeplyNested =
+      '{"nested":'.repeat(5_000) + `{"password":"${deeplyNestedSecret}"}` + "}".repeat(5_000);
+    const content = [
+      doubleEncoded,
+      prefixed,
+      multiline,
+      objectString,
+      overEncoded,
+      deeplyNested,
+    ].join("\n");
+
+    expect(() =>
+      createPortableEvidenceEnvelope({
+        ...baseRequest,
+        content,
+      }),
+    ).not.toThrow();
+
+    const envelope = createPortableEvidenceEnvelope({
+      ...baseRequest,
+      content,
+    });
+    const serialized = JSON.stringify(envelope);
+    for (const forbidden of [
+      doubleEncodedSecret,
+      prefixedSecret,
+      multilineSecret,
+      objectStringSecret,
+      overEncodedSecret,
+      deeplyNestedSecret,
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(envelope.redaction.categories).toContain("CREDENTIAL");
   });
 
   it("removes unregistered device-local absolute paths from portable Evidence", () => {

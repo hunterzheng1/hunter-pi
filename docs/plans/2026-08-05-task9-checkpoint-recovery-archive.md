@@ -7,11 +7,12 @@
 
 ## Outcome
 
-Make interruption handling and Run finalization durable without rewriting workflow history. A recovery is allowed only after the exact Distribution Release, workspace/source, active operations, and Engine session facts are reconciled. A successful recovery creates a new recovery Attempt linked to the Checkpoint and preserves the interrupted Attempt. An Archive is an immutable post-Run manifest that can be replayed, exported, imported into a clean device profile, and deleted only at an exact artifact target; deleting an export never deletes workflow facts, Evidence, Checkpoints, or the Archive manifest.
+Make interruption handling and Run finalization durable without rewriting workflow history. A recovery is allowed only after the exact Distribution Release, workspace/source, active operations, process/Writer Lease finality, and Engine session facts are reconciled. A successful recovery creates a new recovery Attempt linked to the Checkpoint and preserves the interrupted Attempt. An Archive is an immutable post-Run manifest that can be replayed, exported, imported into a clean device profile, and deleted only at an exact artifact target; deleting an export never deletes workflow facts, Evidence, Checkpoints, or the Archive manifest.
 
 ## Contract
 
 - `RecoveryCoordinator` is the deep module at the recovery seam. Callers provide a Checkpoint identity and provider-neutral reconciliation adapters; the module validates identities, reconciles unknown operations, records failure Evidence, and asks the Workflow Kernel to create exactly one recovery Attempt.
+- An Attempt Finality Receipt is append-only and binds one Attempt to its latest Checkpoint, exact process-final receipt fingerprints, released Writer Lease identities, workspace/source identity, and Evidence. Agent return and process exit remain Observations and cannot substitute for this Receipt.
 - A recovery result is `RECOVERED`, `BLOCKED`, `NOT_PROVEN`, or `NOT_FOUND`. No recovery Attempt is created for ambiguous, stale, unresolved, or device-local facts.
 - `RunArchiveStore` finalizes only terminal Runs and binds the immutable Run projection, event stream digest, Evidence identities/digests, source/release identities, and recovery limits into one manifest. Same archive operation and fingerprint is idempotent; a changed request is rejected.
 - Portable Archive import rejects device-local paths, live leases, live processes, credentials, and an active Attempt. It imports redacted immutable facts only and never claims a migrated live execution.
@@ -19,8 +20,8 @@ Make interruption handling and Run finalization durable without rewriting workfl
 
 ## Required RED/GREEN coverage
 
-1. Recovery creates one new recovery Attempt after all four reconciliations pass, and replay preserves the old Attempt plus the Checkpoint.
-2. Recovery blocks without creating an Attempt when release, workspace, operation, or Engine reconciliation is missing, stale, ambiguous, or `NOT_PROVEN`.
+1. Recovery creates one new recovery Attempt after all five reconciliation dimensions pass, and replay preserves the old Attempt, the Checkpoint, and one immutable Attempt Finality Receipt.
+2. Recovery blocks without creating an Attempt when release, workspace, operation, process/lease finality, or Engine reconciliation is missing, stale, ambiguous, or `NOT_PROVEN`.
 3. Archive finalization is idempotent, rejects non-terminal Runs, preserves all terminal outcomes, and fails closed on missing/stale Evidence or projection identity.
 4. Second-device import accepts a redacted archive only after rejecting live/device-local state; imported facts remain portable and do not create a live Attempt.
 5. Exact export deletion cannot traverse or delete workflow state, Evidence, Checkpoints, or the Archive manifest.
@@ -43,3 +44,29 @@ Make interruption handling and Run finalization durable without rewriting workfl
 - Stop if Archive import would imply that a live Attempt, lease, process, credential, or device-local path migrated successfully.
 - Pause before real Provider requests, real user repositories, paid operations, publication, signing, or destructive deletion outside an exact disposable export target.
 - Preserve every failed, skipped, timed-out, and `NOT_PROVEN` receipt; later success never overwrites it.
+
+## 2026-08-08 hardening status
+
+The provider-neutral contract now rejects cancellation after only `AGENT_RETURNED` or
+`PROCESS_EXITED`, rejects recovery when a process or Writer Lease identity is missing from finality
+reconciliation, persists process-final, lease-release, and Attempt Finality Receipts across reopen,
+and retains their Evidence in Archive completeness checks. A clean-profile import creates an exact
+archive-bound `READ_ONLY` projection; its v3 device receipt records exact policy reconciliation and
+resumes an interrupted import without manual state editing. Intent and final-receipt publication
+also recover after real process termination at every atomic-write boundary while malformed or
+foreign hard-linked remnants fail closed. Valid crash remnants are retained as exact immutable
+link facts instead of being deleted through a raceable pathname. The importer rescans the complete canonical Archive text
+and rejects path- or credential-shaped content, including quoted JSON credential fields, even when
+metadata is forged.
+
+The durable mutation-lock seam publishes a complete owner record through an atomic no-replace hard
+link. Process identity is a signed Ed25519 challenge-response endpoint; PID is informational and PID
+reuse cannot authorize recovery. One physical-path-normalized reconciliation claim elects the
+winner, immutable receipts bind every recovery fact, and a successor recovers after forced process
+termination at each of the three claim/receipt/removal boundaries. File-backed Writer Leases reuse
+this seam rather than maintaining a weaker second lock implementation. Claim-recovery v2 receipts
+separate the original claim time from the successor's truthful recovery observation time. The exact
+Windows-local v2 matrix passes 90/90 tests across eight files and binds forced-termination recovery, lease reopen,
+second-device projection, finality replay, and privacy. Hosted Windows/Ubuntu execution for the
+final source, real OS power loss, real repositories, and Provider recovery remain open; Task 9 stays
+`PARTIAL` until the hosted receipts and comparator pass.

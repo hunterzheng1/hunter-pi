@@ -936,7 +936,7 @@ describe("hpi command", () => {
     expect(
       (await readdir(root)).some((entry) => entry.startsWith("hunter-pi-managed-change-")),
     ).toBe(false);
-  });
+  }, 15_000);
 
   it("refuses a Managed Change from an unstamped or dirty product artifact", async () => {
     let processRan = false;

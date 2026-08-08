@@ -47,8 +47,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (excluding host-sensitive platform suite)
-        run: npm test -- --exclude test/managed-process-platform.test.ts
+      - name: Unit tests (Task 9 acceptance runs once in its Evidence probe)
+        run: npm run test:ci
 
       - name: Strict compiler fixture
         run: npm run strict:check
@@ -91,8 +91,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Run Task 9 platform finality probe
+        run: >-
+          npm run probe:task9:compiled --
+          --output .artifacts/task9-platform/${{ runner.os }}.json
+
+      - name: Upload Task 9 platform receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task9-platform-${{ runner.os }}
+          path: .artifacts/task9-platform/${{ runner.os }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   pi-evidence-consistency:
-    name: Pi Evidence / Windows + Ubuntu identity
+    name: Pi + Task 9 Evidence / Windows + Ubuntu identity
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -137,6 +151,33 @@ jobs:
         with:
           name: pi-public-interface-consistency
           path: .artifacts/pi-probe-aggregate/consistency.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Download Windows Task 9 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task9-platform-Windows
+          path: .artifacts/task9-platform-aggregate/windows
+
+      - name: Download Ubuntu Task 9 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task9-platform-Linux
+          path: .artifacts/task9-platform-aggregate/ubuntu
+
+      - name: Compare exact Task 9 platform identities
+        run: >-
+          npm run compare:task9-evidence:compiled --
+          --windows .artifacts/task9-platform-aggregate/windows/Windows.json
+          --ubuntu .artifacts/task9-platform-aggregate/ubuntu/Linux.json
+          --output .artifacts/task9-platform-aggregate/consistency.json
+
+      - name: Upload Task 9 consistency receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task9-platform-consistency
+          path: .artifacts/task9-platform-aggregate/consistency.json
           if-no-files-found: error
           retention-days: 14
 

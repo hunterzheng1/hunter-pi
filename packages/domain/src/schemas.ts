@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   archiveIdSchema,
+  attemptFinalityReceiptIdSchema,
   attemptIdSchema,
   changeIdSchema,
   checkIdSchema,
@@ -767,6 +768,59 @@ export const checkpointSchema = z
     }
   });
 export type Checkpoint = z.infer<typeof checkpointSchema>;
+
+const processFinalityBindingSchema = z.strictObject({
+  processReference: externalReferenceSchema,
+  finalReceiptFingerprint: fingerprintSchema,
+  processTreeState: z.literal("EMPTY"),
+  outputState: z.literal("CLOSED"),
+  leaseState: z.enum(["RELEASED", "NOT_REQUIRED"]),
+  terminalFinality: z.literal("FINAL"),
+});
+
+export const attemptFinalityReceiptSchema = z
+  .strictObject({
+    schemaVersion: schemaVersionSchema,
+    attemptFinalityReceiptId: attemptFinalityReceiptIdSchema,
+    runId: runIdSchema,
+    attemptId: attemptIdSchema,
+    checkpointId: checkpointIdSchema,
+    workspaceId: workspaceIdSchema,
+    workspaceFingerprint: fingerprintSchema,
+    sourceFingerprint: fingerprintSchema,
+    processFinalities: z.array(processFinalityBindingSchema).max(128),
+    releasedWriterLeaseIds: z.array(writerLeaseIdSchema).max(128),
+    terminalFinality: z.literal("FINAL"),
+    evidenceIds: z.array(evidenceIdSchema).min(1),
+    observedAt: timestampSchema,
+  })
+  .superRefine((receipt, context) => {
+    const processReferences = receipt.processFinalities.map(({ processReference }) =>
+      JSON.stringify(processReference),
+    );
+    if (new Set(processReferences).size !== processReferences.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["processFinalities"],
+        message: "process finality references must be unique",
+      });
+    }
+    if (new Set(receipt.releasedWriterLeaseIds).size !== receipt.releasedWriterLeaseIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["releasedWriterLeaseIds"],
+        message: "released Writer Lease identities must be unique",
+      });
+    }
+    if (new Set(receipt.evidenceIds).size !== receipt.evidenceIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["evidenceIds"],
+        message: "Attempt Finality Evidence identities must be unique",
+      });
+    }
+  });
+export type AttemptFinalityReceipt = z.infer<typeof attemptFinalityReceiptSchema>;
 
 export const pluginCompatibilitySchema = z.enum(["VERIFIED", "UNVERIFIED", "INCOMPATIBLE"]);
 export type PluginCompatibility = z.infer<typeof pluginCompatibilitySchema>;

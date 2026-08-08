@@ -1,11 +1,20 @@
-import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { promises as fsPromises } from "node:fs";
+import { access, link, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { build } from "esbuild";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  attemptFinalityReceiptIdSchema,
   attemptIdSchema,
+  checkpointIdSchema,
+  checkpointSchema,
   observationIdSchema,
   planRevisionSchema,
   runSchema,
@@ -14,10 +23,15 @@ import {
 import {
   archivePackageSchema,
   assertPortableArchive,
+  canonicalJson,
   createPortableEvidenceEnvelope,
+  FilePortableDeviceImportReceiptStore,
   FileRunArchiveStore,
   LocalStorageController,
   PortableDeviceImporter,
+  portableDeviceImportBindingSchema,
+  portableDeviceImportReceiptSchema,
+  sha256Fingerprint,
 } from "@hunter-pi/evidence";
 import {
   DurableWorkflowKernel,
@@ -33,15 +47,134 @@ import {
 } from "./support/workflow-domain-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
+const atomicInterruptionFixtureSource = fileURLToPath(
+  new URL("./support/atomic-write-interruption-child.ts", import.meta.url),
+);
+let atomicInterruptionFixtureRoot: string;
+let atomicInterruptionFixtureBundle: string;
+
+beforeAll(async () => {
+  atomicInterruptionFixtureRoot = await createTemporaryTestDirectory(
+    tmpdir(),
+    "hunter-pi-atomic-interruption-fixture-",
+  );
+  atomicInterruptionFixtureBundle = join(
+    atomicInterruptionFixtureRoot,
+    "atomic-write-interruption-child.mjs",
+  );
+  await build({
+    alias: {
+      "@hunter-pi/domain": fileURLToPath(
+        new URL("../packages/domain/src/index.ts", import.meta.url),
+      ),
+    },
+    bundle: true,
+    entryPoints: [atomicInterruptionFixtureSource],
+    format: "esm",
+    logLevel: "silent",
+    outfile: atomicInterruptionFixtureBundle,
+    platform: "node",
+    target: "node24",
+  });
+});
+
+afterAll(async () => {
+  await rm(atomicInterruptionFixtureRoot, { force: true, recursive: true });
+});
+
+async function leaveInterruptedAtomicWrite(options: {
+  readonly boundary: "BEFORE_TEMP_WRITE" | "AFTER_TEMP_WRITE" | "AFTER_TEMP_SYNC" | "AFTER_PUBLISH";
+  readonly content: string;
+  readonly directory: string;
+  readonly filename: string;
+}): Promise<void> {
+  const child = spawn(process.execPath, [atomicInterruptionFixtureBundle], {
+    env: {
+      ...process.env,
+      HPI_TEST_ATOMIC_BOUNDARY: options.boundary,
+      HPI_TEST_ATOMIC_CONTENT: Buffer.from(options.content, "utf8").toString("base64"),
+      HPI_TEST_ATOMIC_DIRECTORY: options.directory,
+      HPI_TEST_ATOMIC_FILENAME: options.filename,
+    },
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const completion = new Promise<{ readonly code: number | null; readonly signal: string | null }>(
+    (resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => {
+        resolvePromise({ code, signal });
+      });
+    },
+  );
+  const marker = '"event":"ATOMIC_WRITE_PAUSED"';
+  const deadline = Date.now() + 10_000;
+  try {
+    while (!stdout.includes(marker)) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        const result = await completion;
+        throw new Error(`atomic fixture exited before pause: ${JSON.stringify(result)} ${stderr}`);
+      }
+      if (Date.now() >= deadline) throw new Error(`atomic fixture did not pause: ${stderr}`);
+      await delay(10);
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  const result = await completion;
+  expect(result.code).not.toBe(0);
+}
+
+async function withLstatPathSwap<T>(
+  targetPath: string,
+  swap: () => Promise<void>,
+  operation: () => Promise<T>,
+  swapOnMatch = 1,
+): Promise<T> {
+  const mutableFsPromises = fsPromises as unknown as { lstat: typeof fsPromises.lstat };
+  const originalLstat = mutableFsPromises.lstat;
+  let matchingCalls = 0;
+  mutableFsPromises.lstat = (async (...args: unknown[]) => {
+    const originalResult = (await Reflect.apply(originalLstat, fsPromises, args)) as unknown;
+    if (String(args[0]) === targetPath) {
+      matchingCalls += 1;
+    }
+    if (matchingCalls === swapOnMatch) {
+      matchingCalls += 1;
+      await swap();
+    }
+    return originalResult;
+  }) as typeof fsPromises.lstat;
+  syncBuiltinESMExports();
+  try {
+    return await operation();
+  } finally {
+    mutableFsPromises.lstat = originalLstat;
+    syncBuiltinESMExports();
+  }
+}
+
 async function createTerminalProjection(
   root: string,
   outcome: "PASS" | "FAIL" | "BLOCKED" | "NOT_PROVEN" | "CANCELLED" = "NOT_PROVEN",
+  fixtureSuffix = "archive",
 ): Promise<{
   readonly projection: RunProjection;
   readonly events: Awaited<ReturnType<FileWorkflowEventStore["read"]>>;
   readonly evidence: readonly ReturnType<typeof createPortableEvidenceEnvelope>[];
 }> {
-  const fixture = createWorkflowDomainFixture({ suffix: "archive" });
+  const fixture = createWorkflowDomainFixture({ suffix: fixtureSuffix });
   const planRevision = planRevisionSchema.parse({
     ...fixture.planRevision,
     loopPolicy: { ...fixture.planRevision.loopPolicy, maxIterations: 1 },
@@ -77,6 +210,68 @@ async function createTerminalProjection(
         evidenceIds: [],
       },
     });
+    const finalityEvidence = createPortableEvidenceEnvelope({
+      schemaVersion: "1.0.0",
+      evidenceId: "evidence_archive-cancelled-finality",
+      kind: "observation",
+      scope: { runId: run.runId, attemptId: "att_archive-original" },
+      createdAt: fixtureTimestamp,
+      sourceFingerprint: fixtureFingerprint,
+      summary: "The cancelled Archive fixture has exact Attempt finality.",
+      contentClass: "SUMMARY",
+      content: "No managed process or Writer Lease remained after cancellation.",
+    });
+    const beforeCheckpoint = await kernel.project(run.runId);
+    const checkpoint = checkpointSchema.parse({
+      schemaVersion: "1.0.0",
+      checkpointId: checkpointIdSchema.parse("checkpoint_archive-cancelled"),
+      runId: run.runId,
+      attemptId: "att_archive-original",
+      planRevisionId: planRevision.planRevisionId,
+      distributionReleaseId: "release_archive-cancelled",
+      workspaceId: planRevision.workspaceId,
+      repositoryFingerprint: fixtureFingerprint,
+      workspaceFingerprint: planRevision.workspaceFingerprint,
+      sourceFingerprint: planRevision.sourceFingerprint,
+      eventCursor: beforeCheckpoint.eventCursor,
+      createdAt: fixtureTimestamp,
+      engine: {
+        engineReleaseId: "engine-release_archive-cancelled",
+        engineReleaseFingerprint: fixtureFingerprint,
+        resumeCapability: "UNSUPPORTED",
+      },
+      activeOperationReceiptIds: [],
+      unknownOperationIds: [],
+      heldWriterLeaseIds: [],
+      processReferences: [],
+      remainingResourceBudgets: planRevision.loopPolicy.resourceBudgets,
+    });
+    await kernel.dispatch({
+      schemaVersion: "1.0.0",
+      type: "RECORD_CHECKPOINT",
+      checkpoint,
+    });
+    await kernel.dispatch({
+      schemaVersion: "1.0.0",
+      type: "RECORD_ATTEMPT_FINALITY",
+      receipt: {
+        schemaVersion: "1.0.0",
+        attemptFinalityReceiptId: attemptFinalityReceiptIdSchema.parse(
+          "finality_archive-cancelled",
+        ),
+        runId: run.runId,
+        attemptId: attemptIdSchema.parse("att_archive-original"),
+        checkpointId: checkpoint.checkpointId,
+        workspaceId: planRevision.workspaceId,
+        workspaceFingerprint: planRevision.workspaceFingerprint,
+        sourceFingerprint: planRevision.sourceFingerprint,
+        processFinalities: [],
+        releasedWriterLeaseIds: [],
+        terminalFinality: "FINAL",
+        evidenceIds: [finalityEvidence.evidenceId],
+        observedAt: fixtureTimestamp,
+      },
+    });
     await kernel.dispatch({
       schemaVersion: "1.0.0",
       type: "CANCEL_RUN",
@@ -87,7 +282,7 @@ async function createTerminalProjection(
     return {
       projection: await kernel.project(run.runId),
       events: await eventStore.read(run.runId),
-      evidence: [],
+      evidence: [finalityEvidence],
     };
   }
   const verification = verificationReceiptSchema.parse({
@@ -162,6 +357,51 @@ async function createTerminalProjection(
     events: await eventStore.read(run.runId),
     evidence: [evidence],
   };
+}
+
+async function createPortableArchiveFixture(
+  root: string,
+  archiveId: string,
+  fixtureSuffix = "archive",
+) {
+  const fixture = await createTerminalProjection(
+    join(root, "fixture"),
+    "NOT_PROVEN",
+    fixtureSuffix,
+  );
+  const source = new FileRunArchiveStore({
+    stateRoot: join(root, "source"),
+    kernel: new InMemoryWorkflowKernel([fixture.events]),
+  });
+  const manifest = await source.finalize({
+    schemaVersion: "hpi-archive-finalize.v1",
+    operationId: `op_archive-device-finalize-${fixtureSuffix}`,
+    operationFingerprint: fixtureFingerprint,
+    archiveId,
+    distributionReleaseId: "release_task9",
+    projection: fixture.projection,
+    events: [...fixture.events],
+    evidence: [...fixture.evidence],
+    recoveryLimits: { maxAttempts: 2, maxElapsedMs: 60_000 },
+    archivedAt: fixtureTimestamp,
+  });
+  const archive = archivePackageSchema.parse({
+    schemaVersion: "hpi-archive-package.v1",
+    manifest,
+    projection: fixture.projection,
+    events: [...fixture.events],
+    evidence: [...fixture.evidence],
+    portability: {
+      activeAttemptIds: [],
+      activeOperationReceiptIds: [],
+      unknownOperationIds: [],
+      heldWriterLeaseIds: [],
+      processReferences: [],
+      deviceLocalPaths: [],
+      credentialMaterial: false,
+    },
+  });
+  return { archive, fixture, manifest };
 }
 
 describe("Task 9 Run Archive", () => {
@@ -328,7 +568,9 @@ describe("Task 9 Run Archive", () => {
       join(root, "destination", ".operation-receipts", "imports", `${manifest.archiveId}.json`),
       `${JSON.stringify({ ...importReceipt, archiveId: "archive_task9-tampered-receipt" })}\n`,
     );
-    await expect(destination.import(importRequest)).rejects.toThrow(/identity|archive/u);
+    await expect(destination.import(importRequest)).rejects.toThrow(
+      /identity|archive|invalid|unreadable/u,
+    );
     await expect(
       destination.import({
         schemaVersion: "hpi-archive-import.v1",
@@ -568,6 +810,31 @@ describe("Task 9 Run Archive", () => {
           categories: [],
         },
       },
+      {
+        ...evidence,
+        summary: '{"access_token":"fixture-json-secret"}',
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
+      {
+        ...evidence,
+        capture: {
+          ...evidence.capture,
+          capturedText: '{"cookie":"sid=fixture-json-secret"}',
+          capturedBytes: 36,
+          totalBytes: 36,
+        },
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
     ]) {
       expect(() => {
         assertPortableArchive({ ...archive, evidence: [poisonedEvidence] });
@@ -575,109 +842,1055 @@ describe("Task 9 Run Archive", () => {
     }
   });
 
-  it("imports only a portable terminal Archive into a clean device profile", async () => {
-    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-");
-    const fixture = await createTerminalProjection(root);
-    const source = new FileRunArchiveStore({
-      stateRoot: join(root, "source"),
-      kernel: new InMemoryWorkflowKernel([fixture.events]),
-    });
-    const manifest = await source.finalize({
-      schemaVersion: "hpi-archive-finalize.v1",
-      operationId: "op_archive-device-finalize",
-      operationFingerprint: fixtureFingerprint,
-      archiveId: "archive_task9-device",
-      distributionReleaseId: "release_task9",
-      projection: fixture.projection,
-      events: [...fixture.events],
-      evidence: [...fixture.evidence],
-      recoveryLimits: { maxAttempts: 2, maxElapsedMs: 60_000 },
-      archivedAt: fixtureTimestamp,
-    });
-    const archive = archivePackageSchema.parse({
-      schemaVersion: "hpi-archive-package.v1",
-      manifest,
-      projection: fixture.projection,
-      events: [...fixture.events],
-      evidence: [...fixture.evidence],
-      portability: {
-        activeAttemptIds: [],
-        activeOperationReceiptIds: [],
-        unknownOperationIds: [],
-        heldWriterLeaseIds: [],
-        processReferences: [],
-        deviceLocalPaths: [],
-        credentialMaterial: false,
-      },
-    });
-    const destination = new FileRunArchiveStore({ stateRoot: join(root, "destination") });
+  it("rejects private paths and credentials embedded outside Evidence text", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-archive-projection-privacy-",
+    );
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-projection-privacy",
+    );
+
+    for (const terminalReason of [
+      "execution stopped with cwd=/home/alice/private-project",
+      "execution stopped with token=super-secret-value",
+    ]) {
+      expect(() => {
+        assertPortableArchive({
+          ...archive,
+          projection: {
+            ...archive.projection,
+            run: { ...archive.projection.run, terminalReason },
+          },
+        });
+      }).toThrow(/credential|private|path|portable Archive/u);
+    }
+  });
+
+  it("reopens a clean-device import as an exact archive-bound READ_ONLY projection", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-project-");
+    const { archive, fixture, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device",
+    );
+    const destinationRoot = join(root, "destination");
     const clonePolicy = vi.fn(() =>
       Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+    );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
     );
     const doctor = vi.fn(() => Promise.resolve("PASS" as const));
     const loginReadiness = vi.fn(() => Promise.resolve("BLOCKED" as const));
     const importer = new PortableDeviceImporter({
-      archiveStore: destination,
-      clonePolicy: { clone: clonePolicy },
+      archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     });
+    const request = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import" as const,
+      operationFingerprint: `sha256:${"a".repeat(64)}`,
+      profileId: "device-profile-clean",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    };
 
-    await expect(
-      importer.import({
-        schemaVersion: "hpi-device-import.v1",
-        operationId: "op_device-import",
-        operationFingerprint: `sha256:${"a".repeat(64)}`,
-        profileId: "device-profile-clean",
-        projectPolicy: {
-          schemaVersion: "hpi-project-policy.v1",
-          policyFingerprint: fixtureFingerprint,
-        },
-        archive,
-        observedAt: fixtureTimestamp,
-      }),
-    ).resolves.toMatchObject({
+    const receipt = await importer.import(request);
+    expect(receipt).toMatchObject({
+      schemaVersion: "hpi-device-import-receipt.v3",
       outcome: "BLOCKED",
       archiveOutcome: "APPLIED",
+      recordedArchiveOutcome: "APPLIED",
+      archiveId: manifest.archiveId,
+      runId: fixture.projection.run.runId,
+      planRevisionId: fixture.projection.planRevision.planRevisionId,
+      sourceFingerprint: fixture.projection.run.sourceFingerprint,
+      archivedRunOutcome: "INCOMPLETE",
       policyOutcome: "PASS",
+      policyResolution: "CLONED",
       doctorStatus: "PASS",
       loginReadiness: "BLOCKED",
     });
+
+    const reopened = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    const importedProjection = await reopened.projectImported({
+      schemaVersion: "hpi-imported-archive-projection-request.v1",
+      operationId: request.operationId,
+      operationFingerprint: request.operationFingerprint,
+      archiveId: manifest.archiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+    });
+    expect(importedProjection).toMatchObject({
+      schemaVersion: "hpi-imported-archive-projection.v1",
+      accessMode: "READ_ONLY",
+      workflowAuthority: "NONE",
+      archiveState: "IMPORTED_ARCHIVE",
+      archiveId: manifest.archiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+      importOperationId: request.operationId,
+      importOperationFingerprint: request.operationFingerprint,
+      runId: fixture.projection.run.runId,
+      planRevisionId: fixture.projection.planRevision.planRevisionId,
+      sourceFingerprint: fixture.projection.run.sourceFingerprint,
+      archiveOutcome: "INCOMPLETE",
+      archiveProjection: fixture.projection,
+      projectionFingerprint: receipt.readOnlyProjectionFingerprint,
+    });
+    expect(importedProjection.archiveProjection).toEqual(fixture.projection);
+    expect(importedProjection).not.toHaveProperty("active");
+    expect(importedProjection).not.toHaveProperty("success");
+    expect(Object.isFrozen(importedProjection)).toBe(true);
+    expect(Object.isFrozen(importedProjection.archiveProjection)).toBe(true);
     expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(reconcilePolicy).toHaveBeenCalledOnce();
     expect(doctor).toHaveBeenCalledOnce();
     expect(loginReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("reads a clean-profile import as the same read-only projection after reopen", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-read-");
+    const { archive, fixture, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-read",
+      "archive-device-read",
+    );
+    const destinationRoot = join(root, "destination");
+    const destination = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    const importReceipt = await destination.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-read",
+      operationFingerprint: `sha256:${"8".repeat(64)}`,
+      archive,
+    });
+
+    const imported = await new FileRunArchiveStore({ stateRoot: destinationRoot }).read(
+      manifest.archiveId,
+    );
+
+    expect(imported).toMatchObject({
+      schemaVersion: "hpi-imported-archive-projection.v1",
+      accessMode: "READ_ONLY",
+      workflowAuthority: "NONE",
+      archiveState: "IMPORTED_ARCHIVE",
+      archiveId: manifest.archiveId,
+      artifactFingerprint: importReceipt.artifactFingerprint,
+      importOperationId: importReceipt.operationId,
+      importOperationFingerprint: importReceipt.operationFingerprint,
+      runId: fixture.projection.run.runId,
+      archiveOutcome: manifest.outcome,
+      archiveProjection: fixture.projection,
+    });
+    if (imported.schemaVersion !== "hpi-imported-archive-projection.v1") {
+      throw new Error("clean-profile Archive read did not return the imported projection");
+    }
+    expect(Object.isFrozen(imported)).toBe(true);
+    expect(Object.isFrozen(imported.archiveProjection)).toBe(true);
+    expect(
+      imported.archiveProjection.attempts.filter((attempt) =>
+        ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
+      ),
+    ).toEqual([]);
+    expect(
+      imported.archiveProjection.checkpoints.flatMap((checkpoint) => [
+        ...checkpoint.activeOperationReceiptIds,
+        ...checkpoint.unknownOperationIds,
+        ...checkpoint.heldWriterLeaseIds,
+        ...checkpoint.processReferences,
+        ...(checkpoint.engine.sessionReference === undefined
+          ? []
+          : [checkpoint.engine.sessionReference]),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("binds the durable Archive import receipt to the exact read-only projection fingerprint", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-projection-binding-",
+    );
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-projection-binding",
+      "archive-device-projection-binding",
+    );
+    const destinationRoot = join(root, "destination");
+    const store = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    const receipt = await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-projection-binding",
+      operationFingerprint: `sha256:${"9".repeat(64)}`,
+      archive,
+    });
+    const request = {
+      schemaVersion: "hpi-imported-archive-projection-request.v1" as const,
+      operationId: receipt.operationId,
+      operationFingerprint: receipt.operationFingerprint,
+      archiveId: receipt.archiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+    };
+    const imported = await store.projectImported(request);
+
+    expect(receipt.readOnlyProjectionFingerprint).toBe(imported.projectionFingerprint);
+
+    await writeFile(
+      join(destinationRoot, ".operation-receipts", "imports", `${manifest.archiveId}.json`),
+      `${JSON.stringify({
+        ...receipt,
+        readOnlyProjectionFingerprint: `sha256:${"a".repeat(64)}`,
+      })}\n`,
+    );
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).read(manifest.archiveId),
+    ).rejects.toThrow(/corrupt|fingerprint|projection|receipt/u);
+  });
+
+  it("never records APPLIED before the Archive package exists and resumes the exact intent", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-import-order-",
+    );
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-import-order",
+    );
+    const destinationRoot = join(root, "destination");
+    const storage = new LocalStorageController({
+      stateRoot: destinationRoot,
+      reserveBytes: 4_096,
+      capacityProbe: () => Promise.resolve(1024 * 1024),
+    });
+    let criticalWrite = 0;
+    const writeSpy = vi.spyOn(storage, "writeCritical").mockImplementation(async (write) => {
+      criticalWrite += 1;
+      if (criticalWrite === 2) throw new Error("simulated package publication interruption");
+      await write();
+    });
+    const request = {
+      schemaVersion: "hpi-archive-import.v1" as const,
+      operationId: "op_device-import-order" as const,
+      operationFingerprint: `sha256:${"7".repeat(64)}`,
+      archive,
+    };
+    const receiptPath = join(
+      destinationRoot,
+      ".operation-receipts",
+      "imports",
+      `${manifest.archiveId}.json`,
+    );
+    const packagePath = join(destinationRoot, "archives", manifest.archiveId, "package.json");
 
     await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(request),
+    ).rejects.toThrow(/simulated package publication interruption/u);
+    await expect(access(packagePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(receiptPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    writeSpy.mockRestore();
+    const recovered = await new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(
+      request,
+    );
+    expect(recovered).toMatchObject({ recordedOutcome: "APPLIED", outcome: "APPLIED" });
+    await expect(access(packagePath)).resolves.toBeUndefined();
+    await expect(access(receiptPath)).resolves.toBeUndefined();
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(request),
+    ).resolves.toMatchObject({ recordedOutcome: "APPLIED", outcome: "NOOP" });
+  });
+
+  it("reconciles the immediately preceding v1 import receipt without manual state editing", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-receipt-version-",
+    );
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-receipt-version",
+      "archive-device-receipt-version",
+    );
+    const destinationRoot = join(root, "destination");
+    const store = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    const receipt = await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-receipt-version",
+      operationFingerprint: `sha256:${"1".repeat(64)}`,
+      archive,
+    });
+    await writeFile(
+      join(destinationRoot, ".operation-receipts", "imports", `${manifest.archiveId}.json`),
+      `${JSON.stringify({
+        schemaVersion: "hpi-archive-import-receipt.v1",
+        operationId: receipt.operationId,
+        operationFingerprint: receipt.operationFingerprint,
+        archiveId: receipt.archiveId,
+        artifactFingerprint: receipt.artifactFingerprint,
+        outcome: receipt.recordedOutcome,
+        observedAt: receipt.observedAt,
+      })}\n`,
+    );
+
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).read(manifest.archiveId),
+    ).resolves.toMatchObject({
+      schemaVersion: "hpi-imported-archive-projection.v1",
+      archiveId: manifest.archiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+      accessMode: "READ_ONLY",
+    });
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).import({
+        schemaVersion: "hpi-archive-import.v1",
+        operationId: receipt.operationId,
+        operationFingerprint: receipt.operationFingerprint,
+        archive,
+      }),
+    ).resolves.toMatchObject({
+      schemaVersion: "hpi-archive-import-receipt.v2",
+      recordedOutcome: "APPLIED",
+      outcome: "NOOP",
+    });
+  });
+
+  it("fails a clean-profile read closed for an incompatible Archive package schema version", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-package-version-",
+    );
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-package-version",
+      "archive-device-package-version",
+    );
+    const destinationRoot = join(root, "destination");
+    const store = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-package-version",
+      operationFingerprint: `sha256:${"2".repeat(64)}`,
+      archive,
+    });
+    await writeFile(
+      join(destinationRoot, "archives", manifest.archiveId, "package.json"),
+      `${JSON.stringify({ ...archive, schemaVersion: "hpi-archive-package.v0" })}\n`,
+    );
+
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).read(manifest.archiveId),
+    ).rejects.toThrow(/Archive|package|schema|version|corrupt/u);
+  });
+
+  it("rejects a valid Archive package stored under a different Archive identity", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-package-identity-",
+    );
+    const target = await createPortableArchiveFixture(
+      join(root, "portable-target"),
+      "archive_task9-device-package-target",
+      "archive-device-package-target",
+    );
+    const other = await createPortableArchiveFixture(
+      join(root, "portable-other"),
+      "archive_task9-device-package-other",
+      "archive-device-package-other",
+    );
+    const destinationRoot = join(root, "destination");
+    const store = new FileRunArchiveStore({ stateRoot: destinationRoot });
+    await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-package-identity",
+      operationFingerprint: `sha256:${"3".repeat(64)}`,
+      archive: target.archive,
+    });
+    await writeFile(
+      join(destinationRoot, "archives", target.manifest.archiveId, "package.json"),
+      `${JSON.stringify(other.archive)}\n`,
+    );
+
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).read(target.manifest.archiveId),
+    ).rejects.toThrow(/different Archive identity than its directory/u);
+  });
+
+  it("fails imported projection reads closed for a missing or changed receipt, operation, or package", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-tamper-");
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-tamper",
+    );
+    const operationId = "op_device-import-tamper" as const;
+    const operationFingerprint = `sha256:${"b".repeat(64)}`;
+
+    async function importedStore(label: string) {
+      const stateRoot = join(root, label);
+      const store = new FileRunArchiveStore({ stateRoot });
+      const receipt = await store.import({
+        schemaVersion: "hpi-archive-import.v1",
+        operationId,
+        operationFingerprint,
+        archive,
+      });
+      const request = {
+        schemaVersion: "hpi-imported-archive-projection-request.v1" as const,
+        operationId,
+        operationFingerprint,
+        archiveId: manifest.archiveId,
+        artifactFingerprint: receipt.artifactFingerprint,
+      };
+      return { request, stateRoot, store, receipt };
+    }
+
+    const differentOperation = await importedStore("different-operation");
+    await expect(
+      differentOperation.store.projectImported({
+        ...differentOperation.request,
+        operationId: "op_device-import-other",
+      }),
+    ).rejects.toThrow(/identity|operation|receipt/u);
+
+    const missingReceipt = await importedStore("missing-receipt");
+    await rm(
+      join(
+        missingReceipt.stateRoot,
+        ".operation-receipts",
+        "imports",
+        `${manifest.archiveId}.json`,
+      ),
+    );
+    await expect(missingReceipt.store.projectImported(missingReceipt.request)).rejects.toThrow(
+      /persisted|receipt|not found/u,
+    );
+
+    const changedReceipt = await importedStore("changed-receipt");
+    await writeFile(
+      join(
+        changedReceipt.stateRoot,
+        ".operation-receipts",
+        "imports",
+        `${manifest.archiveId}.json`,
+      ),
+      `${JSON.stringify({ ...changedReceipt.receipt, observedAt: "2026-08-08T01:02:03.000Z" })}\n`,
+    );
+    await expect(changedReceipt.store.projectImported(changedReceipt.request)).rejects.toThrow(
+      /corrupt|fingerprint|receipt|invalid|unreadable/u,
+    );
+
+    const changedPackage = await importedStore("changed-package");
+    await writeFile(
+      join(changedPackage.stateRoot, "archives", manifest.archiveId, "package.json"),
+      `${JSON.stringify({
+        ...archive,
+        manifest: { ...archive.manifest, archivedAt: "2026-08-08T01:02:03.000Z" },
+      })}\n`,
+    );
+    await expect(changedPackage.store.projectImported(changedPackage.request)).rejects.toThrow(
+      /artifact|fingerprint|package|identity/u,
+    );
+  });
+
+  it("rejects live workflow state before device policy, Doctor, or login can run", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-live-");
+    const { archive, fixture } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-live",
+    );
+    const destinationRoot = join(root, "destination");
+    const clonePolicy = vi.fn(() =>
+      Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+    );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+    );
+    const doctor = vi.fn(() => Promise.resolve("PASS" as const));
+    const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
+    const importer = new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({
+        stateRoot: destinationRoot,
+        kernel: new InMemoryWorkflowKernel([fixture.events]),
+      }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
+      doctor: { run: doctor },
+      loginReadiness: { check: loginReadiness },
+    });
+    const baseRequest = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import-live" as const,
+      operationFingerprint: `sha256:${"c".repeat(64)}`,
+      profileId: "device-profile-live",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    };
+
+    await expect(importer.import(baseRequest)).rejects.toThrow(
+      /archive-only|live Workflow Kernel|canonical/u,
+    );
+    await expect(
       importer.import({
-        schemaVersion: "hpi-device-import.v1",
-        operationId: "op_device-import-live",
-        operationFingerprint: `sha256:${"b".repeat(64)}`,
-        profileId: "device-profile-clean",
-        projectPolicy: {
-          schemaVersion: "hpi-project-policy.v1",
-          policyFingerprint: fixtureFingerprint,
-        },
+        ...baseRequest,
+        operationId: "op_device-import-live-package",
         archive: archivePackageSchema.parse({
           ...archive,
           portability: { ...archive.portability, activeAttemptIds: ["att_archive-live"] },
         }),
-        observedAt: fixtureTimestamp,
       }),
     ).rejects.toThrow(/live Attempts|portable Archive/u);
-    expect(clonePolicy).toHaveBeenCalledOnce();
+    const forgedPortableMetadata = archivePackageSchema.parse({
+      ...archive,
+      projection: {
+        ...archive.projection,
+        attempts: archive.projection.attempts.map((attempt, index) =>
+          index === 0 ? { ...attempt, executionStatus: "RUNNING" } : attempt,
+        ),
+      },
+    });
+    expect(() => {
+      assertPortableArchive(forgedPortableMetadata);
+    }).toThrow(/live Attempts|live workflow state|portable Archive/u);
+    expect(clonePolicy).not.toHaveBeenCalled();
+    expect(reconcilePolicy).not.toHaveBeenCalled();
+    expect(doctor).not.toHaveBeenCalled();
+    expect(loginReadiness).not.toHaveBeenCalled();
+  });
 
-    const legacyImporter = new PortableDeviceImporter({
-      archiveStore: destination,
-      clonePolicy: { clone: () => Promise.resolve("PASS" as never) },
+  it("replays one immutable device receipt as NOOP and rejects changed bindings without rerunning checks", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-replay-");
+    const firstArchive = await createPortableArchiveFixture(
+      join(root, "portable-first"),
+      "archive_task9-device-replay",
+    );
+    const changedArchive = await createPortableArchiveFixture(
+      join(root, "portable-changed-archive"),
+      "archive_task9-device-other",
+    );
+    const changedPlan = await createPortableArchiveFixture(
+      join(root, "portable-changed-plan"),
+      "archive_task9-device-replay",
+      "archive-other-plan",
+    );
+    const destinationRoot = join(root, "destination");
+    const clonePolicy = vi.fn(() =>
+      Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+    );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+    );
+    const doctor = vi.fn(() => Promise.resolve("PASS" as const));
+    const loginReadiness = vi.fn(() => Promise.resolve("BLOCKED" as const));
+    const importer = new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
+    });
+    const request = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import-replay" as const,
+      operationFingerprint: `sha256:${"d".repeat(64)}`,
+      profileId: "device-profile-replay",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive: firstArchive.archive,
+      observedAt: fixtureTimestamp,
+    };
+
+    const first = await importer.import(request);
+    const replayed = await new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
+      doctor: { run: doctor },
+      loginReadiness: { check: loginReadiness },
+    }).import({ ...request, observedAt: "2026-08-08T02:03:04.000Z" });
+    const { archiveOutcome: firstInvocation, ...firstFact } = first;
+    const { archiveOutcome: replayInvocation, ...replayedFact } = replayed;
+    expect(firstInvocation).toBe("APPLIED");
+    expect(replayInvocation).toBe("NOOP");
+    expect(replayedFact).toEqual(firstFact);
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(reconcilePolicy).toHaveBeenCalledOnce();
+    expect(doctor).toHaveBeenCalledOnce();
+    expect(loginReadiness).toHaveBeenCalledOnce();
+
+    for (const conflicting of [
+      { ...request, operationFingerprint: `sha256:${"e".repeat(64)}` },
+      { ...request, operationId: "op_device-import-replay-other" },
+      { ...request, profileId: "device-profile-other" },
+      {
+        ...request,
+        projectPolicy: { ...request.projectPolicy, policyFingerprint: `sha256:${"f".repeat(64)}` },
+      },
+      { ...request, archive: changedArchive.archive },
+      { ...request, archive: changedPlan.archive },
+    ]) {
+      await expect(importer.import(conflicting)).rejects.toThrow(
+        /identity|operation|profile|policy|archive|plan|fingerprint/u,
+      );
+    }
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(doctor).toHaveBeenCalledOnce();
+    expect(loginReadiness).toHaveBeenCalledOnce();
+
+    const deviceReceiptPath = join(
+      destinationRoot,
+      ".operation-receipts",
+      "device-imports",
+      `${request.profileId}.json`,
+    );
+    const persistedText = await readFile(deviceReceiptPath, "utf8");
+    expect(persistedText).not.toContain(root);
+    expect(persistedText).not.toMatch(/(?:file:\/\/|[A-Za-z]:[\\/]|\\\\)/u);
+    const persisted = JSON.parse(persistedText) as Record<string, unknown>;
+    expect(persisted).not.toHaveProperty("stateRoot");
+    expect(persisted).not.toHaveProperty("path");
+    await writeFile(
+      deviceReceiptPath,
+      `${JSON.stringify({ ...persisted, doctorStatus: "NOT_PROVEN" })}\n`,
+    );
+    await expect(importer.import(request)).rejects.toThrow(
+      /corrupt|fingerprint|receipt|invalid|unreadable/u,
+    );
+    expect(clonePolicy).toHaveBeenCalledOnce();
+  });
+
+  it("binds one Archive import operation identity to exactly one Archive", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-operation-identity-",
+    );
+    const first = await createPortableArchiveFixture(
+      join(root, "portable-first"),
+      "archive_task9-device-operation-first",
+    );
+    const second = await createPortableArchiveFixture(
+      join(root, "portable-second"),
+      "archive_task9-device-operation-second",
+      "archive-operation-second",
+    );
+    const store = new FileRunArchiveStore({ stateRoot: join(root, "destination") });
+    await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-single-binding",
+      operationFingerprint: `sha256:${"3".repeat(64)}`,
+      archive: first.archive,
+    });
+
+    await expect(
+      store.import({
+        schemaVersion: "hpi-archive-import.v1",
+        operationId: "op_device-import-single-binding",
+        operationFingerprint: `sha256:${"4".repeat(64)}`,
+        archive: second.archive,
+      }),
+    ).rejects.toThrow(/operation|identity|bound/u);
+  });
+
+  it("resumes an interrupted device import from exact durable policy state without manual editing", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-interrupted-",
+    );
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-interrupted",
+      "archive-device-interrupted",
+    );
+    const destinationRoot = join(root, "destination");
+    let policyPresent = false;
+    let doctorInvocation = 0;
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve(
+        policyPresent
+          ? ({ status: "EXACT" as const, policyFingerprint: fixtureFingerprint } as const)
+          : ({ status: "ABSENT" as const, policyFingerprint: null } as const),
+      ),
+    );
+    const clonePolicy = vi.fn(() => {
+      if (policyPresent) throw new Error("policy clone must not be repeated");
+      policyPresent = true;
+      return Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint });
+    });
+    const doctor = vi.fn(() => {
+      doctorInvocation += 1;
+      return doctorInvocation === 1
+        ? Promise.reject(new Error("simulated Doctor interruption"))
+        : Promise.resolve("PASS" as const);
+    });
+    const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
+    const importer = new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
+      doctor: { run: doctor },
+      loginReadiness: { check: loginReadiness },
+    });
+    const request = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import-interrupted" as const,
+      operationFingerprint: `sha256:${"2".repeat(64)}`,
+      profileId: "device-profile-interrupted",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    };
+
+    await expect(importer.import(request)).rejects.toThrow(/simulated Doctor interruption/u);
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(doctor).toHaveBeenCalledOnce();
+    expect(loginReadiness).not.toHaveBeenCalled();
+
+    await expect(importer.import(request)).resolves.toMatchObject({
+      archiveOutcome: "NOOP",
+      outcome: "READY",
+      policyOutcome: "PASS",
+      policyResolution: "RECONCILED_EXACT",
+      doctorStatus: "PASS",
+      loginReadiness: "PASS",
+    });
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(reconcilePolicy).toHaveBeenCalledTimes(2);
+    expect(doctor).toHaveBeenCalledTimes(2);
+    expect(loginReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("resumes device intent and receipt publication after process termination at every atomic boundary", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-atomic-interruption-",
+    );
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-atomic-interruption",
+      "archive-device-atomic-interruption",
+    );
+    const templateRoot = join(root, "template");
+    const request = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import-atomic-interruption" as const,
+      operationFingerprint: `sha256:${"2".repeat(64)}`,
+      profileId: "device-profile-atomic-interruption",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    };
+    await new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: templateRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: templateRoot }),
+      clonePolicy: {
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+        clone: () =>
+          Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+      },
+      doctor: { run: () => Promise.resolve("PASS") },
+      loginReadiness: { check: () => Promise.resolve("PASS") },
+    }).import(request);
+
+    const profileFilename = `${request.profileId}.json`;
+    const templateIntent = await readFile(
+      join(templateRoot, ".operation-receipts", "device-import-intents", profileFilename),
+      "utf8",
+    );
+    const templateReceiptText = await readFile(
+      join(templateRoot, ".operation-receipts", "device-imports", profileFilename),
+      "utf8",
+    );
+    const templateReceipt = portableDeviceImportReceiptSchema.parse(
+      JSON.parse(templateReceiptText) as unknown,
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: templateReceipt.operationId,
+      operationFingerprint: templateReceipt.operationFingerprint,
+      profileId: templateReceipt.profileId,
+      projectPolicyFingerprint: templateReceipt.projectPolicyFingerprint,
+      archiveId: templateReceipt.archiveId,
+      artifactFingerprint: templateReceipt.artifactFingerprint,
+      runId: templateReceipt.runId,
+      planRevisionId: templateReceipt.planRevisionId,
+      sourceFingerprint: templateReceipt.sourceFingerprint,
+      archivedRunOutcome: templateReceipt.archivedRunOutcome,
+    });
+    const boundaries = [
+      "BEFORE_TEMP_WRITE",
+      "AFTER_TEMP_WRITE",
+      "AFTER_TEMP_SYNC",
+      "AFTER_PUBLISH",
+    ] as const;
+
+    for (const target of ["INTENT", "RECEIPT"] as const) {
+      for (const boundary of boundaries) {
+        const stateRoot = join(root, `${target.toLowerCase()}-${boundary.toLowerCase()}`);
+        const intentRoot = join(stateRoot, ".operation-receipts", "device-import-intents");
+        const receiptRoot = join(stateRoot, ".operation-receipts", "device-imports");
+        if (target === "RECEIPT") {
+          await mkdir(intentRoot, { recursive: true });
+          await writeFile(join(intentRoot, profileFilename), templateIntent, { flag: "wx" });
+        }
+        const targetRoot = target === "INTENT" ? intentRoot : receiptRoot;
+        await leaveInterruptedAtomicWrite({
+          boundary,
+          content: target === "INTENT" ? templateIntent : templateReceiptText,
+          directory: targetRoot,
+          filename: profileFilename,
+        });
+
+        const createReceipt = vi.fn(() => Promise.resolve(templateReceipt));
+        const resolution = await new FilePortableDeviceImportReceiptStore({ stateRoot }).recordOnce(
+          binding,
+          createReceipt,
+        );
+        expect(resolution.receipt).toEqual(templateReceipt);
+        const publishedBeforeTermination = target === "RECEIPT" && boundary === "AFTER_PUBLISH";
+        expect(resolution.replayed).toBe(publishedBeforeTermination);
+        expect(createReceipt).toHaveBeenCalledTimes(publishedBeforeTermination ? 0 : 1);
+        for (const directory of [intentRoot, receiptRoot]) {
+          const entries = await readdir(directory).catch((error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+            throw error;
+          });
+          const pendingEntries = entries.filter((entry) => entry.startsWith(".pending-"));
+          for (const pendingEntry of pendingEntries) {
+            expect(pendingEntry).toMatch(
+              /^\.pending-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+            );
+            const pendingStats = await lstat(join(directory, pendingEntry), { bigint: true });
+            expect(pendingStats.isFile()).toBe(true);
+            expect(pendingStats.isSymbolicLink()).toBe(false);
+            expect([1n, 2n]).toContain(pendingStats.nlink);
+            if (pendingStats.nlink === 2n) {
+              const finalStats = await lstat(join(directory, profileFilename), { bigint: true });
+              expect({
+                dev: pendingStats.dev,
+                ino: pendingStats.ino,
+                nlink: pendingStats.nlink,
+              }).toEqual({ dev: finalStats.dev, ino: finalStats.ino, nlink: finalStats.nlink });
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("fails closed without deleting foreign device atomic-write remnants", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-foreign-pending-",
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: "op_device-import-foreign-pending",
+      operationFingerprint: fixtureFingerprint,
+      profileId: "device-profile-foreign-pending",
+      projectPolicyFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-device-foreign-pending",
+      artifactFingerprint: fixtureFingerprint,
+      runId: "run_task9-device-foreign-pending",
+      planRevisionId: "plan_task9-device-foreign-pending",
+      sourceFingerprint: fixtureFingerprint,
+      archivedRunOutcome: "READY",
+    });
+    const createReceipt = vi.fn(() => {
+      throw new Error("foreign pending state must fail before receipt creation");
+    });
+
+    const malformedRoot = join(root, "malformed-name");
+    const malformedDirectory = join(malformedRoot, ".operation-receipts", "device-import-intents");
+    const malformedPath = join(malformedDirectory, ".pending-not-a-writer-identity");
+    await mkdir(malformedDirectory, { recursive: true });
+    await writeFile(malformedPath, "foreign", { flag: "wx" });
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: malformedRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(access(malformedPath)).resolves.toBeUndefined();
+
+    const linkedRoot = join(root, "linked-remnant");
+    const linkedDirectory = join(linkedRoot, ".operation-receipts", "device-import-intents");
+    const linkedPath = join(linkedDirectory, ".pending-00000000-0000-4000-8000-000000000000");
+    const outsideLink = join(linkedRoot, "foreign-hardlink");
+    await mkdir(linkedDirectory, { recursive: true });
+    await writeFile(linkedPath, "{}\n", { flag: "wx" });
+    await link(linkedPath, outsideLink);
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: linkedRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(Promise.all([access(linkedPath), access(outsideLink)])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+
+    const missingFinalRoot = join(root, "missing-final-link");
+    const missingFinalDirectory = join(
+      missingFinalRoot,
+      ".operation-receipts",
+      "device-import-intents",
+    );
+    const missingFinalPending = join(
+      missingFinalDirectory,
+      ".pending-00000000-0000-4000-8000-000000000001",
+    );
+    const missingFinalOutsideLink = join(missingFinalRoot, "foreign-hardlink");
+    const intentFacts = { schemaVersion: "hpi-device-import-intent.v1" as const, binding };
+    const validIntent = {
+      ...intentFacts,
+      intentFingerprint: sha256Fingerprint(canonicalJson(intentFacts)),
+    };
+    await mkdir(missingFinalDirectory, { recursive: true });
+    await writeFile(missingFinalPending, `${canonicalJson(validIntent)}\n`, { flag: "wx" });
+    await link(missingFinalPending, missingFinalOutsideLink);
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: missingFinalRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(
+      Promise.all([access(missingFinalPending), access(missingFinalOutsideLink)]),
+    ).resolves.toEqual([undefined, undefined]);
+    await expect(
+      access(join(missingFinalDirectory, `${binding.profileId}.json`)),
+    ).rejects.toThrow();
+    expect(createReceipt).not.toHaveBeenCalled();
+  });
+
+  it("rebinds device remnant path identities before accepting or deleting them", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-remnant-swap-",
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: "op_device-import-remnant-swap",
+      operationFingerprint: fixtureFingerprint,
+      profileId: "device-profile-remnant-swap",
+      projectPolicyFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-device-remnant-swap",
+      artifactFingerprint: fixtureFingerprint,
+      runId: "run_task9-device-remnant-swap",
+      planRevisionId: "plan_task9-device-remnant-swap",
+      sourceFingerprint: fixtureFingerprint,
+      archivedRunOutcome: "READY",
+    });
+    const intentFacts = { schemaVersion: "hpi-device-import-intent.v1" as const, binding };
+    const validIntent = {
+      ...intentFacts,
+      intentFingerprint: sha256Fingerprint(canonicalJson(intentFacts)),
+    };
+    const intentText = `${canonicalJson(validIntent)}\n`;
+
+    const swapCases = [
+      { name: "FINAL", target: "FINAL", match: 1 },
+      { name: "PENDING", target: "FINAL", match: 1 },
+      { name: "PENDING_AFTER_CHECK", target: "PENDING", match: 3 },
+    ] as const;
+    for (const swapCase of swapCases) {
+      const stateRoot = join(root, swapCase.name.toLowerCase());
+      const directory = join(stateRoot, ".operation-receipts", "device-import-intents");
+      const pendingPath = join(
+        directory,
+        swapCase.name === "FINAL"
+          ? ".pending-00000000-0000-4000-8000-000000000010"
+          : swapCase.name === "PENDING"
+            ? ".pending-00000000-0000-4000-8000-000000000011"
+            : ".pending-00000000-0000-4000-8000-000000000012",
+      );
+      const finalPath = join(directory, `${binding.profileId}.json`);
+      const foreignSource = join(stateRoot, "foreign-source");
+      await mkdir(directory, { recursive: true });
+      await writeFile(pendingPath, intentText, { flag: "wx" });
+      await link(pendingPath, finalPath);
+      if (swapCase.name !== "FINAL") {
+        await writeFile(foreignSource, "foreign-link-must-survive", { flag: "wx" });
+      }
+      const createReceipt = vi.fn(() => {
+        throw new Error("receipt creation must not follow a remnant pathname swap");
+      });
+      let swapRan = false;
+
+      await expect(
+        withLstatPathSwap(
+          swapCase.target === "FINAL" ? finalPath : pendingPath,
+          async () => {
+            swapRan = true;
+            if (swapCase.name === "FINAL") {
+              await rm(finalPath);
+              await writeFile(finalPath, intentText, { flag: "wx" });
+            } else {
+              await rm(pendingPath);
+              await link(foreignSource, pendingPath);
+            }
+          },
+          () =>
+            new FilePortableDeviceImportReceiptStore({ stateRoot }).recordOnce(
+              binding,
+              createReceipt,
+            ),
+          swapCase.match,
+        ),
+      ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+      expect(swapRan).toBe(true);
+      expect(createReceipt).not.toHaveBeenCalled();
+      if (swapCase.name !== "FINAL") {
+        const [pendingStats, foreignStats] = await Promise.all([
+          lstat(pendingPath, { bigint: true }),
+          lstat(foreignSource, { bigint: true }),
+        ]);
+        expect({ dev: pendingStats.dev, ino: pendingStats.ino }).toEqual({
+          dev: foreignStats.dev,
+          ino: foreignStats.ino,
+        });
+      }
+    }
+  });
+
+  it("rejects legacy or mismatched policy clone results", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-legacy-");
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-legacy",
+    );
+    const destinationRoot = join(root, "destination");
+    const legacyImporter = new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
+      clonePolicy: {
+        clone: () => Promise.resolve("PASS" as never),
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+      },
+      doctor: { run: () => Promise.resolve("PASS") },
+      loginReadiness: { check: () => Promise.resolve("PASS") },
     });
     await expect(
       legacyImporter.import({
         schemaVersion: "hpi-device-import.v1",
         operationId: "op_device-import-legacy-result",
-        operationFingerprint: `sha256:${"c".repeat(64)}`,
-        profileId: "device-profile-clean",
+        operationFingerprint: `sha256:${"f".repeat(64)}`,
+        profileId: "device-profile-legacy",
         projectPolicy: {
           schemaVersion: "hpi-project-policy.v1",
           policyFingerprint: fixtureFingerprint,
@@ -686,5 +1899,85 @@ describe("Task 9 Run Archive", () => {
         observedAt: fixtureTimestamp,
       }),
     ).rejects.toThrow(/policy clone result|policy fingerprint/u);
+
+    const mismatchRoot = join(root, "mismatched-destination");
+    const mismatchedDoctor = vi.fn(() => Promise.resolve("PASS" as const));
+    const mismatchedLogin = vi.fn(() => Promise.resolve("PASS" as const));
+    const mismatchedImporter = new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: mismatchRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: mismatchRoot }),
+      clonePolicy: {
+        clone: () =>
+          Promise.resolve({
+            status: "BLOCKED" as const,
+            policyFingerprint: `sha256:${"0".repeat(64)}`,
+          }),
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+      },
+      doctor: { run: mismatchedDoctor },
+      loginReadiness: { check: mismatchedLogin },
+    });
+    await expect(
+      mismatchedImporter.import({
+        schemaVersion: "hpi-device-import.v1",
+        operationId: "op_device-import-mismatched-policy",
+        operationFingerprint: `sha256:${"1".repeat(64)}`,
+        profileId: "device-profile-mismatched-policy",
+        projectPolicy: {
+          schemaVersion: "hpi-project-policy.v1",
+          policyFingerprint: fixtureFingerprint,
+        },
+        archive,
+        observedAt: fixtureTimestamp,
+      }),
+    ).rejects.toThrow(/bind|policy fingerprint/u);
+    expect(mismatchedDoctor).not.toHaveBeenCalled();
+    expect(mismatchedLogin).not.toHaveBeenCalled();
+  });
+
+  it("preserves a known BLOCKED policy result ahead of skipped downstream checks", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-blocked-");
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-blocked",
+    );
+    const clonePolicy = vi.fn(() =>
+      Promise.resolve({ status: "BLOCKED" as const, policyFingerprint: fixtureFingerprint }),
+    );
+    const doctor = vi.fn(() => Promise.resolve("PASS" as const));
+    const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
+    const receipt = await new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: join(root, "destination") }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({
+        stateRoot: join(root, "destination"),
+      }),
+      clonePolicy: {
+        clone: clonePolicy,
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+      },
+      doctor: { run: doctor },
+      loginReadiness: { check: loginReadiness },
+    }).import({
+      schemaVersion: "hpi-device-import.v1",
+      operationId: "op_device-import-blocked",
+      operationFingerprint: `sha256:${"5".repeat(64)}`,
+      profileId: "device-profile-blocked",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1",
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    });
+
+    expect(receipt).toMatchObject({
+      outcome: "BLOCKED",
+      policyOutcome: "BLOCKED",
+      doctorStatus: "NOT_PROVEN",
+      loginReadiness: "NOT_PROVEN",
+    });
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(doctor).not.toHaveBeenCalled();
+    expect(loginReadiness).not.toHaveBeenCalled();
   });
 });

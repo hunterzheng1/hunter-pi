@@ -67,6 +67,8 @@ function eventRunId(event: WorkflowEvent) {
       return event.attempt.runId;
     case "OBSERVATION_RECORDED":
       return event.observation.runId;
+    case "ATTEMPT_FINALITY_RECORDED":
+      return event.receipt.runId;
     case "VERIFICATION_RECORDED":
       return event.receipt.runId;
     case "HUMAN_RECEIPT_RECORDED":

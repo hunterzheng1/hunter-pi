@@ -102,12 +102,195 @@ function replacePattern(
   });
 }
 
+const structuredCredentialKeyPattern =
+  /^(?:authorization|proxy-authorization|cookie|set-cookie|access[_-]?token|api[_-]?key|apikey|auth|key|client[_-]?secret|password|secret|token)$/iu;
+const redactedCredentialJson = JSON.stringify("[REDACTED:CREDENTIAL]");
+const maximumEncodedJsonLayers = 8;
+
+interface JsonDocumentRedaction {
+  readonly fieldsRemoved: number;
+  readonly parsed: boolean;
+  readonly text: string;
+}
+
+function redactJsonDocument(text: string, encodedLayer = 0): JsonDocumentRedaction {
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    return { fieldsRemoved: 0, parsed: false, text };
+  }
+  if (typeof value === "string" && encodedLayer >= maximumEncodedJsonLayers) {
+    return { fieldsRemoved: 1, parsed: true, text: redactedCredentialJson };
+  }
+  if (typeof value === "string") {
+    const nested = redactJsonDocument(value, encodedLayer + 1);
+    const embedded =
+      nested.fieldsRemoved === 0 && !nested.parsed
+        ? redactEmbeddedJsonDocuments(value, encodedLayer + 1)
+        : nested;
+    if (embedded.fieldsRemoved > 0) {
+      return {
+        fieldsRemoved: embedded.fieldsRemoved,
+        parsed: true,
+        text: JSON.stringify(embedded.text),
+      };
+    }
+  }
+  if (typeof value !== "object" || value === null) {
+    return { fieldsRemoved: 0, parsed: true, text };
+  }
+
+  let fieldsRemoved = 0;
+  let replacementSequence = 0;
+  const pending: object[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    for (const [key, nested] of Object.entries(current) as [string, unknown][]) {
+      if (structuredCredentialKeyPattern.test(key)) {
+        Reflect.deleteProperty(current, key);
+        fieldsRemoved += 1;
+        let replacementKey: string;
+        do {
+          replacementSequence += 1;
+          replacementKey = `redactedField${String(replacementSequence)}`;
+        } while (Object.hasOwn(current, replacementKey));
+        Reflect.set(current, replacementKey, "[REDACTED:CREDENTIAL]");
+      } else if (typeof nested === "string") {
+        const document = redactJsonDocument(nested);
+        const embedded =
+          document.fieldsRemoved === 0 && !document.parsed
+            ? redactEmbeddedJsonDocuments(nested)
+            : document;
+        if (embedded.fieldsRemoved > 0) {
+          Reflect.set(current, key, embedded.text);
+          fieldsRemoved += embedded.fieldsRemoved;
+        }
+      } else if (typeof nested === "object" && nested !== null) {
+        pending.push(nested);
+      }
+    }
+  }
+  if (fieldsRemoved === 0) return { fieldsRemoved, parsed: true, text };
+  try {
+    return { fieldsRemoved, parsed: true, text: JSON.stringify(value) };
+  } catch {
+    return { fieldsRemoved, parsed: true, text: redactedCredentialJson };
+  }
+}
+
+function jsonContainerEnd(text: string, start: number): number | undefined {
+  const opening = text[start];
+  if (opening !== "{" && opening !== "[") return undefined;
+  const stack: string[] = [opening];
+  let escaped = false;
+  let inString = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      stack.push(character);
+    } else if (character === "}" || character === "]") {
+      const expectedOpening = character === "}" ? "{" : "[";
+      if (stack.pop() !== expectedOpening) return undefined;
+      if (stack.length === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function redactEmbeddedJsonDocuments(text: string, encodedLayer = 0): JsonDocumentRedaction {
+  let cursor = 0;
+  let fieldsRemoved = 0;
+  let output = "";
+  let scan = 0;
+  while (scan < text.length) {
+    const objectStart = text.indexOf("{", scan);
+    const arrayStart = text.indexOf("[", scan);
+    const start =
+      objectStart === -1
+        ? arrayStart
+        : arrayStart === -1
+          ? objectStart
+          : Math.min(objectStart, arrayStart);
+    if (start === -1) break;
+    const end = jsonContainerEnd(text, start);
+    if (end === undefined) {
+      scan = start + 1;
+      continue;
+    }
+    const redacted = redactJsonDocument(text.slice(start, end + 1), encodedLayer);
+    if (redacted.fieldsRemoved > 0) {
+      output += `${text.slice(cursor, start)}${redacted.text}`;
+      cursor = end + 1;
+      fieldsRemoved += redacted.fieldsRemoved;
+      scan = cursor;
+    } else {
+      scan = redacted.parsed ? end + 1 : start + 1;
+    }
+  }
+  return {
+    fieldsRemoved,
+    parsed: false,
+    text: fieldsRemoved === 0 ? text : `${output}${text.slice(cursor)}`,
+  };
+}
+
+function redactStructuredCredentialJson(result: MutableRedactionResult): void {
+  const wholeDocument = redactJsonDocument(result.text);
+  if (wholeDocument.fieldsRemoved > 0) {
+    result.text = wholeDocument.text;
+    result.fieldsRemoved += wholeDocument.fieldsRemoved;
+    result.categories.add("CREDENTIAL");
+    return;
+  }
+
+  const embeddedDocuments = redactEmbeddedJsonDocuments(result.text);
+  if (embeddedDocuments.fieldsRemoved > 0) result.text = embeddedDocuments.text;
+  let fieldsRemoved = embeddedDocuments.fieldsRemoved;
+  result.text = result.text
+    .split("\n")
+    .map((line) => {
+      const leadingLength = line.length - line.trimStart().length;
+      const trailingLength = line.length - line.trimEnd().length;
+      const end = trailingLength === 0 ? line.length : line.length - trailingLength;
+      const candidate = line.slice(leadingLength, end);
+      if (candidate.length === 0) return line;
+      const document = redactJsonDocument(candidate);
+      const redacted =
+        document.fieldsRemoved === 0 && !document.parsed
+          ? redactEmbeddedJsonDocuments(candidate)
+          : document;
+      fieldsRemoved += redacted.fieldsRemoved;
+      return `${line.slice(0, leadingLength)}${redacted.text}${line.slice(end)}`;
+    })
+    .join("\n");
+  if (fieldsRemoved > 0) {
+    result.fieldsRemoved += fieldsRemoved;
+    result.categories.add("CREDENTIAL");
+  }
+}
+
 function redactText(text: string, policy: PortableEvidencePolicy): RedactionResult {
   const result: MutableRedactionResult = {
     text,
     fieldsRemoved: 0,
     categories: new Set<RedactionCategory>(),
   };
+
+  redactStructuredCredentialJson(result);
 
   for (const value of policy.privatePromptValues ?? []) {
     for (const variant of encodedVariants(value)) {
@@ -127,13 +310,26 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
 
   replacePattern(
     result,
-    /\b(?:authorization|proxy-authorization)\s*:\s*[^\r\n]+/giu,
+    /"(?:authorization|proxy-authorization|cookie|set-cookie|access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)"\s*:\s*"(?:\\(?:["\\/bfnrt]|u[0-9a-f]{4})|[^"\\\r\n])*"/giu,
+    "[REDACTED:CREDENTIAL]",
+    "CREDENTIAL",
+  );
+  replacePattern(
+    result,
+    /'(?:authorization|proxy-authorization|cookie|set-cookie|access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)'\s*:\s*'(?:\\(?:['\\/bfnrt]|u[0-9a-f]{4})|[^'\\\r\n])*'/giu,
+    "[REDACTED:CREDENTIAL]",
+    "CREDENTIAL",
+  );
+
+  replacePattern(
+    result,
+    /(?:["'])?\b(?:authorization|proxy-authorization)\b(?:["'])?\s*:\s*[^\r\n]+/giu,
     "Authorization: [REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );
   replacePattern(
     result,
-    /\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+/giu,
+    /(?:["'])?\b(?:cookie|set-cookie)\b(?:["'])?\s*:\s*[^\r\n]+/giu,
     "Cookie: [REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );
@@ -163,7 +359,7 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
   );
   replacePattern(
     result,
-    /\b(?:access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu,
+    /(?:["'])?\b(?:access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)\b(?:["'])?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu,
     "[REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );

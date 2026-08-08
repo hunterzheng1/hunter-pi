@@ -138,6 +138,8 @@ Retry never mutates an Attempt and cannot begin while the preceding Attempt exec
 
 The retry event also freezes the admission-time `userInputRequired` and `workspaceDriftDetected` determinations. When `stopOnUserInput` is active, either a true determination or an earlier `INPUT_REQUESTED` Observation blocks retry; a caller cannot bypass the stop by reporting `false`. When `stopOnWorkspaceDrift` is active, a true durable determination blocks retry. Replay applies the same rules and never invents a workspace-drift check that was not recorded.
 
+Cancellation and interruption recovery have a stronger boundary than ordinary same-owner fixback. Neither `AGENT_RETURNED` nor `PROCESS_EXITED` is terminal finality. Before cancellation can end a Run, and before recovery can create a replacement Attempt, the Kernel requires one immutable Attempt Finality Receipt bound to the preceding Attempt's latest Checkpoint. Its process references and released Writer Lease identities must match the Checkpoint exactly, and its supporting Evidence is retained by Archive finalization.
+
 Every Attempt in a Run uses the same Plan Revision. If remediation requires a plan change, the existing Run ends with outcome `CANCELLED` and reason `PLAN_SUPERSEDED`; the replacement Run links back to its Evidence.
 
 A fixback loop follows:
@@ -208,13 +210,14 @@ Recovery algorithm:
 1. Load and validate the Checkpoint schema.
 2. Verify repository, worktree, Distribution Release, and event-log continuity.
 3. Reconcile running or unknown external operations.
-4. Recover Pi only if the exact Engine Release and session reference support it.
-5. Create a new recovery Attempt.
-6. If any required identity cannot be established, stop as `BLOCKED` or `NOT_PROVEN`.
+4. Reconcile every recorded process to a final receipt and every recorded Writer Lease to release, then append the exact Attempt Finality Receipt.
+5. Recover Pi only if the exact Engine Release and session reference support it.
+6. Create a new recovery Attempt.
+7. If any required identity cannot be established, stop as `BLOCKED` or `NOT_PROVEN`.
 
 Recovery is successful when state is reconciled and work can continue. It does not imply that the Change is successful.
 
-Task 3 durable replay validates every segment schema, checksum, Run binding, cursor boundary, previous-segment hash, Attempt sequence, retry stop determination, and Receipt-to-Plan binding before projection. A separate projection-integrity function recomputes Attempt execution/verification status, current check status, and Run/Change lifecycle from the exact facts; Evidence summaries cannot accept caller-authored READY/PASS fields or duplicate Receipts. A Checkpoint found in that replay proves only that the workflow reference was recorded. Until Distribution Release, workspace/source, and engine/session facts are independently reconciled, `recover` returns `NOT_PROVEN` with explicit reasons and does not create a recovery Attempt or claim resumed work. If the same Checkpoint identity is found in more than one Run, recovery returns `BLOCKED / CHECKPOINT_ID_AMBIGUOUS` rather than choosing one.
+Task 3 durable replay validates every segment schema, checksum, Run binding, cursor boundary, previous-segment hash, Attempt sequence, retry stop determination, and Receipt-to-Plan binding before projection. A separate projection-integrity function recomputes Attempt execution/verification status, current check status, and Run/Change lifecycle from the exact facts; Evidence summaries cannot accept caller-authored READY/PASS fields or duplicate Receipts. A Checkpoint found in that replay proves only that the workflow reference was recorded. Until Distribution Release, workspace/source, operations, process/lease finality, and engine/session facts are independently reconciled, `recover` returns `NOT_PROVEN` with explicit reasons and does not create a recovery Attempt or claim resumed work. If the same Checkpoint identity is found in more than one Run, recovery returns `BLOCKED / CHECKPOINT_ID_AMBIGUOUS` rather than choosing one.
 
 ## Review semantics
 

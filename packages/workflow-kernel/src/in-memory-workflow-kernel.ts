@@ -3,6 +3,7 @@ import {
   resourceBudgetsSchema,
   runIdSchema,
   runSchema,
+  type AttemptFinalityReceipt,
   type Attempt,
   type Checkpoint,
   type CheckpointId,
@@ -95,10 +96,30 @@ interface ProjectionState {
   run: Run;
   attempts: Attempt[];
   observations: Observation[];
+  attemptFinalityReceipts: AttemptFinalityReceipt[];
   verificationReceipts: VerificationReceipt[];
   humanReceipts: HumanReceipt[];
   reviewReceipts: ReviewReceipt[];
   checkpoints: Checkpoint[];
+}
+
+function canonicalIdentity(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalIdentity).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalIdentity(nested)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sameIdentitySet(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const leftSet = new Set(left.map(canonicalIdentity));
+  const rightSet = new Set(right.map(canonicalIdentity));
+  return leftSet.size === rightSet.size && [...leftSet].every((identity) => rightSet.has(identity));
 }
 
 function findAttempt(state: ProjectionState, attemptId: string): Attempt {
@@ -399,6 +420,46 @@ export function assertRunProjectionIntegrity(input: RunProjection): void {
       ),
     );
   }
+
+  const finalityReceiptIds = new Set<string>();
+  const finalityAttemptIds = new Set<string>();
+  for (const receipt of projection.attemptFinalityReceipts) {
+    const attempt = projection.attempts.find(
+      (candidate) => candidate.attemptId === receipt.attemptId,
+    );
+    const checkpoint = projection.checkpoints.find(
+      (candidate) => candidate.checkpointId === receipt.checkpointId,
+    );
+    const latestCheckpoint = [...projection.checkpoints]
+      .reverse()
+      .find((candidate) => candidate.attemptId === receipt.attemptId);
+    if (
+      finalityReceiptIds.has(receipt.attemptFinalityReceiptId) ||
+      finalityAttemptIds.has(receipt.attemptId) ||
+      attempt === undefined ||
+      checkpoint === undefined ||
+      latestCheckpoint?.checkpointId !== checkpoint.checkpointId ||
+      receipt.runId !== projection.run.runId ||
+      checkpoint.runId !== receipt.runId ||
+      checkpoint.attemptId !== receipt.attemptId ||
+      receipt.workspaceId !== projection.planRevision.workspaceId ||
+      receipt.workspaceFingerprint !== projection.planRevision.workspaceFingerprint ||
+      receipt.sourceFingerprint !== projection.planRevision.sourceFingerprint ||
+      !sameIdentitySet(
+        receipt.processFinalities.map(({ processReference }) => processReference),
+        checkpoint.processReferences,
+      ) ||
+      !sameIdentitySet(receipt.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) ||
+      Date.parse(receipt.observedAt) < Date.parse(attempt.startedAt) ||
+      Date.parse(receipt.observedAt) < Date.parse(checkpoint.createdAt)
+    ) {
+      throw new WorkflowTransitionError(
+        "Run projection contains a duplicate, stale, or unbound Attempt Finality Receipt",
+      );
+    }
+    finalityReceiptIds.add(receipt.attemptFinalityReceiptId);
+    finalityAttemptIds.add(receipt.attemptId);
+  }
   for (const [index, attempt] of projection.attempts.entries()) {
     const previous = projection.attempts[index - 1];
     if (previous === undefined) {
@@ -551,6 +612,7 @@ export function assertRunProjectionIntegrity(input: RunProjection): void {
     1 +
     projection.attempts.length +
     projection.observations.length +
+    projection.attemptFinalityReceipts.length +
     projection.verificationReceipts.length +
     projection.humanReceipts.length +
     projection.reviewReceipts.length +
@@ -566,6 +628,7 @@ export function assertRunProjectionIntegrity(input: RunProjection): void {
     run: projection.run,
     attempts: projectedAttempts,
     observations: projection.observations,
+    attemptFinalityReceipts: projection.attemptFinalityReceipts,
     verificationReceipts: projection.verificationReceipts,
     humanReceipts: projection.humanReceipts,
     reviewReceipts: projection.reviewReceipts,
@@ -605,6 +668,7 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
 
   const attempts: Attempt[] = [];
   const observations: Observation[] = [];
+  const attemptFinalityReceipts: AttemptFinalityReceipt[] = [];
   const verificationReceipts: VerificationReceipt[] = [];
   const humanReceipts: HumanReceipt[] = [];
   const reviewReceipts: ReviewReceipt[] = [];
@@ -707,6 +771,10 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           }
           if (
             attempt.previousAttemptId !== previous.attemptId ||
+            (attempt.recoveryCheckpointId !== undefined &&
+              !attemptFinalityReceipts.some(
+                (receipt) => receipt.attemptId === previous.attemptId,
+              )) ||
             !["RETURNED", "INTERRUPTED", "INCOMPLETE"].includes(previousExecutionStatus) ||
             (attempt.recoveryCheckpointId === undefined &&
               !["FAILED", "BLOCKED", "NOT_PROVEN"].includes(previousVerificationStatus) &&
@@ -797,6 +865,9 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
         requireAttempt(event.observation.attemptId);
         if (
           event.observation.runId !== created.run.runId ||
+          attemptFinalityReceipts.some(
+            (receipt) => receipt.attemptId === event.observation.attemptId,
+          ) ||
           observations.some(
             (observation) => observation.observationId === event.observation.observationId,
           ) ||
@@ -807,6 +878,41 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
         }
         observations.push(event.observation);
         break;
+      case "ATTEMPT_FINALITY_RECORDED": {
+        const receipt = event.receipt;
+        const attempt = requireAttempt(receipt.attemptId);
+        const checkpoint = checkpoints.get(receipt.checkpointId);
+        const latestCheckpoint = [...checkpoints.values()]
+          .reverse()
+          .find((candidate) => candidate.attemptId === receipt.attemptId);
+        if (
+          receipt.runId !== created.run.runId ||
+          attemptFinalityReceipts.some(
+            (candidate) =>
+              candidate.attemptFinalityReceiptId === receipt.attemptFinalityReceiptId ||
+              candidate.attemptId === receipt.attemptId,
+          ) ||
+          checkpoint === undefined ||
+          latestCheckpoint?.checkpointId !== checkpoint.checkpointId ||
+          checkpoint.attemptId !== receipt.attemptId ||
+          receipt.workspaceId !== created.planRevision.workspaceId ||
+          receipt.workspaceFingerprint !== created.planRevision.workspaceFingerprint ||
+          receipt.sourceFingerprint !== created.planRevision.sourceFingerprint ||
+          !sameIdentitySet(
+            receipt.processFinalities.map(({ processReference }) => processReference),
+            checkpoint.processReferences,
+          ) ||
+          !sameIdentitySet(receipt.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) ||
+          Date.parse(receipt.observedAt) < Date.parse(attempt.startedAt) ||
+          Date.parse(receipt.observedAt) < Date.parse(checkpoint.createdAt)
+        ) {
+          throw new WorkflowTransitionError(
+            "replayed Attempt Finality Receipt is duplicate, stale, or unbound",
+          );
+        }
+        attemptFinalityReceipts.push(receipt);
+        break;
+      }
       case "VERIFICATION_RECORDED": {
         const receipt = event.receipt;
         requireAttempt(receipt.attemptId);
@@ -891,6 +997,10 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
         }
         if (
           checkpointIds.has(checkpoint.checkpointId) ||
+          (checkpoint.attemptId !== undefined &&
+            attemptFinalityReceipts.some(
+              (receipt) => receipt.attemptId === checkpoint.attemptId,
+            )) ||
           checkpoint.runId !== created.run.runId ||
           checkpoint.planRevisionId !== created.planRevision.planRevisionId ||
           checkpoint.workspaceId !== created.planRevision.workspaceId ||
@@ -918,6 +1028,8 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
                 );
         if (
           event.runId !== created.run.runId ||
+          (previous !== undefined &&
+            !attemptFinalityReceipts.some((receipt) => receipt.attemptId === previous.attemptId)) ||
           (previousExecutionStatus !== undefined &&
             ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(
               previousExecutionStatus,
@@ -953,6 +1065,7 @@ function validateReplaySemantics(events: readonly WorkflowEvent[]): void {
           run: created.run,
           attempts: projectedAttempts,
           observations,
+          attemptFinalityReceipts,
           verificationReceipts,
           humanReceipts,
           reviewReceipts,
@@ -992,6 +1105,7 @@ export function replayWorkflowEvents(events: readonly WorkflowEvent[]): RunProje
     run: created.run,
     attempts: [],
     observations: [],
+    attemptFinalityReceipts: [],
     verificationReceipts: [],
     humanReceipts: [],
     reviewReceipts: [],
@@ -1013,6 +1127,9 @@ export function replayWorkflowEvents(events: readonly WorkflowEvent[]): RunProje
         replaceAttempt(state, attemptSchema.parse({ ...attempt, executionStatus }));
         break;
       }
+      case "ATTEMPT_FINALITY_RECORDED":
+        state.attemptFinalityReceipts.push(event.receipt);
+        break;
       case "VERIFICATION_RECORDED":
         state.verificationReceipts.push(event.receipt);
         break;
@@ -1156,6 +1273,7 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           "IN_MEMORY_STATE_NOT_DURABLE",
           "WORKSPACE_NOT_REVALIDATED",
           "ENGINE_STATE_NOT_RECONCILED",
+          "ATTEMPT_FINALITY_NOT_RECONCILED",
         ],
       });
     }
@@ -1189,6 +1307,9 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
   #runIdFor(command: Exclude<WorkflowCommand, { type: "CREATE_RUN" }>): RunId {
     if (command.type === "RECORD_OBSERVATION") {
       return command.observation.runId;
+    }
+    if (command.type === "RECORD_ATTEMPT_FINALITY") {
+      return command.receipt.runId;
     }
     if (command.type === "RECORD_VERIFICATION") {
       return command.receipt.runId;
@@ -1241,6 +1362,16 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
             "cannot cancel while the latest Attempt has an active execution",
           );
         }
+        if (
+          previous !== undefined &&
+          !current.attemptFinalityReceipts.some(
+            (receipt) => receipt.attemptId === previous.attemptId,
+          )
+        ) {
+          throw new WorkflowTransitionError(
+            "cannot cancel without an exact Attempt Finality Receipt for the latest Attempt",
+          );
+        }
         if (Date.parse(command.endedAt) < Date.parse(current.run.startedAt)) {
           throw new WorkflowTransitionError("cancellation time cannot precede Run start");
         }
@@ -1278,6 +1409,15 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
       case "RECORD_OBSERVATION":
         this.#requireAttempt(current, command.observation.attemptId);
         if (
+          current.attemptFinalityReceipts.some(
+            (receipt) => receipt.attemptId === command.observation.attemptId,
+          )
+        ) {
+          throw new WorkflowTransitionError(
+            "cannot append an Observation after the Attempt Finality Receipt",
+          );
+        }
+        if (
           current.observations.some(
             (observation) => observation.observationId === command.observation.observationId,
           )
@@ -1298,6 +1438,52 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
           type: "OBSERVATION_RECORDED",
           observation: command.observation,
         });
+      case "RECORD_ATTEMPT_FINALITY": {
+        const receipt = command.receipt;
+        const attempt = this.#requireAttempt(current, receipt.attemptId);
+        const checkpoint = current.checkpoints.find(
+          (candidate) => candidate.checkpointId === receipt.checkpointId,
+        );
+        const latestCheckpoint = [...current.checkpoints]
+          .reverse()
+          .find((candidate) => candidate.attemptId === receipt.attemptId);
+        if (
+          current.attemptFinalityReceipts.some(
+            (candidate) =>
+              candidate.attemptFinalityReceiptId === receipt.attemptFinalityReceiptId ||
+              candidate.attemptId === receipt.attemptId,
+          )
+        ) {
+          throw new WorkflowTransitionError(
+            "Attempt already has an immutable Attempt Finality Receipt",
+          );
+        }
+        if (
+          checkpoint === undefined ||
+          latestCheckpoint?.checkpointId !== checkpoint.checkpointId ||
+          checkpoint.attemptId !== receipt.attemptId ||
+          receipt.workspaceId !== current.planRevision.workspaceId ||
+          receipt.workspaceFingerprint !== current.planRevision.workspaceFingerprint ||
+          receipt.sourceFingerprint !== current.planRevision.sourceFingerprint ||
+          !sameIdentitySet(
+            receipt.processFinalities.map(({ processReference }) => processReference),
+            checkpoint.processReferences,
+          ) ||
+          !sameIdentitySet(receipt.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) ||
+          Date.parse(receipt.observedAt) < Date.parse(attempt.startedAt) ||
+          Date.parse(receipt.observedAt) < Date.parse(checkpoint.createdAt)
+        ) {
+          throw new WorkflowTransitionError(
+            "Attempt Finality Receipt must bind the latest Checkpoint and its exact process and Writer Lease identities",
+          );
+        }
+        return workflowEventSchema.parse({
+          schemaVersion: "1.0.0",
+          cursor,
+          type: "ATTEMPT_FINALITY_RECORDED",
+          receipt,
+        });
+      }
       case "RECORD_VERIFICATION":
         this.#validateVerification(current, command.receipt);
         return workflowEventSchema.parse({
@@ -1403,6 +1589,16 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
         const previous = this.#requireAttempt(current, command.previousAttemptId);
         if (current.attempts.at(-1)?.attemptId !== previous.attemptId) {
           throw new WorkflowTransitionError("retry must follow the latest Attempt");
+        }
+        if (
+          isRecovery &&
+          !current.attemptFinalityReceipts.some(
+            (receipt) => receipt.attemptId === previous.attemptId,
+          )
+        ) {
+          throw new WorkflowTransitionError(
+            "recovery requires an exact Attempt Finality Receipt for the preceding Attempt",
+          );
         }
         if (
           isRecovery &&
@@ -1626,6 +1822,15 @@ export class InMemoryWorkflowKernel implements WorkflowKernel {
         }
         if (command.checkpoint.attemptId !== undefined) {
           this.#requireAttempt(current, command.checkpoint.attemptId);
+          if (
+            current.attemptFinalityReceipts.some(
+              (receipt) => receipt.attemptId === command.checkpoint.attemptId,
+            )
+          ) {
+            throw new WorkflowTransitionError(
+              "cannot append an Attempt Checkpoint after its Finality Receipt",
+            );
+          }
         }
         return workflowEventSchema.parse({
           schemaVersion: "1.0.0",

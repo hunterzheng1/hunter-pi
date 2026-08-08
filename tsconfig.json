@@ -11,6 +11,7 @@
       "@hunter-pi/domain": ["./packages/domain/src/index.ts"],
       "@hunter-pi/execution": ["./packages/execution/src/index.ts"],
       "@hunter-pi/evidence": ["./packages/evidence/src/index.ts"],
+      "@hunter-pi/evidence/atomic-write": ["./packages/evidence/src/atomic-write.ts"],
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
       "@hunter-pi/managed-change": ["./packages/managed-change/src/index.ts"],
       "@hunter-pi/pi-host": ["./packages/pi-host/src/index.ts"],

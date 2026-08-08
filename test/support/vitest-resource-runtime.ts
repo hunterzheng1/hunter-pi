@@ -11,6 +11,7 @@ export const vitestResourcePolicy = {
   cleanupRetryDelayMs: 100,
   fileParallelism: false,
   maxWorkers: 1,
+  testTimeoutMs: 30_000,
   temporaryRootPrefix: "hunter-pi-vitest-",
   teardownTimeoutMs: 30_000,
 } as const;

@@ -6,6 +6,7 @@ import { join, posix, win32 } from "node:path";
 const credentialEnvironmentKeys = new Set(["node_auth_token", "npm_auth_token", "npm_token"]);
 const isolatedTemporaryEnvironmentKeys = new Set(["temp", "tmp", "tmpdir"]);
 export const subprocessOutputLimitBytes = 1024 * 1024;
+export const npmProcessElapsedLimitMs = 10 * 60_000;
 
 /**
  * @param {NodeJS.ProcessEnv} environment inherited process environment.
@@ -206,12 +207,17 @@ export const shouldRetryNpmFailure = (arguments_, failure, attemptNumber) => {
  * @param {string} cwd working directory.
  * @param {string} isolationRoot npm-only configuration and cache root.
  * @param {Readonly<Record<string, string>>} [knownRoots] additional stable diagnostic path scopes.
+ * @param {{ readonly timeoutMs?: number }} [options] bounded process policy overrides for tests.
  * @returns {string} captured standard output.
  */
-export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
+export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}, options = {}) => {
   const npmEntryPoint = process.env["npm_execpath"];
   if (npmEntryPoint === undefined || npmEntryPoint.length === 0) {
     throw new Error("npm_execpath is required to run this repository smoke test.");
+  }
+  const timeoutMs = options.timeoutMs ?? npmProcessElapsedLimitMs;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("npm CLI timeout must be a positive safe integer.");
   }
   const diagnosticRoots = {
     ...knownRoots,
@@ -232,10 +238,14 @@ export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
       env: environment,
       maxBuffer: subprocessOutputLimitBytes,
       shell: false,
+      timeout: timeoutMs,
       windowsHide: true,
     });
 
     if (result.error !== undefined) {
+      if ("code" in result.error && result.error.code === "ETIMEDOUT") {
+        throw new Error(`npm CLI timed out after ${String(timeoutMs)} ms.`);
+      }
       throw new Error("Unable to start the npm CLI.");
     }
 

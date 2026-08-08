@@ -20,6 +20,7 @@ describe("Vitest resource fixture runtime", () => {
         readonly globalSetup?: string | readonly string[];
         readonly maxWorkers?: number | string;
         readonly teardownTimeout?: number;
+        readonly testTimeout?: number;
       };
     };
 
@@ -27,7 +28,9 @@ describe("Vitest resource fixture runtime", () => {
     expect(configuration.test?.maxWorkers).toBe(vitestResourcePolicy.maxWorkers);
     expect(configuration.test?.globalSetup).toBe("./test/vitest.global-setup.ts");
     expect(configuration.test?.teardownTimeout).toBe(vitestResourcePolicy.teardownTimeoutMs);
+    expect(configuration.test?.testTimeout).toBe(vitestResourcePolicy.testTimeoutMs);
     expect(vitestResourcePolicy.maxWorkers).toBe(1);
+    expect(vitestResourcePolicy.testTimeoutMs).toBe(30_000);
   });
 
   it("contains temporary fixtures and restores inherited Temp variables after teardown", async () => {

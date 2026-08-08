@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { compareTask9PlatformEvidence } from "../tools/compare-task9-platform-evidence.js";
-import { task9ContractFailureDiagnostic } from "../tools/task9-platform-probe.js";
+import {
+  TASK9_TEMPORARY_CLEANUP_POLICY,
+  task9ContractFailureDiagnostic,
+  task9FinalityDiagnostic,
+} from "../tools/task9-platform-probe.js";
 import {
   TASK9_CONTRACT_DEFINITION_FINGERPRINT,
   TASK9_CONTRACT_TEST_COUNT,
@@ -115,6 +119,16 @@ describe("Task 9 platform Evidence", () => {
       ],
     });
     expect(JSON.stringify(diagnostic)).not.toMatch(/Users|password|do-not-log|repository/iu);
+  });
+
+  it("uses bounded Windows cleanup retries and stage-only finality diagnostics", () => {
+    expect(TASK9_TEMPORARY_CLEANUP_POLICY).toEqual({ maxRetries: 10, retryDelayMs: 250 });
+    const diagnostic = task9FinalityDiagnostic("CLEANUP");
+    expect(diagnostic).toEqual({
+      schemaVersion: "hpi-task9-finality-diagnostic.v1",
+      checkpoint: "CLEANUP",
+    });
+    expect(JSON.stringify(diagnostic)).not.toMatch(/Users|home|password|token/iu);
   });
 
   it("accepts the exact contract, finality, lease, replay, and privacy matrix", () => {

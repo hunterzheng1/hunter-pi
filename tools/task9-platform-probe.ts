@@ -66,6 +66,47 @@ import {
 const execFileAsync = promisify(execFile);
 const outputRoot = ".artifacts/task9-platform";
 
+export const TASK9_TEMPORARY_CLEANUP_POLICY = {
+  maxRetries: 10,
+  retryDelayMs: 250,
+} as const;
+
+type Task9FinalityCheckpoint =
+  | "SETUP"
+  | "LEASE_ACQUIRE"
+  | "PROCESS_FINALITY"
+  | "LEASE_RELEASE"
+  | "FIRST_RECONCILIATION"
+  | "DURABLE_REOPEN"
+  | "FACT_VALIDATION"
+  | "CLEANUP";
+
+export function task9FinalityDiagnostic(checkpoint: Task9FinalityCheckpoint) {
+  return {
+    schemaVersion: "hpi-task9-finality-diagnostic.v1" as const,
+    checkpoint,
+  };
+}
+
+async function removeTemporaryRoot(path: string): Promise<void> {
+  await rm(path, {
+    force: true,
+    maxRetries: TASK9_TEMPORARY_CLEANUP_POLICY.maxRetries,
+    recursive: true,
+    retryDelay: TASK9_TEMPORARY_CLEANUP_POLICY.retryDelayMs,
+  });
+}
+
+function rethrow(error: unknown): never {
+  throw error;
+}
+
+function emitFinalityDiagnostic(checkpoint: Task9FinalityCheckpoint): void {
+  process.stderr.write(
+    `Task9FinalityDiagnostic=${canonicalJson(task9FinalityDiagnostic(checkpoint))}\n`,
+  );
+}
+
 const vitestAssertionResultSchema = z.looseObject({
   fullName: z.string().min(1),
   status: z.string().min(1),
@@ -297,6 +338,7 @@ export async function runTask9ContractMatrix(
   platform: "WINDOWS" | "UBUNTU",
 ) {
   const reportRoot = await mkdtemp(join(tmpdir(), "hpi-task9-contract-"));
+  let matrixFailed = false;
   try {
     const vitestEntry = resolve(repositoryRoot, "node_modules/vitest/vitest.mjs");
     const vitestStats = await lstat(vitestEntry);
@@ -406,13 +448,25 @@ export async function runTask9ContractMatrix(
       forcedTerminationRecovery: "PASS",
       secondDeviceProjection: "PASS",
     });
+  } catch (error) {
+    matrixFailed = true;
+    throw error;
   } finally {
-    await rm(reportRoot, { force: true, recursive: true });
+    try {
+      await removeTemporaryRoot(reportRoot);
+    } catch (error) {
+      process.stderr.write(
+        'Task9ContractCleanupDiagnostic={"checkpoint":"CLEANUP","schemaVersion":"hpi-task9-contract-diagnostic.v1"}\n',
+      );
+      if (!matrixFailed) rethrow(error);
+    }
   }
 }
 
 export async function runTask9FinalityFixture() {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "hpi-task9-platform-"));
+  let finalityCheckpoint: Task9FinalityCheckpoint = "SETUP";
+  let finalityFailed = false;
   try {
     const cwd = join(fixtureRoot, "working-directory");
     const leaseRoot = join(fixtureRoot, "lease-state");
@@ -436,6 +490,7 @@ export async function runTask9FinalityFixture() {
     const workspaceId = workspaceIdSchema.parse("workspace_task9-platform");
     const leaseId = writerLeaseIdSchema.parse("lease_task9-platform");
     const ownerFingerprint = fixtureFingerprint({ owner: "task9-platform-probe" });
+    finalityCheckpoint = "LEASE_ACQUIRE";
     const acquire = await leaseManager.acquire(
       leaseAcquireRequestSchema.parse({
         schemaVersion: "hpi-lease-acquire.v1",
@@ -461,6 +516,7 @@ export async function runTask9FinalityFixture() {
     });
     const sessionId = managedProcessSessionIdSchema.parse("process_task9-platform");
     const systemRoot = process.platform === "win32" ? process.env["SystemRoot"] : undefined;
+    finalityCheckpoint = "PROCESS_FINALITY";
     const started = await host.start(
       managedProcessStartRequestSchema.parse({
         schemaVersion: "hpi-process-start.v1",
@@ -484,6 +540,7 @@ export async function runTask9FinalityFixture() {
       throw new Error("Task 9 fixture process did not reach terminal finality");
     }
 
+    finalityCheckpoint = "LEASE_RELEASE";
     const release = await leaseManager.release(
       leaseReleaseRequestSchema.parse({
         schemaVersion: "hpi-lease-release.v1",
@@ -526,6 +583,7 @@ export async function runTask9FinalityFixture() {
     const evidenceCapture = new FileAttemptFinalityEvidenceCapture({
       stateRoot: finalityEvidenceRoot,
     });
+    finalityCheckpoint = "FIRST_RECONCILIATION";
     const first = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: processFinalStore,
       writerLeaseReleaseReceipts: leaseReleaseStore,
@@ -538,6 +596,7 @@ export async function runTask9FinalityFixture() {
     const reopenedLeaseReleaseStore = new FileWriterLeaseReleaseReceiptStore({
       stateRoot: leaseReleaseRoot,
     });
+    finalityCheckpoint = "DURABLE_REOPEN";
     const reopened = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: reopenedProcessStore,
       writerLeaseReleaseReceipts: reopenedLeaseReleaseStore,
@@ -555,6 +614,7 @@ export async function runTask9FinalityFixture() {
       throw new Error("Task 9 durable finality replay changed immutable facts");
     }
 
+    finalityCheckpoint = "FACT_VALIDATION";
     return task9FinalityFactsSchema.parse({
       process: {
         terminalFinality: final.receipt.terminalFinality,
@@ -582,8 +642,17 @@ export async function runTask9FinalityFixture() {
       },
       privacy: { scan: "PASS", pathFree: true, credentialFree: true },
     });
+  } catch (error) {
+    finalityFailed = true;
+    emitFinalityDiagnostic(finalityCheckpoint);
+    throw error;
   } finally {
-    await rm(fixtureRoot, { force: true, recursive: true });
+    try {
+      await removeTemporaryRoot(fixtureRoot);
+    } catch (error) {
+      emitFinalityDiagnostic("CLEANUP");
+      if (!finalityFailed) rethrow(error);
+    }
   }
 }
 

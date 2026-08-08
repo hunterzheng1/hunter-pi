@@ -85,7 +85,10 @@ npm run probe:task10 -- --output .artifacts/task10-platform/Windows.json
 
 ## Evidence status
 
-The exact three-file Task 10 contract matrix contains 18 tests. The platform probe additionally
+The exact three-file Task 10 contract matrix contains 18 tests. A clean Windows local probe on
+implementation commit `b46e67acd81812db6d8cb1dad52c9639f8a022df` passed all nine checks with source
+identity equal to the commit and privacy `PASS`; hosted Windows/Ubuntu receipts remain `PENDING`.
+The platform probe additionally
 checks two external packages, five frozen malicious fixtures, no pre-activation evaluation,
 resource activation/tamper rejection, append-only lifecycle replay, privacy, and explicit
 non-claims. It records real public-manager LOCAL/PI observations separately from NPM/Git adapter

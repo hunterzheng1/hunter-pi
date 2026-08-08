@@ -84,7 +84,11 @@ Package-tree hashing excludes `.git` and `node_modules`, so this audit does not 
 dependency-closure qualification from the resource-only result.
 
 The 18-test Task 10 contract matrix, platform probe, and exact Windows/Ubuntu comparator are checked
-in, but their clean-commit hosted receipts remain `PENDING` until CI runs. Relevant implementation:
+in. A clean Windows local probe on commit `b46e67acd81812db6d8cb1dad52c9639f8a022df` passed with
+source identity equal to that commit, 18/18 contract tests, all nine checks, and privacy `PASS`;
+the platform receipt correctly keeps public npm `NOT_RUN` because the separate installed-artifact
+observation is not promoted to hosted Evidence. Clean-commit hosted Windows/Ubuntu receipts remain
+`PENDING` until CI runs. Relevant implementation:
 [`pi-package-resolver.ts`](../../packages/pi-host/src/pi-package-resolver.ts),
 [`plugin-activation.ts`](../../packages/pi-host/src/plugin-activation.ts),
 [`plugin-qualification.ts`](../../packages/pi-host/src/plugin-qualification.ts),

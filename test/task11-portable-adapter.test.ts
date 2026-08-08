@@ -272,19 +272,26 @@ describe("Task 11 Windows portable release adapter", () => {
   });
 
   it("round-trips a strict portable bundle and rejects archive path traversal", () => {
+    const longPath = `node_modules/${"nested/".repeat(20)}asset.txt`;
     const bytes = createPortableBundle({
       releaseId: "release_task11-portable-bundle",
       productVersion: "0.2.0",
       engineReleaseId: "engine-release_pi-0.83.0",
       engineReleaseFingerprint: sha256Fingerprint("bundle-engine"),
       sourceCommit,
-      files: [{ path: "hpi.cmd", bytes: Buffer.from("@echo off\r\n", "utf8") }],
+      files: [
+        { path: "hpi.cmd", bytes: Buffer.from("@echo off\r\n", "utf8") },
+        { path: longPath, bytes: Buffer.from("long-path\n", "utf8") },
+      ],
     });
     const parsed = decodePortableBundle(bytes);
     expect(parsed.manifest.releaseId).toBe("release_task11-portable-bundle");
-    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files).toHaveLength(2);
     expect(parsed.files[0]?.path).toBe("hpi.cmd");
     expect(Buffer.from(parsed.files[0]?.bytes ?? []).toString("utf8")).toBe("@echo off\r\n");
+    expect(Buffer.from(parsed.files.find((file) => file.path === longPath)?.bytes ?? [])).toEqual(
+      Buffer.from("long-path\n", "utf8"),
+    );
     expect(() =>
       createPortableBundle({
         releaseId: "release_task11-portable-invalid-path",

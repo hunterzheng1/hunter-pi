@@ -81,9 +81,23 @@ function writeField(target: Buffer, offset: number, width: number, value: string
   encoded.copy(target, offset);
 }
 
+function splitTarPath(path: string): { readonly name: string; readonly prefix: string } {
+  if (Buffer.byteLength(path, "utf8") <= 100) return { name: path, prefix: "" };
+  const segments = path.split("/");
+  for (let index = segments.length - 1; index > 0; index -= 1) {
+    const prefix = segments.slice(0, index).join("/");
+    const name = segments.slice(index).join("/");
+    if (Buffer.byteLength(prefix, "utf8") <= 155 && Buffer.byteLength(name, "utf8") <= 100) {
+      return { name, prefix };
+    }
+  }
+  throw new Error("portable bundle path is too long for the ustar format");
+}
+
 function tarHeader(path: string, byteLength: number): Buffer {
   const header = Buffer.alloc(TAR_BLOCK_SIZE);
-  writeField(header, 0, 100, path);
+  const tarPath = splitTarPath(path);
+  writeField(header, 0, 100, tarPath.name);
   octal(0o644, 8).copy(header, 100);
   octal(0, 8).copy(header, 108);
   octal(0, 8).copy(header, 116);
@@ -93,6 +107,7 @@ function tarHeader(path: string, byteLength: number): Buffer {
   header[156] = 0x30;
   writeField(header, 257, 6, "ustar\0");
   writeField(header, 263, 2, "00");
+  writeField(header, 345, 155, tarPath.prefix);
   const checksum = header.reduce((sum, byte) => sum + byte, 0);
   Buffer.from(checksum.toString(8).padStart(6, "0") + "\0 ", "ascii").copy(header, 148);
   return header;
@@ -162,7 +177,9 @@ function parseTar(value: Buffer): readonly PortableBundleFile[] {
     if (expectedChecksum !== actualChecksum) throw new Error("portable bundle tar checksum failed");
     const type = header[156];
     if (type !== 0 && type !== 0x30) throw new Error("portable bundle contains a non-file entry");
-    const path = assertPortablePath(readField(header, 0, 100));
+    const name = readField(header, 0, 100);
+    const prefix = readField(header, 345, 155);
+    const path = assertPortablePath(prefix.length === 0 ? name : `${prefix}/${name}`);
     if (paths.has(path)) throw new Error("portable bundle contains a duplicate path");
     paths.add(path);
     const byteLength = readOctal(header, 124, 12);

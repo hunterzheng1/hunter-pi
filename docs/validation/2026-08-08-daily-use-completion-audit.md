@@ -48,9 +48,9 @@ Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 [`recovery.ts`](../../packages/workflow-kernel/src/recovery.ts), and
 [`in-memory-workflow-kernel.ts`](../../packages/workflow-kernel/src/in-memory-workflow-kernel.ts).
 
-## Task 10 — standard Pi Packages
+## Task 10 — standard Pi Packages (snapshot before merged-head evidence)
 
-Status: `IMPLEMENTATION COMPLETE / HOSTED EVIDENCE PENDING` within the exact resource-only package
+Status at snapshot: `IMPLEMENTATION COMPLETE / HOSTED EVIDENCE PENDING` within the exact resource-only package
 boundary; arbitrary executable Plugin compatibility and OS containment remain `NOT_PROVEN`.
 
 The replacement implementation now proves within its current local/contract boundary:
@@ -95,9 +95,9 @@ observation is not promoted to hosted Evidence. Clean-commit hosted Windows/Ubun
 [`contracts.ts`](../../packages/plugin-manager/src/contracts.ts), and
 [`manager.ts`](../../packages/plugin-manager/src/manager.ts).
 
-## Task 11 — portable release and updates
+## Task 11 — portable release and updates (snapshot before hosted closure)
 
-Status: `PARTIAL`; unsigned developer preview only.
+Status at snapshot: `PARTIAL`; unsigned developer preview only.
 
 The updater kernel validates candidate metadata, artifact bytes, health checks, journals, and
 fixture rollback. The portable builder can assemble a Windows x64 directory. Daily-use release
@@ -137,7 +137,7 @@ ten task observations, three raw-Pi comparators, performance/privacy/storage sam
 Windows/Ubuntu CI, and one dated immutable aggregate Archive. None is inferred from local
 credentials, the Hunter Pi repository, or disposable fixtures.
 
-## Required order before daily-use GO
+## Required order before daily-use GO (snapshot)
 
 1. Close Task 9 process/lease finality, crash recovery, immutable receipt, and platform Evidence
    gates.
@@ -148,3 +148,20 @@ credentials, the Hunter Pi repository, or disposable fixtures.
 4. Bind Task 12 evaluation to immutable non-fixture Archives and exact Provider authorization.
 5. Run the separately authorized real Windows pilot. Only its complete Archive can support
    `GO`.
+
+## Addendum (2026-08-09)
+
+The earlier sections are the 2026-08-08 boundary snapshot and remain preserved as historical
+reasoning. Task 10's hosted resource-only Evidence is recorded by exact main run
+[`31265986035`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31265986035). Since then,
+Task 11's implementation and hosted Evidence gates completed without
+expanding the real-use scope: PR #53 run [`31270421168`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31270421168)
+and exact merged-head main run [`31272146162`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31272146162)
+passed Windows/Ubuntu quality, the exact Windows x64 portable artifact, clean installation,
+containment, and all Pi/Task 7/Task 9/Task 10 Evidence comparators.
+
+The current Task 11 disposition is therefore `COMPLETE WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS`.
+The artifact remains unsigned and `qualification=NOT_PROVEN`; publication, signing, Stable
+promotion, existing-user state migration, real-repository safety, broad Provider reliability,
+and the Task 12 real-use Archive remain unproven. The overall daily-use disposition remains
+`NOT_PROVEN`.

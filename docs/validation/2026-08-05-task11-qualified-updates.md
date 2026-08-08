@@ -10,12 +10,12 @@ The portable builder requires Windows x64, Node 24, a clean source tree, and one
 
 The GitHub Actions workflow reuses the quality job's locked install and build, runs the compiled portable packer only on Windows, and uploads the exact portable directory for 14 days. The CI policy test now covers this single-build behavior and the complete local CI slice passes.
 
-## Exact evidence still required
+## Hosted evidence result
 
-- A clean committed source identity and the corresponding Windows x64 pack output must be captured after the branch is committed.
-- The exact source commit must pass the required Windows and Ubuntu hosted quality/Evidence jobs, with the portable artifact's source and digest retained.
+- The committed source identity and corresponding Windows x64 pack output were captured by the exact quality job.
+- PR run [`31270421168`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31270421168) and exact merged-head main run [`31272146162`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31272146162) passed the required Windows and Ubuntu quality/Evidence jobs, including the portable artifact upload.
 - Any qualified or Stable claim still needs a separately authorized signing/publisher decision and the release gates in the update strategy.
 
 ## Not proven
 
-No npm publication, Windows installer/signing, migration of an existing user's state, Stable promotion, third-party plugin compatibility, real-user repository safety, or broad Provider reliability/recovery has occurred. The portable adapter and its fixture tests do not substitute for the Task 12 real-use Archive. Remote CI that has not yet run for the exact Task 11 source remains `PENDING`, never inferred as `PASS`.
+No npm publication, Windows installer/signing, migration of an existing user's state, Stable promotion, third-party plugin compatibility, real-user repository safety, or broad Provider reliability/recovery has occurred. The portable adapter and its fixture tests do not substitute for the Task 12 real-use Archive. The recorded hosted CI is PASS only for the exact checked-in source and declared provider-neutral bounds.

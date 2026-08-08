@@ -247,6 +247,33 @@ function intentDirectory(stateRoot: string): string {
 const atomicWritePendingNamePattern =
   /^\.pending-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+interface PhysicalFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly nlink: bigint;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+function isExactRegularFile(
+  actual: PhysicalFileIdentity,
+  expected: PhysicalFileIdentity,
+  expectedLinkCount: bigint,
+): boolean {
+  return (
+    actual.isFile() &&
+    !actual.isSymbolicLink() &&
+    actual.ino !== 0n &&
+    actual.dev === expected.dev &&
+    actual.ino === expected.ino &&
+    actual.nlink === expectedLinkCount
+  );
+}
+
+function corruptRemnant(message: string): DurableStoreError {
+  return new DurableStoreError("STORE_CORRUPT", message);
+}
+
 async function reconcileAtomicWriteRemnants<Output>(
   directory: string,
   schema: z.ZodType<Output>,
@@ -276,27 +303,49 @@ async function reconcileAtomicWriteRemnants<Output>(
       pendingStats.ino === 0n ||
       (pendingStats.nlink !== 1n && pendingStats.nlink !== 2n)
     ) {
-      throw new DurableStoreError(
-        "STORE_CORRUPT",
+      throw corruptRemnant(
         "A device import atomic-write remnant is not an exact private staging file.",
       );
     }
     if (pendingStats.nlink === 2n) {
       const value = schema.parse(JSON.parse(await readFile(pendingPath, "utf8")) as unknown);
+      const pendingAfterRead = await lstat(pendingPath, { bigint: true });
+      if (!isExactRegularFile(pendingAfterRead, pendingStats, 2n)) {
+        throw corruptRemnant(
+          "A published device import remnant changed identity while it was being read.",
+        );
+      }
       const finalPath = join(directory, finalFilename(value));
       const finalStats = await lstat(finalPath, { bigint: true });
-      if (
-        !finalStats.isFile() ||
-        finalStats.isSymbolicLink() ||
-        finalStats.nlink !== 2n ||
-        finalStats.dev !== pendingStats.dev ||
-        finalStats.ino !== pendingStats.ino
-      ) {
-        throw new DurableStoreError(
-          "STORE_CORRUPT",
+      if (!isExactRegularFile(finalStats, pendingStats, 2n)) {
+        throw corruptRemnant(
           "A published device import remnant is not bound to its exact final receipt.",
         );
       }
+      const [pendingBeforeUnlink, finalBeforeUnlink] = await Promise.all([
+        lstat(pendingPath, { bigint: true }),
+        lstat(finalPath, { bigint: true }),
+      ]);
+      if (
+        !isExactRegularFile(pendingBeforeUnlink, pendingStats, 2n) ||
+        !isExactRegularFile(finalBeforeUnlink, pendingStats, 2n)
+      ) {
+        throw corruptRemnant(
+          "A published device import pathname changed after its identity was validated.",
+        );
+      }
+      await unlink(pendingPath);
+      const finalAfterUnlink = await lstat(finalPath, { bigint: true });
+      if (!isExactRegularFile(finalAfterUnlink, pendingStats, 1n)) {
+        throw corruptRemnant(
+          "A published device import receipt changed identity during remnant cleanup.",
+        );
+      }
+      continue;
+    }
+    const pendingBeforeUnlink = await lstat(pendingPath, { bigint: true });
+    if (!isExactRegularFile(pendingBeforeUnlink, pendingStats, 1n)) {
+      throw corruptRemnant("An unpublished device import remnant changed identity before cleanup.");
     }
     await unlink(pendingPath);
   }

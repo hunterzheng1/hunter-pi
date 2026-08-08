@@ -126,6 +126,45 @@ describe("portable Evidence capture and redaction", () => {
     );
   });
 
+  it("fails closed for nested, embedded, and deeply structured JSON credentials", () => {
+    const doubleEncodedSecret = "fixture-double-encoded-json-secret";
+    const prefixedSecret = "fixture-prefixed-json-secret";
+    const multilineSecret = "fixture-multiline-json-secret";
+    const overEncodedSecret = "fixture-over-encoded-json-secret";
+    const deeplyNestedSecret = "fixture-deep-json-secret";
+    const doubleEncoded = JSON.stringify(JSON.stringify({ password: doubleEncodedSecret }));
+    const prefixed = `prefix={"pass\\u0077ord":"${prefixedSecret}"} suffix`;
+    const multiline = `prefix {\n  "pass\\u0077ord": "${multilineSecret}"\n} suffix`;
+    let overEncoded = JSON.stringify({ password: overEncodedSecret });
+    for (let layer = 0; layer < 10; layer += 1) overEncoded = JSON.stringify(overEncoded);
+    const deeplyNested =
+      '{"nested":'.repeat(5_000) + `{"password":"${deeplyNestedSecret}"}` + "}".repeat(5_000);
+    const content = [doubleEncoded, prefixed, multiline, overEncoded, deeplyNested].join("\n");
+
+    expect(() =>
+      createPortableEvidenceEnvelope({
+        ...baseRequest,
+        content,
+      }),
+    ).not.toThrow();
+
+    const envelope = createPortableEvidenceEnvelope({
+      ...baseRequest,
+      content,
+    });
+    const serialized = JSON.stringify(envelope);
+    for (const forbidden of [
+      doubleEncodedSecret,
+      prefixedSecret,
+      multilineSecret,
+      overEncodedSecret,
+      deeplyNestedSecret,
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(envelope.redaction.categories).toContain("CREDENTIAL");
+  });
+
   it("removes unregistered device-local absolute paths from portable Evidence", () => {
     const windowsPath = "D:\\Tools\\Hunter Pi\\workspace\\result.log";
     const posixPath = "/opt/hunter-pi/workspace/result.log";

@@ -104,18 +104,42 @@ function replacePattern(
 
 const structuredCredentialKeyPattern =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|access[_-]?token|api[_-]?key|apikey|auth|key|client[_-]?secret|password|secret|token)$/iu;
+const redactedCredentialJson = JSON.stringify("[REDACTED:CREDENTIAL]");
+const maximumEncodedJsonLayers = 8;
 
-function redactJsonDocument(text: string): {
+interface JsonDocumentRedaction {
   readonly fieldsRemoved: number;
+  readonly parsed: boolean;
   readonly text: string;
-} {
+}
+
+function redactJsonDocument(text: string, encodedLayer = 0): JsonDocumentRedaction {
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
   } catch {
-    return { fieldsRemoved: 0, text };
+    return { fieldsRemoved: 0, parsed: false, text };
   }
-  if (typeof value !== "object" || value === null) return { fieldsRemoved: 0, text };
+  if (typeof value === "string" && encodedLayer >= maximumEncodedJsonLayers) {
+    return { fieldsRemoved: 1, parsed: true, text: redactedCredentialJson };
+  }
+  if (typeof value === "string") {
+    const nested = redactJsonDocument(value, encodedLayer + 1);
+    const embedded =
+      nested.fieldsRemoved === 0 && !nested.parsed
+        ? redactEmbeddedJsonDocuments(value, encodedLayer + 1)
+        : nested;
+    if (embedded.fieldsRemoved > 0) {
+      return {
+        fieldsRemoved: embedded.fieldsRemoved,
+        parsed: true,
+        text: JSON.stringify(embedded.text),
+      };
+    }
+  }
+  if (typeof value !== "object" || value === null) {
+    return { fieldsRemoved: 0, parsed: true, text };
+  }
 
   let fieldsRemoved = 0;
   let replacementSequence = 0;
@@ -138,9 +162,79 @@ function redactJsonDocument(text: string): {
       }
     }
   }
+  if (fieldsRemoved === 0) return { fieldsRemoved, parsed: true, text };
+  try {
+    return { fieldsRemoved, parsed: true, text: JSON.stringify(value) };
+  } catch {
+    return { fieldsRemoved, parsed: true, text: redactedCredentialJson };
+  }
+}
+
+function jsonContainerEnd(text: string, start: number): number | undefined {
+  const opening = text[start];
+  if (opening !== "{" && opening !== "[") return undefined;
+  const stack: string[] = [opening];
+  let escaped = false;
+  let inString = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      stack.push(character);
+    } else if (character === "}" || character === "]") {
+      const expectedOpening = character === "}" ? "{" : "[";
+      if (stack.pop() !== expectedOpening) return undefined;
+      if (stack.length === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function redactEmbeddedJsonDocuments(text: string, encodedLayer = 0): JsonDocumentRedaction {
+  let cursor = 0;
+  let fieldsRemoved = 0;
+  let output = "";
+  let scan = 0;
+  while (scan < text.length) {
+    const objectStart = text.indexOf("{", scan);
+    const arrayStart = text.indexOf("[", scan);
+    const start =
+      objectStart === -1
+        ? arrayStart
+        : arrayStart === -1
+          ? objectStart
+          : Math.min(objectStart, arrayStart);
+    if (start === -1) break;
+    const end = jsonContainerEnd(text, start);
+    if (end === undefined) {
+      scan = start + 1;
+      continue;
+    }
+    const redacted = redactJsonDocument(text.slice(start, end + 1), encodedLayer);
+    if (redacted.fieldsRemoved > 0) {
+      output += `${text.slice(cursor, start)}${redacted.text}`;
+      cursor = end + 1;
+      fieldsRemoved += redacted.fieldsRemoved;
+      scan = cursor;
+    } else {
+      scan = redacted.parsed ? end + 1 : start + 1;
+    }
+  }
   return {
     fieldsRemoved,
-    text: fieldsRemoved === 0 ? text : JSON.stringify(value),
+    parsed: false,
+    text: fieldsRemoved === 0 ? text : `${output}${text.slice(cursor)}`,
   };
 }
 
@@ -153,7 +247,9 @@ function redactStructuredCredentialJson(result: MutableRedactionResult): void {
     return;
   }
 
-  let fieldsRemoved = 0;
+  const embeddedDocuments = redactEmbeddedJsonDocuments(result.text);
+  if (embeddedDocuments.fieldsRemoved > 0) result.text = embeddedDocuments.text;
+  let fieldsRemoved = embeddedDocuments.fieldsRemoved;
   result.text = result.text
     .split("\n")
     .map((line) => {
@@ -162,7 +258,11 @@ function redactStructuredCredentialJson(result: MutableRedactionResult): void {
       const end = trailingLength === 0 ? line.length : line.length - trailingLength;
       const candidate = line.slice(leadingLength, end);
       if (candidate.length === 0) return line;
-      const redacted = redactJsonDocument(candidate);
+      const document = redactJsonDocument(candidate);
+      const redacted =
+        document.fieldsRemoved === 0 && !document.parsed
+          ? redactEmbeddedJsonDocuments(candidate)
+          : document;
       fieldsRemoved += redacted.fieldsRemoved;
       return `${line.slice(0, leadingLength)}${redacted.text}${line.slice(end)}`;
     })

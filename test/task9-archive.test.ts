@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { promises as fsPromises } from "node:fs";
 import { access, link, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -132,6 +134,31 @@ async function leaveInterruptedAtomicWrite(options: {
   }
   const result = await completion;
   expect(result.code).not.toBe(0);
+}
+
+async function withLstatPathSwap<T>(
+  targetPath: string,
+  swap: () => Promise<void>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const mutableFsPromises = fsPromises as unknown as { lstat: typeof fsPromises.lstat };
+  const originalLstat = mutableFsPromises.lstat;
+  let swapped = false;
+  mutableFsPromises.lstat = (async (...args: unknown[]) => {
+    const originalResult = (await Reflect.apply(originalLstat, fsPromises, args)) as unknown;
+    if (!swapped && String(args[0]) === targetPath) {
+      swapped = true;
+      await swap();
+    }
+    return originalResult;
+  }) as typeof fsPromises.lstat;
+  syncBuiltinESMExports();
+  try {
+    return await operation();
+  } finally {
+    mutableFsPromises.lstat = originalLstat;
+    syncBuiltinESMExports();
+  }
 }
 
 async function createTerminalProjection(
@@ -1728,6 +1755,88 @@ describe("Task 9 Run Archive", () => {
       access(join(missingFinalDirectory, `${binding.profileId}.json`)),
     ).rejects.toThrow();
     expect(createReceipt).not.toHaveBeenCalled();
+  });
+
+  it("rebinds device remnant path identities before accepting or deleting them", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-remnant-swap-",
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: "op_device-import-remnant-swap",
+      operationFingerprint: fixtureFingerprint,
+      profileId: "device-profile-remnant-swap",
+      projectPolicyFingerprint: fixtureFingerprint,
+      archiveId: "archive_task9-device-remnant-swap",
+      artifactFingerprint: fixtureFingerprint,
+      runId: "run_task9-device-remnant-swap",
+      planRevisionId: "plan_task9-device-remnant-swap",
+      sourceFingerprint: fixtureFingerprint,
+      archivedRunOutcome: "READY",
+    });
+    const intentFacts = { schemaVersion: "hpi-device-import-intent.v1" as const, binding };
+    const validIntent = {
+      ...intentFacts,
+      intentFingerprint: sha256Fingerprint(canonicalJson(intentFacts)),
+    };
+    const intentText = `${canonicalJson(validIntent)}\n`;
+
+    for (const swapTarget of ["FINAL", "PENDING"] as const) {
+      const stateRoot = join(root, swapTarget.toLowerCase());
+      const directory = join(stateRoot, ".operation-receipts", "device-import-intents");
+      const pendingPath = join(
+        directory,
+        swapTarget === "FINAL"
+          ? ".pending-00000000-0000-4000-8000-000000000010"
+          : ".pending-00000000-0000-4000-8000-000000000011",
+      );
+      const finalPath = join(directory, `${binding.profileId}.json`);
+      const foreignSource = join(stateRoot, "foreign-source");
+      await mkdir(directory, { recursive: true });
+      await writeFile(pendingPath, intentText, { flag: "wx" });
+      await link(pendingPath, finalPath);
+      if (swapTarget === "PENDING") {
+        await writeFile(foreignSource, "foreign-link-must-survive", { flag: "wx" });
+      }
+      const createReceipt = vi.fn(() => {
+        throw new Error("receipt creation must not follow a remnant pathname swap");
+      });
+      let swapRan = false;
+
+      await expect(
+        withLstatPathSwap(
+          finalPath,
+          async () => {
+            swapRan = true;
+            if (swapTarget === "FINAL") {
+              await rm(finalPath);
+              await writeFile(finalPath, intentText, { flag: "wx" });
+            } else {
+              await rm(pendingPath);
+              await link(foreignSource, pendingPath);
+            }
+          },
+          () =>
+            new FilePortableDeviceImportReceiptStore({ stateRoot }).recordOnce(
+              binding,
+              createReceipt,
+            ),
+        ),
+      ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+      expect(swapRan).toBe(true);
+      expect(createReceipt).not.toHaveBeenCalled();
+      if (swapTarget === "PENDING") {
+        const [pendingStats, foreignStats] = await Promise.all([
+          lstat(pendingPath, { bigint: true }),
+          lstat(foreignSource, { bigint: true }),
+        ]);
+        expect({ dev: pendingStats.dev, ino: pendingStats.ino }).toEqual({
+          dev: foreignStats.dev,
+          ino: foreignStats.ino,
+        });
+      }
+    }
   });
 
   it("rejects legacy or mismatched policy clone results", async () => {

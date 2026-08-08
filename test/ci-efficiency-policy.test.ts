@@ -53,12 +53,31 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(workflow).toContain("run: npm run pack:preview:compiled");
     expect(workflow).toContain("run: npm run probe:pi:compiled");
     expect(workflow).toContain("run: npm run probe:task7:compiled");
+    expect(workflow).toContain("npm run probe:task9:compiled");
     expect(workflow).toContain("npm run compare:task7-evidence:compiled");
+    expect(workflow).toContain("npm run compare:task9-evidence:compiled");
     expect(workflow).not.toContain("name: Managed process platform tests");
     expect(workflow).not.toMatch(
-      /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7)(?:\s|$)/u,
+      /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7|probe:task9)(?:\s|$)/u,
     );
-    expect(workflow).not.toMatch(/npm run compare:task7-evidence(?:\s|$)/u);
+    expect(workflow).not.toMatch(/npm run compare:task(?:7|9)-evidence(?:\s|$)/u);
+  });
+
+  it("reuses quality and Pi aggregation jobs for Task 9 platform Evidence", () => {
+    const qualitySection =
+      /\x20{2}quality:\r?\n([\s\S]*?)\r?\n\x20{2}pi-evidence-consistency:/u.exec(workflow)?.[1];
+    const aggregateSection =
+      /\x20{2}pi-evidence-consistency:\r?\n([\s\S]*?)\r?\n\x20{2}task7-platform:/u.exec(
+        workflow,
+      )?.[1];
+
+    expect(qualitySection).toContain("Run Task 9 platform finality probe");
+    expect(qualitySection).toContain("Upload Task 9 platform receipt");
+    expect(aggregateSection).toContain("Download Windows Task 9 receipt");
+    expect(aggregateSection).toContain("Download Ubuntu Task 9 receipt");
+    expect(aggregateSection).toContain("Compare exact Task 9 platform identities");
+    expect(aggregateSection).toContain("Upload Task 9 consistency receipt");
+    expect(workflow).not.toMatch(/^\x20{2}task9-platform:/mu);
   });
 
   it("preserves and retries only structured Task 7 test-execution failures once", () => {

@@ -59,5 +59,6 @@ export default defineConfig({
     passWithNoTests: false,
     restoreMocks: true,
     teardownTimeout: vitestResourcePolicy.teardownTimeoutMs,
+    testTimeout: vitestResourcePolicy.testTimeoutMs,
   },
 });

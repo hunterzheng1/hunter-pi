@@ -86,6 +86,57 @@ const vitestJsonReportSchema = z.looseObject({
   testResults: z.array(vitestTestResultSchema),
 });
 
+const vitestDiagnosticReportSchema = z.looseObject({
+  numTotalTests: z.number().int().nonnegative(),
+  numPassedTests: z.number().int().nonnegative(),
+  numFailedTests: z.number().int().nonnegative(),
+  testResults: z.array(
+    z.looseObject({
+      name: z.string(),
+      assertionResults: z.array(
+        z.looseObject({
+          status: z.string(),
+          duration: z.number().nonnegative().optional(),
+        }),
+      ),
+    }),
+  ),
+});
+
+export function task9ContractFailureDiagnostic(value: unknown) {
+  const report = vitestDiagnosticReportSchema.parse(value);
+  const failures = report.testResults.flatMap((testResult) => {
+    const normalizedName = testResult.name.replaceAll("\\", "/");
+    const testFile =
+      TASK9_CONTRACT_TEST_FILES.find(
+        (candidate) => normalizedName === candidate || normalizedName.endsWith(`/${candidate}`),
+      ) ?? "UNKNOWN";
+    return testResult.assertionResults.flatMap((assertion, assertionIndex) => {
+      if (assertion.status === "passed") return [];
+      const status = ["failed", "pending", "skipped", "todo"].includes(assertion.status)
+        ? assertion.status
+        : "unknown";
+      return [
+        {
+          assertionIndex,
+          durationMs: Math.min(3_600_000, Math.round(assertion.duration ?? 0)),
+          status,
+          testFile,
+        },
+      ];
+    });
+  });
+  return {
+    schemaVersion: "hpi-task9-contract-diagnostic.v1" as const,
+    totals: {
+      failed: report.numFailedTests,
+      passed: report.numPassedTests,
+      tests: report.numTotalTests,
+    },
+    failures,
+  };
+}
+
 interface SourceIdentity {
   readonly commit: string;
   readonly sourceFingerprint: Fingerprint;
@@ -253,23 +304,37 @@ export async function runTask9ContractMatrix(
       throw new Error("Task 9 contract runner is not a physical file");
     }
     const reportPath = join(reportRoot, "report.json");
-    await execFileAsync(
-      process.execPath,
-      [
-        vitestEntry,
-        "run",
-        ...TASK9_CONTRACT_TEST_FILES,
-        "--reporter=json",
-        "--outputFile",
-        reportPath,
-      ],
-      {
-        cwd: repositoryRoot,
-        encoding: "utf8",
-        maxBuffer: 16 * 1024 * 1024,
-        windowsHide: true,
-      },
-    );
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          vitestEntry,
+          "run",
+          ...TASK9_CONTRACT_TEST_FILES,
+          "--reporter=json",
+          "--outputFile",
+          reportPath,
+        ],
+        {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+          maxBuffer: 16 * 1024 * 1024,
+          windowsHide: true,
+        },
+      );
+    } catch (error) {
+      try {
+        const diagnostic = task9ContractFailureDiagnostic(
+          JSON.parse(await readFile(reportPath, "utf8")) as unknown,
+        );
+        process.stderr.write(`Task9ContractMatrixDiagnostic=${canonicalJson(diagnostic)}\n`);
+      } catch {
+        process.stderr.write(
+          'Task9ContractMatrixDiagnostic={"report":"UNAVAILABLE","schemaVersion":"hpi-task9-contract-diagnostic.v1"}\n',
+        );
+      }
+      throw error;
+    }
     const report = vitestJsonReportSchema.parse(
       JSON.parse(await readFile(reportPath, "utf8")) as unknown,
     );

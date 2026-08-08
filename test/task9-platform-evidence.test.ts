@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compareTask9PlatformEvidence } from "../tools/compare-task9-platform-evidence.js";
+import { task9ContractFailureDiagnostic } from "../tools/task9-platform-probe.js";
 import {
   TASK9_CONTRACT_DEFINITION_FINGERPRINT,
   TASK9_CONTRACT_TEST_COUNT,
@@ -86,6 +87,36 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
 }
 
 describe("Task 9 platform Evidence", () => {
+  it("reduces failed contract reports to bounded path-free CI diagnostics", () => {
+    const diagnostic = task9ContractFailureDiagnostic({
+      numTotalTests: 90,
+      numPassedTests: 89,
+      numFailedTests: 1,
+      testResults: [
+        {
+          name: "C:/Users/private/repository/test/atomic-write.test.ts",
+          assertionResults: [
+            { fullName: "private fixture password=do-not-log", status: "failed", duration: 5_001 },
+          ],
+        },
+      ],
+    });
+
+    expect(diagnostic).toEqual({
+      schemaVersion: "hpi-task9-contract-diagnostic.v1",
+      totals: { failed: 1, passed: 89, tests: 90 },
+      failures: [
+        {
+          assertionIndex: 0,
+          durationMs: 5_001,
+          status: "failed",
+          testFile: "test/atomic-write.test.ts",
+        },
+      ],
+    });
+    expect(JSON.stringify(diagnostic)).not.toMatch(/Users|password|do-not-log|repository/iu);
+  });
+
   it("accepts the exact contract, finality, lease, replay, and privacy matrix", () => {
     expect(receipt("WINDOWS").status).toBe("PASS");
     expect(TASK9_CONTRACT_TEST_FILES).toHaveLength(8);
@@ -101,7 +132,9 @@ describe("Task 9 platform Evidence", () => {
         "vitest.config.ts",
         "packages/evidence/package.json",
         "packages/execution/package.json",
+        "test/support",
         "test/support/atomic-write-interruption-child.ts",
+        "test/vitest.global-setup.ts",
       ]),
     );
   });

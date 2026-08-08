@@ -32,9 +32,11 @@ import {
 } from "@hunter-pi/evidence";
 import {
   createFinalReceiptPersistingManagedProcessHost,
+  createReleaseReceiptPersistingLeaseManager,
   ExecutionAttemptFinalityAdapter,
   FileAttemptFinalityEvidenceCapture,
   FileManagedProcessFinalReceiptStore,
+  FileWriterLeaseReleaseReceiptStore,
   MANAGED_PROCESS_SESSION_NAMESPACE,
 } from "@hunter-pi/managed-change";
 
@@ -192,19 +194,28 @@ function fixtureFingerprint(value: unknown): Fingerprint {
   return fingerprintSchema.parse(sha256Fingerprint(canonicalJson(value)));
 }
 
-async function runFinalityFixture() {
+export async function runTask9FinalityFixture() {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "hpi-task9-platform-"));
   try {
     const cwd = join(fixtureRoot, "working-directory");
     const leaseRoot = join(fixtureRoot, "lease-state");
     const processFinalRoot = join(fixtureRoot, "process-final");
+    const leaseReleaseRoot = join(fixtureRoot, "lease-release");
     const finalityEvidenceRoot = join(fixtureRoot, "finality-evidence");
     await Promise.all(
-      [cwd, leaseRoot, processFinalRoot, finalityEvidenceRoot].map((directory) => mkdir(directory)),
+      [cwd, leaseRoot, processFinalRoot, leaseReleaseRoot, finalityEvidenceRoot].map((directory) =>
+        mkdir(directory),
+      ),
     );
 
     const now = () => new Date().toISOString();
-    const leaseManager = await createFileLeaseManager({ leaseRoot, now });
+    const leaseReleaseStore = new FileWriterLeaseReleaseReceiptStore({
+      stateRoot: leaseReleaseRoot,
+    });
+    const leaseManager = createReleaseReceiptPersistingLeaseManager({
+      leaseManager: await createFileLeaseManager({ leaseRoot, now }),
+      releaseReceiptStore: leaseReleaseStore,
+    });
     const workspaceId = workspaceIdSchema.parse("workspace_task9-platform");
     const leaseId = writerLeaseIdSchema.parse("lease_task9-platform");
     const ownerFingerprint = fixtureFingerprint({ owner: "task9-platform-probe" });
@@ -300,24 +311,26 @@ async function runFinalityFixture() {
     });
     const first = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: processFinalStore,
-      leaseManager,
+      writerLeaseReleaseReceipts: leaseReleaseStore,
       captureEvidence: evidenceCapture,
     }).reconcileAttemptFinality(checkpoint);
 
     const reopenedProcessStore = new FileManagedProcessFinalReceiptStore({
       stateRoot: processFinalRoot,
     });
-    const reopenedLeaseManager = await createFileLeaseManager({ leaseRoot, now });
+    const reopenedLeaseReleaseStore = new FileWriterLeaseReleaseReceiptStore({
+      stateRoot: leaseReleaseRoot,
+    });
     const reopened = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: reopenedProcessStore,
-      leaseManager: reopenedLeaseManager,
+      writerLeaseReleaseReceipts: reopenedLeaseReleaseStore,
       captureEvidence: new FileAttemptFinalityEvidenceCapture({
         stateRoot: finalityEvidenceRoot,
       }),
     }).reconcileAttemptFinality(checkpoint);
-    const [reopenedProcess, leaseStatus] = await Promise.all([
+    const [reopenedProcess, leaseRelease] = await Promise.all([
       reopenedProcessStore.read(sessionId),
-      reopenedLeaseManager.inspect(leaseId).then(({ receipt }) => receipt),
+      reopenedLeaseReleaseStore.read(leaseId),
     ]);
     const processReceiptMatches = canonicalJson(reopenedProcess) === canonicalJson(final.receipt);
     const attemptFinalityMatches = canonicalJson(reopened) === canonicalJson(first);
@@ -334,9 +347,9 @@ async function runFinalityFixture() {
         receiptFingerprint: fixtureFingerprint(final.receipt),
       },
       writerLease: {
-        state: leaseStatus.state,
-        workspaceMatches: leaseStatus.workspaceId === workspaceId,
-        receiptFingerprint: fixtureFingerprint(leaseStatus),
+        state: leaseRelease.state,
+        workspaceMatches: leaseRelease.workspaceId === workspaceId,
+        receiptFingerprint: fixtureFingerprint(leaseRelease),
       },
       attemptFinality: {
         terminalFinality: first.terminalFinality,
@@ -402,7 +415,7 @@ export async function runTask9PlatformProbe(
     stage = "SOURCE_IDENTITY";
     source = await sourceIdentity(repositoryRoot);
     stage = "FINALITY_EXECUTION";
-    const facts = await runFinalityFixture();
+    const facts = await runTask9FinalityFixture();
     stage = "SOURCE_REVALIDATION";
     const sourceAfter = await sourceIdentity(repositoryRoot);
     if (canonicalJson(sourceAfter) !== canonicalJson(source)) {

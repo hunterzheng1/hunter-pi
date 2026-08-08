@@ -17,10 +17,10 @@ import {
   type Fingerprint,
 } from "@hunter-pi/domain";
 import {
-  leaseStatusReceiptSchema,
+  leaseMutationReceiptSchema,
   managedProcessFinalReceiptSchema,
   managedProcessSessionIdSchema,
-  type LeaseManager,
+  type LeaseMutationReceipt,
   type ManagedProcessFinalReceipt,
   type ManagedProcessSessionId,
 } from "@hunter-pi/execution";
@@ -54,7 +54,7 @@ const finalProcessEvidenceSchema = z.strictObject({
 
 const releasedLeaseEvidenceSchema = z.strictObject({
   leaseId: writerLeaseIdSchema,
-  receipt: leaseStatusReceiptSchema,
+  receipt: leaseMutationReceiptSchema,
   receiptFingerprint: fingerprintSchema,
 });
 
@@ -136,6 +136,8 @@ export const attemptFinalityEvidenceRequestSchema = attemptFinalityEvidencePaylo
       if (
         lease.leaseId !== lease.receipt.leaseId ||
         lease.receipt.workspaceId !== request.workspaceId ||
+        lease.receipt.action !== "RELEASE" ||
+        lease.receipt.outcome !== "RELEASED" ||
         lease.receipt.state !== "RELEASED"
       ) {
         context.addIssue({
@@ -173,6 +175,10 @@ export interface ManagedProcessFinalReceiptReader {
   read(sessionId: ManagedProcessSessionId): Promise<ManagedProcessFinalReceipt>;
 }
 
+export interface WriterLeaseReleaseReceiptReader {
+  read(leaseId: Checkpoint["heldWriterLeaseIds"][number]): Promise<LeaseMutationReceipt>;
+}
+
 export interface AttemptFinalityEvidenceCapture {
   capture(request: AttemptFinalityEvidenceRequest): Promise<{
     readonly evidenceId: EvidenceId;
@@ -182,7 +188,7 @@ export interface AttemptFinalityEvidenceCapture {
 
 export interface ExecutionAttemptFinalityAdapterOptions {
   readonly processFinalReceipts: ManagedProcessFinalReceiptReader;
-  readonly leaseManager: Pick<LeaseManager, "inspect">;
+  readonly writerLeaseReleaseReceipts: WriterLeaseReleaseReceiptReader;
   readonly captureEvidence: AttemptFinalityEvidenceCapture;
 }
 
@@ -213,12 +219,12 @@ function requireFresh(observedAt: string, checkpoint: Checkpoint, label: string)
 
 export class ExecutionAttemptFinalityAdapter {
   readonly #processFinalReceipts: ManagedProcessFinalReceiptReader;
-  readonly #leaseManager: Pick<LeaseManager, "inspect">;
+  readonly #writerLeaseReleaseReceipts: WriterLeaseReleaseReceiptReader;
   readonly #captureEvidence: AttemptFinalityEvidenceCapture;
 
   public constructor(options: ExecutionAttemptFinalityAdapterOptions) {
     this.#processFinalReceipts = options.processFinalReceipts;
-    this.#leaseManager = options.leaseManager;
+    this.#writerLeaseReleaseReceipts = options.writerLeaseReleaseReceipts;
     this.#captureEvidence = options.captureEvidence;
   }
 
@@ -262,12 +268,14 @@ export class ExecutionAttemptFinalityAdapter {
 
     const leases = await Promise.all(
       checkpoint.heldWriterLeaseIds.map(async (leaseId) => {
-        const receipt = leaseStatusReceiptSchema.parse(
-          (await this.#leaseManager.inspect(leaseId)).receipt,
+        const receipt = leaseMutationReceiptSchema.parse(
+          await this.#writerLeaseReleaseReceipts.read(leaseId),
         );
         if (
           receipt.leaseId !== leaseId ||
           receipt.workspaceId !== checkpoint.workspaceId ||
+          receipt.action !== "RELEASE" ||
+          receipt.outcome !== "RELEASED" ||
           receipt.state !== "RELEASED"
         ) {
           throw new AttemptFinalityReconciliationError(

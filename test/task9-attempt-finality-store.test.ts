@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { checkpointSchema, fingerprintSchema, type Fingerprint } from "@hunter-pi/domain";
 import {
-  leaseStatusReceiptSchema,
+  leaseMutationReceiptSchema,
   managedProcessFinalReceiptSchema,
   managedProcessSessionIdSchema,
   type ManagedProcessHost,
@@ -17,6 +17,7 @@ import {
   ExecutionAttemptFinalityAdapter,
   FileAttemptFinalityEvidenceCapture,
   FileManagedProcessFinalReceiptStore,
+  FileWriterLeaseReleaseReceiptStore,
   type AttemptFinalityEvidenceRequest,
 } from "@hunter-pi/managed-change";
 
@@ -68,8 +69,10 @@ function processFinal(outputDigest: Fingerprint = fixtureFingerprint) {
 }
 
 function releasedLease() {
-  return leaseStatusReceiptSchema.parse({
-    schemaVersion: "hpi-lease-status.v1",
+  return leaseMutationReceiptSchema.parse({
+    schemaVersion: "hpi-lease-mutation-receipt.v1",
+    action: "RELEASE",
+    outcome: "RELEASED",
     leaseId: "lease_finality-store",
     workspaceId: "workspace_finality-store",
     ownerFingerprint: fixtureFingerprint,
@@ -79,6 +82,7 @@ function releasedLease() {
     state: "RELEASED",
     expiresAt: "2026-08-08T00:05:00.000Z",
     bindingFingerprint: null,
+    reasonCodes: [],
     observedAt: finalTime,
   });
 }
@@ -119,7 +123,7 @@ async function captureRequest(): Promise<AttemptFinalityEvidenceRequest> {
   let captured: AttemptFinalityEvidenceRequest | undefined;
   const adapter = new ExecutionAttemptFinalityAdapter({
     processFinalReceipts: { read: () => Promise.resolve(processFinal()) },
-    leaseManager: { inspect: () => Promise.resolve({ receipt: releasedLease() }) },
+    writerLeaseReleaseReceipts: { read: () => Promise.resolve(releasedLease()) },
     captureEvidence: {
       capture: (request) => {
         captured = request;
@@ -163,22 +167,28 @@ describe("Task 9 durable Attempt-finality stores", () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hpi-t9-finality-store-");
     cleanupRoots.push(root);
     const processRoot = join(root, "process-final");
+    const leaseRoot = join(root, "lease-release");
     const evidenceRoot = join(root, "finality-evidence");
-    await Promise.all([mkdir(processRoot), mkdir(evidenceRoot)]);
+    await Promise.all([mkdir(processRoot), mkdir(leaseRoot), mkdir(evidenceRoot)]);
     const processStore = new FileManagedProcessFinalReceiptStore({ stateRoot: processRoot });
+    const leaseStore = new FileWriterLeaseReleaseReceiptStore({ stateRoot: leaseRoot });
     const evidenceStore = new FileAttemptFinalityEvidenceCapture({ stateRoot: evidenceRoot });
 
     await expect(processStore.publish(processFinal())).resolves.toEqual(processFinal());
     await expect(processStore.publish(processFinal())).resolves.toEqual(processFinal());
+    await expect(leaseStore.publish(releasedLease())).resolves.toEqual(releasedLease());
+    await expect(leaseStore.publish(releasedLease())).resolves.toEqual(releasedLease());
 
     const first = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: processStore,
-      leaseManager: { inspect: () => Promise.resolve({ receipt: releasedLease() }) },
+      writerLeaseReleaseReceipts: leaseStore,
       captureEvidence: evidenceStore,
     }).reconcileAttemptFinality(checkpoint());
     const reopened = await new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: new FileManagedProcessFinalReceiptStore({ stateRoot: processRoot }),
-      leaseManager: { inspect: () => Promise.resolve({ receipt: releasedLease() }) },
+      writerLeaseReleaseReceipts: new FileWriterLeaseReleaseReceiptStore({
+        stateRoot: leaseRoot,
+      }),
       captureEvidence: new FileAttemptFinalityEvidenceCapture({ stateRoot: evidenceRoot }),
     }).reconcileAttemptFinality(checkpoint());
 

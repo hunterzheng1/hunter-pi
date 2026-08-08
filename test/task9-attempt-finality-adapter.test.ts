@@ -9,10 +9,10 @@ import {
   type Checkpoint,
 } from "@hunter-pi/domain";
 import {
-  leaseStatusReceiptSchema,
+  leaseMutationReceiptSchema,
   managedProcessFinalReceiptSchema,
   managedProcessSessionIdSchema,
-  type LeaseManager,
+  type LeaseMutationReceipt,
   type ManagedProcessFinalReceipt,
   type ManagedProcessSessionId,
 } from "@hunter-pi/execution";
@@ -95,8 +95,10 @@ function processFinal(
 }
 
 function releasedLease(overrides: Record<string, unknown> = {}) {
-  return leaseStatusReceiptSchema.parse({
-    schemaVersion: "hpi-lease-status.v1",
+  return leaseMutationReceiptSchema.parse({
+    schemaVersion: "hpi-lease-mutation-receipt.v1",
+    action: "RELEASE",
+    outcome: "RELEASED",
     leaseId: "lease_finality-adapter",
     workspaceId: "workspace_finality-adapter",
     ownerFingerprint: fixtureFingerprint,
@@ -106,6 +108,7 @@ function releasedLease(overrides: Record<string, unknown> = {}) {
     state: "RELEASED",
     expiresAt: "2026-08-08T00:05:00.000Z",
     bindingFingerprint: null,
+    reasonCodes: [],
     observedAt: finalTime,
     ...overrides,
   });
@@ -117,7 +120,9 @@ function evidenceFingerprint(request: AttemptFinalityEvidenceRequest) {
 
 function createAdapter(options: {
   readonly readFinal?: (sessionId: ManagedProcessSessionId) => Promise<ManagedProcessFinalReceipt>;
-  readonly inspectLease?: LeaseManager["inspect"];
+  readonly readRelease?: (
+    leaseId: ReturnType<typeof checkpoint>["heldWriterLeaseIds"][number],
+  ) => Promise<LeaseMutationReceipt>;
 }) {
   const capture = vi.fn((request: AttemptFinalityEvidenceRequest) =>
     Promise.resolve({
@@ -129,8 +134,8 @@ function createAdapter(options: {
     processFinalReceipts: {
       read: vi.fn(options.readFinal ?? (() => Promise.resolve(processFinal()))),
     },
-    leaseManager: {
-      inspect: vi.fn(options.inspectLease ?? (() => Promise.resolve({ receipt: releasedLease() }))),
+    writerLeaseReleaseReceipts: {
+      read: vi.fn(options.readRelease ?? (() => Promise.resolve(releasedLease()))),
     },
     captureEvidence: { capture },
   });
@@ -216,12 +221,12 @@ describe("Task 9 execution Attempt-finality adapter", () => {
   });
 
   it.each([
-    ["active", { state: "ACTIVE" }],
+    ["a renewal", { action: "RENEW", outcome: "RENEWED", state: "ACTIVE" }],
     ["wrong workspace", { workspaceId: "workspace_different" }],
     ["stale observation", { observedAt: "2026-08-07T23:59:59.000Z" }],
   ])("rejects a Writer Lease that is %s", async (_label, overrides) => {
     const { adapter, capture } = createAdapter({
-      inspectLease: () => Promise.resolve({ receipt: releasedLease(overrides) }),
+      readRelease: () => Promise.resolve(releasedLease(overrides)),
     });
 
     await expect(adapter.reconcileAttemptFinality(checkpoint())).rejects.toThrow();
@@ -231,7 +236,7 @@ describe("Task 9 execution Attempt-finality adapter", () => {
   it("rejects Evidence capture that does not preserve the exact request identity", async () => {
     const adapter = new ExecutionAttemptFinalityAdapter({
       processFinalReceipts: { read: () => Promise.resolve(processFinal()) },
-      leaseManager: { inspect: () => Promise.resolve({ receipt: releasedLease() }) },
+      writerLeaseReleaseReceipts: { read: () => Promise.resolve(releasedLease()) },
       captureEvidence: {
         capture: () =>
           Promise.resolve({

@@ -3,10 +3,18 @@ import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
-import { fingerprintSchema, type Fingerprint } from "@hunter-pi/domain";
 import {
+  fingerprintSchema,
+  writerLeaseIdSchema,
+  type Fingerprint,
+  type WriterLeaseId,
+} from "@hunter-pi/domain";
+import {
+  leaseMutationReceiptSchema,
   managedProcessFinalReceiptSchema,
   managedProcessSessionIdSchema,
+  type LeaseManager,
+  type LeaseMutationReceipt,
   type ManagedProcessFinalReceipt,
   type ManagedProcessHost,
   type ManagedProcessSessionId,
@@ -25,6 +33,7 @@ import {
   type AttemptFinalityEvidenceCapture,
   type AttemptFinalityEvidenceRequest,
   type ManagedProcessFinalReceiptReader,
+  type WriterLeaseReleaseReceiptReader,
 } from "./attempt-finality-adapter.js";
 
 const processFinalRecordSchema = z.strictObject({
@@ -33,6 +42,13 @@ const processFinalRecordSchema = z.strictObject({
   fingerprint: fingerprintSchema,
 });
 type ProcessFinalRecord = z.infer<typeof processFinalRecordSchema>;
+
+const writerLeaseReleaseRecordSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-writer-lease-release-record.v1"),
+  receipt: leaseMutationReceiptSchema,
+  fingerprint: fingerprintSchema,
+});
+type WriterLeaseReleaseRecord = z.infer<typeof writerLeaseReleaseRecordSchema>;
 
 const attemptFinalityEvidenceRecordSchema = z.strictObject({
   schemaVersion: z.literal("hpi-attempt-finality-evidence-record.v1"),
@@ -112,12 +128,41 @@ function parseEvidenceRecord(
   }
 }
 
+function parseWriterLeaseReleaseRecord(
+  text: string,
+  leaseId: WriterLeaseId,
+): WriterLeaseReleaseRecord {
+  try {
+    const record = writerLeaseReleaseRecordSchema.parse(JSON.parse(text) as unknown);
+    if (
+      record.receipt.leaseId !== leaseId ||
+      record.receipt.action !== "RELEASE" ||
+      record.receipt.outcome !== "RELEASED" ||
+      record.receipt.state !== "RELEASED" ||
+      record.fingerprint !== fingerprintOf(record.receipt)
+    ) {
+      throw new Error("Writer Lease release record binding changed");
+    }
+    return record;
+  } catch (error) {
+    throw new DurableStoreError(
+      "STORE_CORRUPT",
+      "The immutable Writer Lease release Receipt is invalid.",
+      error,
+    );
+  }
+}
+
 export interface FileAttemptFinalityStoreOptions {
   readonly stateRoot: string;
 }
 
 export interface ManagedProcessFinalReceiptPublisher {
   publish(receipt: ManagedProcessFinalReceipt): Promise<ManagedProcessFinalReceipt>;
+}
+
+export interface WriterLeaseReleaseReceiptPublisher {
+  publish(receipt: LeaseMutationReceipt): Promise<LeaseMutationReceipt>;
 }
 
 export class FileManagedProcessFinalReceiptStore
@@ -196,6 +241,93 @@ export function createFinalReceiptPersistingManagedProcessHost(options: {
     },
   };
   return durableHost;
+}
+
+export class FileWriterLeaseReleaseReceiptStore
+  implements WriterLeaseReleaseReceiptReader, WriterLeaseReleaseReceiptPublisher
+{
+  readonly #stateRoot: string;
+
+  public constructor(options: FileAttemptFinalityStoreOptions) {
+    this.#stateRoot = resolve(options.stateRoot);
+  }
+
+  public async publish(input: LeaseMutationReceipt): Promise<LeaseMutationReceipt> {
+    const receipt = leaseMutationReceiptSchema.parse(input);
+    if (
+      receipt.action !== "RELEASE" ||
+      receipt.outcome !== "RELEASED" ||
+      receipt.state !== "RELEASED"
+    ) {
+      throw new DurableStoreError(
+        "INVALID_TARGET",
+        "Only an exact released Writer Lease Receipt may enter the finality store.",
+      );
+    }
+    const record = writerLeaseReleaseRecordSchema.parse({
+      schemaVersion: "hpi-writer-lease-release-record.v1",
+      receipt,
+      fingerprint: fingerprintOf(receipt),
+    });
+    await ensureStateRoot(this.#stateRoot);
+    const filename = `${receipt.leaseId}.json`;
+    const path = join(this.#stateRoot, filename);
+    const existingText = await readImmutableText(path);
+    if (existingText !== undefined) {
+      const existing = parseWriterLeaseReleaseRecord(existingText, receipt.leaseId);
+      if (canonicalJson(existing) === canonicalJson(record)) return existing.receipt;
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "The Writer Lease is already bound to another immutable release Receipt.",
+      );
+    }
+    try {
+      await writeImmutableAtomically({
+        directory: this.#stateRoot,
+        filename,
+        content: serialize(record),
+      });
+      return receipt;
+    } catch (error) {
+      if (!(error instanceof DurableStoreError) || error.code !== "IDENTITY_CONFLICT") throw error;
+      const racedText = await readImmutableText(path);
+      if (racedText === undefined) throw error;
+      const raced = parseWriterLeaseReleaseRecord(racedText, receipt.leaseId);
+      if (canonicalJson(raced) === canonicalJson(record)) return raced.receipt;
+      throw error;
+    }
+  }
+
+  public async read(leaseIdInput: WriterLeaseId): Promise<LeaseMutationReceipt> {
+    const leaseId = writerLeaseIdSchema.parse(leaseIdInput);
+    await ensureStateRoot(this.#stateRoot);
+    const text = await readImmutableText(join(this.#stateRoot, `${leaseId}.json`));
+    if (text === undefined) {
+      throw new DurableStoreError(
+        "NOT_FOUND",
+        "No immutable release Receipt exists for the Writer Lease.",
+      );
+    }
+    return parseWriterLeaseReleaseRecord(text, leaseId).receipt;
+  }
+}
+
+export function createReleaseReceiptPersistingLeaseManager(options: {
+  readonly leaseManager: LeaseManager;
+  readonly releaseReceiptStore: WriterLeaseReleaseReceiptPublisher;
+}): LeaseManager {
+  const durableManager: LeaseManager = {
+    acquire: (request) => options.leaseManager.acquire(request),
+    bind: (request) => options.leaseManager.bind(request),
+    inspect: (leaseId) => options.leaseManager.inspect(leaseId),
+    renew: (request) => options.leaseManager.renew(request),
+    release: async (request) => {
+      const result = await options.leaseManager.release(request);
+      const receipt = await options.releaseReceiptStore.publish(result.receipt);
+      return { receipt };
+    },
+  };
+  return durableManager;
 }
 
 export class FileAttemptFinalityEvidenceCapture implements AttemptFinalityEvidenceCapture {

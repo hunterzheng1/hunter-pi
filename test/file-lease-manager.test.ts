@@ -1,8 +1,11 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { link, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { build } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 
 import * as executionModule from "@hunter-pi/execution";
@@ -132,6 +135,57 @@ async function createLeaseFixture(): Promise<{ readonly parent: string; readonly
   return { parent, root };
 }
 
+async function leaveAbandonedDurableLock(lockPath: string, bundlePath: string): Promise<void> {
+  await build({
+    alias: {
+      "@hunter-pi/domain": fileURLToPath(
+        new URL("../packages/domain/src/index.ts", import.meta.url),
+      ),
+    },
+    bundle: true,
+    entryPoints: [
+      fileURLToPath(new URL("./support/durable-mutation-lock-child.ts", import.meta.url)),
+    ],
+    format: "esm",
+    logLevel: "silent",
+    outfile: bundlePath,
+    platform: "node",
+    target: "node24",
+  });
+
+  const child = spawn(process.execPath, [bundlePath], {
+    env: {
+      ...process.env,
+      HPI_TEST_LOCK_MODE: "EXIT_WHILE_HELD",
+      HPI_TEST_LOCK_PATH: lockPath,
+    },
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const result = await new Promise<{
+    readonly code: number | null;
+    readonly signal: string | null;
+  }>((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      resolvePromise({ code, signal });
+    });
+  });
+  expect(result, stderr).toEqual({ code: 73, signal: null });
+  expect(stdout).toContain('"event":"LOCKED"');
+}
+
 function requireCreateLeaseManager(): CreateLeaseManager {
   const value: unknown = Reflect.get(executionModule, "createFileLeaseManager");
   expect(value, "createFileLeaseManager must be exported").toBeTypeOf("function");
@@ -158,6 +212,30 @@ function acquireRequest(options: {
 }
 
 describe("file-backed exclusive lease manager", () => {
+  it("recovers an abandoned mutation lock before reopening lease state", async () => {
+    const fixture = await createLeaseFixture();
+    await leaveAbandonedDurableLock(
+      join(fixture.root, ".mutation-lock"),
+      join(fixture.parent, "abandoned-lock-child.mjs"),
+    );
+
+    const manager = await requireCreateLeaseManager()({
+      leaseRoot: fixture.root,
+      now: () => "2026-08-04T08:59:00.000Z",
+    });
+    await expect(
+      manager.acquire(
+        acquireRequest({
+          suffix: "lease-after-abandoned-lock",
+          leaseId: "lease_task7-after-abandoned-lock",
+          workspaceId: "workspace_task7-after-abandoned-lock",
+          owner: "abandoned-lock",
+          resources: [],
+        }),
+      ),
+    ).resolves.toMatchObject({ receipt: { outcome: "ACQUIRED" } });
+  });
+
   it("rejects workspace and resource conflicts atomically across manager instances", async () => {
     const fixture = await createLeaseFixture();
     const createManager = requireCreateLeaseManager();

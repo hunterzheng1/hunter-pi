@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -689,6 +689,32 @@ describe("Task 9 Run Archive", () => {
     }
   });
 
+  it("rejects private paths and credentials embedded outside Evidence text", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-archive-projection-privacy-",
+    );
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-projection-privacy",
+    );
+
+    for (const terminalReason of [
+      "execution stopped with cwd=/home/alice/private-project",
+      "execution stopped with token=super-secret-value",
+    ]) {
+      expect(() =>
+        assertPortableArchive({
+          ...archive,
+          projection: {
+            ...archive.projection,
+            run: { ...archive.projection.run, terminalReason },
+          },
+        }),
+      ).toThrow(/credential|private|path|portable Archive/u);
+    }
+  });
+
   it("reopens a clean-device import as an exact archive-bound READ_ONLY projection", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-project-");
     const { archive, fixture, manifest } = await createPortableArchiveFixture(
@@ -699,12 +725,15 @@ describe("Task 9 Run Archive", () => {
     const clonePolicy = vi.fn(() =>
       Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
     );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+    );
     const doctor = vi.fn(() => Promise.resolve("PASS" as const));
     const loginReadiness = vi.fn(() => Promise.resolve("BLOCKED" as const));
     const importer = new PortableDeviceImporter({
       archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: clonePolicy },
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     });
@@ -767,6 +796,7 @@ describe("Task 9 Run Archive", () => {
     expect(Object.isFrozen(importedProjection)).toBe(true);
     expect(Object.isFrozen(importedProjection.archiveProjection)).toBe(true);
     expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(reconcilePolicy).toHaveBeenCalledOnce();
     expect(doctor).toHaveBeenCalledOnce();
     expect(loginReadiness).toHaveBeenCalledOnce();
   });
@@ -868,7 +898,60 @@ describe("Task 9 Run Archive", () => {
     ).rejects.toThrow(/corrupt|fingerprint|projection|receipt/u);
   });
 
-  it("fails a clean-profile read closed for an incompatible import receipt schema version", async () => {
+  it("never records APPLIED before the Archive package exists and resumes the exact intent", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-import-order-",
+    );
+    const { archive, manifest } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-import-order",
+    );
+    const destinationRoot = join(root, "destination");
+    const storage = new LocalStorageController({
+      stateRoot: destinationRoot,
+      reserveBytes: 4_096,
+      capacityProbe: () => Promise.resolve(1024 * 1024),
+    });
+    let criticalWrite = 0;
+    const writeSpy = vi.spyOn(storage, "writeCritical").mockImplementation(async (write) => {
+      criticalWrite += 1;
+      if (criticalWrite === 2) throw new Error("simulated package publication interruption");
+      await write();
+    });
+    const request = {
+      schemaVersion: "hpi-archive-import.v1" as const,
+      operationId: "op_device-import-order" as const,
+      operationFingerprint: `sha256:${"7".repeat(64)}`,
+      archive,
+    };
+    const receiptPath = join(
+      destinationRoot,
+      ".operation-receipts",
+      "imports",
+      `${manifest.archiveId}.json`,
+    );
+    const packagePath = join(destinationRoot, "archives", manifest.archiveId, "package.json");
+
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(request),
+    ).rejects.toThrow(/simulated package publication interruption/u);
+    await expect(access(packagePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(receiptPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    writeSpy.mockRestore();
+    const recovered = await new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(
+      request,
+    );
+    expect(recovered).toMatchObject({ recordedOutcome: "APPLIED", outcome: "APPLIED" });
+    await expect(access(packagePath)).resolves.toBeUndefined();
+    await expect(access(receiptPath)).resolves.toBeUndefined();
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot, storage }).import(request),
+    ).resolves.toMatchObject({ recordedOutcome: "APPLIED", outcome: "NOOP" });
+  });
+
+  it("reconciles the immediately preceding v1 import receipt without manual state editing", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
       "hunter-pi-task9-device-receipt-version-",
@@ -888,12 +971,37 @@ describe("Task 9 Run Archive", () => {
     });
     await writeFile(
       join(destinationRoot, ".operation-receipts", "imports", `${manifest.archiveId}.json`),
-      `${JSON.stringify({ ...receipt, schemaVersion: "hpi-archive-import-receipt.v1" })}\n`,
+      `${JSON.stringify({
+        schemaVersion: "hpi-archive-import-receipt.v1",
+        operationId: receipt.operationId,
+        operationFingerprint: receipt.operationFingerprint,
+        archiveId: receipt.archiveId,
+        artifactFingerprint: receipt.artifactFingerprint,
+        outcome: receipt.recordedOutcome,
+        observedAt: receipt.observedAt,
+      })}\n`,
     );
 
     await expect(
       new FileRunArchiveStore({ stateRoot: destinationRoot }).read(manifest.archiveId),
-    ).rejects.toThrow(/Archive|receipt|schema|version|corrupt/u);
+    ).resolves.toMatchObject({
+      schemaVersion: "hpi-imported-archive-projection.v1",
+      archiveId: manifest.archiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+      accessMode: "READ_ONLY",
+    });
+    await expect(
+      new FileRunArchiveStore({ stateRoot: destinationRoot }).import({
+        schemaVersion: "hpi-archive-import.v1",
+        operationId: receipt.operationId,
+        operationFingerprint: receipt.operationFingerprint,
+        archive,
+      }),
+    ).resolves.toMatchObject({
+      schemaVersion: "hpi-archive-import-receipt.v2",
+      recordedOutcome: "APPLIED",
+      outcome: "NOOP",
+    });
   });
 
   it("fails a clean-profile read closed for an incompatible Archive package schema version", async () => {
@@ -1043,6 +1151,9 @@ describe("Task 9 Run Archive", () => {
     const clonePolicy = vi.fn(() =>
       Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
     );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+    );
     const doctor = vi.fn(() => Promise.resolve("PASS" as const));
     const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
     const importer = new PortableDeviceImporter({
@@ -1051,7 +1162,7 @@ describe("Task 9 Run Archive", () => {
         kernel: new InMemoryWorkflowKernel([fixture.events]),
       }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: clonePolicy },
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     });
@@ -1094,6 +1205,7 @@ describe("Task 9 Run Archive", () => {
       assertPortableArchive(forgedPortableMetadata);
     }).toThrow(/live Attempts|live workflow state|portable Archive/u);
     expect(clonePolicy).not.toHaveBeenCalled();
+    expect(reconcilePolicy).not.toHaveBeenCalled();
     expect(doctor).not.toHaveBeenCalled();
     expect(loginReadiness).not.toHaveBeenCalled();
   });
@@ -1117,12 +1229,15 @@ describe("Task 9 Run Archive", () => {
     const clonePolicy = vi.fn(() =>
       Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
     );
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+    );
     const doctor = vi.fn(() => Promise.resolve("PASS" as const));
     const loginReadiness = vi.fn(() => Promise.resolve("BLOCKED" as const));
     const importer = new PortableDeviceImporter({
       archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: clonePolicy },
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     });
@@ -1143,7 +1258,7 @@ describe("Task 9 Run Archive", () => {
     const replayed = await new PortableDeviceImporter({
       archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: clonePolicy },
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     }).import({ ...request, observedAt: "2026-08-08T02:03:04.000Z" });
@@ -1153,6 +1268,7 @@ describe("Task 9 Run Archive", () => {
     expect(replayInvocation).toBe("NOOP");
     expect(replayedFact).toEqual(firstFact);
     expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(reconcilePolicy).toHaveBeenCalledOnce();
     expect(doctor).toHaveBeenCalledOnce();
     expect(loginReadiness).toHaveBeenCalledOnce();
 
@@ -1195,6 +1311,38 @@ describe("Task 9 Run Archive", () => {
       /corrupt|fingerprint|receipt|invalid|unreadable/u,
     );
     expect(clonePolicy).toHaveBeenCalledOnce();
+  });
+
+  it("binds one Archive import operation identity to exactly one Archive", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-operation-identity-",
+    );
+    const first = await createPortableArchiveFixture(
+      join(root, "portable-first"),
+      "archive_task9-device-operation-first",
+    );
+    const second = await createPortableArchiveFixture(
+      join(root, "portable-second"),
+      "archive_task9-device-operation-second",
+      "archive-operation-second",
+    );
+    const store = new FileRunArchiveStore({ stateRoot: join(root, "destination") });
+    await store.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_device-import-single-binding",
+      operationFingerprint: `sha256:${"3".repeat(64)}`,
+      archive: first.archive,
+    });
+
+    await expect(
+      store.import({
+        schemaVersion: "hpi-archive-import.v1",
+        operationId: "op_device-import-single-binding",
+        operationFingerprint: `sha256:${"4".repeat(64)}`,
+        archive: second.archive,
+      }),
+    ).rejects.toThrow(/operation|identity|bound/u);
   });
 
   it("resumes an interrupted device import from exact durable policy state without manual editing", async () => {
@@ -1277,7 +1425,11 @@ describe("Task 9 Run Archive", () => {
     const legacyImporter = new PortableDeviceImporter({
       archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: () => Promise.resolve("PASS" as never) },
+      clonePolicy: {
+        clone: () => Promise.resolve("PASS" as never),
+        reconcile: () =>
+          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+      },
       doctor: { run: () => Promise.resolve("PASS") },
       loginReadiness: { check: () => Promise.resolve("PASS") },
     });
@@ -1308,6 +1460,8 @@ describe("Task 9 Run Archive", () => {
             status: "BLOCKED" as const,
             policyFingerprint: `sha256:${"0".repeat(64)}`,
           }),
+        reconcile: () =>
+          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
       },
       doctor: { run: mismatchedDoctor },
       loginReadiness: { check: mismatchedLogin },
@@ -1328,5 +1482,52 @@ describe("Task 9 Run Archive", () => {
     ).rejects.toThrow(/bind|policy fingerprint/u);
     expect(mismatchedDoctor).not.toHaveBeenCalled();
     expect(mismatchedLogin).not.toHaveBeenCalled();
+  });
+
+  it("preserves a known BLOCKED policy result ahead of skipped downstream checks", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task9-device-blocked-");
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-blocked",
+    );
+    const clonePolicy = vi.fn(() =>
+      Promise.resolve({ status: "BLOCKED" as const, policyFingerprint: fixtureFingerprint }),
+    );
+    const doctor = vi.fn(() => Promise.resolve("PASS" as const));
+    const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
+    const receipt = await new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: join(root, "destination") }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({
+        stateRoot: join(root, "destination"),
+      }),
+      clonePolicy: {
+        clone: clonePolicy,
+        reconcile: () =>
+          Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+      },
+      doctor: { run: doctor },
+      loginReadiness: { check: loginReadiness },
+    }).import({
+      schemaVersion: "hpi-device-import.v1",
+      operationId: "op_device-import-blocked",
+      operationFingerprint: `sha256:${"5".repeat(64)}`,
+      profileId: "device-profile-blocked",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1",
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    });
+
+    expect(receipt).toMatchObject({
+      outcome: "BLOCKED",
+      policyOutcome: "BLOCKED",
+      doctorStatus: "NOT_PROVEN",
+      loginReadiness: "NOT_PROVEN",
+    });
+    expect(clonePolicy).toHaveBeenCalledOnce();
+    expect(doctor).not.toHaveBeenCalled();
+    expect(loginReadiness).not.toHaveBeenCalled();
   });
 });

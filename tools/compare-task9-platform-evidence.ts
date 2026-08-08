@@ -20,7 +20,7 @@ import {
 } from "./task9-platform-evidence.js";
 
 export const task9PlatformConsistencySchema = z.strictObject({
-  schemaVersion: z.literal("hpi-task9-platform-consistency.v1"),
+  schemaVersion: z.literal("hpi-task9-platform-consistency.v2"),
   kind: z.literal("hunter-pi/task9-platform-consistency"),
   status: z.literal("PASS"),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
@@ -52,6 +52,14 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 function semanticFacts(receipt: Task9PlatformReceipt): unknown {
   return {
+    contractMatrix: {
+      status: receipt.facts.contractMatrix.status,
+      definitionFingerprint: receipt.facts.contractMatrix.definitionFingerprint,
+      testFileCount: receipt.facts.contractMatrix.testFileCount,
+      testCount: receipt.facts.contractMatrix.testCount,
+      forcedTerminationRecovery: receipt.facts.contractMatrix.forcedTerminationRecovery,
+      secondDeviceProjection: receipt.facts.contractMatrix.secondDeviceProjection,
+    },
     process: {
       terminalFinality: receipt.facts.process.terminalFinality,
       processTreeState: receipt.facts.process.processTreeState,
@@ -109,7 +117,7 @@ export function compareTask9PlatformEvidence(
   )[1];
   if (observedAt === undefined) throw new Error("Task 9 consistency has no observation time");
   const result = task9PlatformConsistencySchema.parse({
-    schemaVersion: "hpi-task9-platform-consistency.v1",
+    schemaVersion: "hpi-task9-platform-consistency.v2",
     kind: "hunter-pi/task9-platform-consistency",
     status: "PASS",
     sourceCommit: windows.source.commit,

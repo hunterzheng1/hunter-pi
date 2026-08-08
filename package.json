@@ -39,6 +39,7 @@
     "probe:task9:compiled": "node dist/tools/task9-platform-probe.js",
     "strict:check": "node scripts/strict-compiler-smoke.mjs",
     "test": "vitest run",
+    "test:ci": "vitest run --exclude test/managed-process-platform.test.ts --exclude test/atomic-write.test.ts --exclude test/file-lease-manager.test.ts --exclude test/task9-archive.test.ts --exclude test/task9-recovery.test.ts --exclude test/task9-checkpoint.test.ts --exclude test/task9-cancellation.test.ts --exclude test/task9-attempt-finality-store.test.ts --exclude test/task9-attempt-finality-adapter.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "verify": "npm run lint && npm run typecheck && npm test && npm run strict:check && npm run build && npm run format:check && npm run package-smoke && npm run clean-install-smoke && npm run probe:pi"
   },

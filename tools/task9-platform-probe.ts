@@ -42,10 +42,19 @@ import {
 
 import {
   assertTask9EvidencePrivacy,
+  TASK9_CONTRACT_COMMAND_IDENTITY,
+  TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+  TASK9_CONTRACT_TEST_COUNT,
+  TASK9_CONTRACT_TEST_COUNTS,
+  TASK9_CONTRACT_TEST_FILES,
+  TASK9_CRITICAL_CONTRACT_ASSERTIONS,
   TASK9_PLATFORM_CHECKS,
   TASK9_SOURCE_PATHSPEC,
   TASK9_VERIFIER_PATHSPEC,
+  TASK9_WINDOWS_PATH_ALIAS_ASSERTION,
+  task9ContractMatrixFactsSchema,
   task9CheckFingerprint,
+  task9FinalityFactsSchema,
   task9PlatformFailureReceiptSchema,
   task9PlatformFactsSchema,
   task9PlatformReceiptSchema,
@@ -56,6 +65,26 @@ import {
 
 const execFileAsync = promisify(execFile);
 const outputRoot = ".artifacts/task9-platform";
+
+const vitestAssertionResultSchema = z.looseObject({
+  fullName: z.string().min(1),
+  status: z.string().min(1),
+});
+
+const vitestTestResultSchema = z.looseObject({
+  name: z.string().min(1),
+  assertionResults: z.array(vitestAssertionResultSchema),
+});
+
+const vitestJsonReportSchema = z.looseObject({
+  success: z.literal(true),
+  numTotalTests: z.number().int().nonnegative(),
+  numPassedTests: z.number().int().nonnegative(),
+  numFailedTests: z.number().int().nonnegative(),
+  numPendingTests: z.number().int().nonnegative(),
+  numTodoTests: z.number().int().nonnegative(),
+  testResults: z.array(vitestTestResultSchema),
+});
 
 interface SourceIdentity {
   readonly commit: string;
@@ -196,6 +225,125 @@ async function platformLabel(): Promise<"WINDOWS" | "UBUNTU"> {
 
 function fixtureFingerprint(value: unknown): Fingerprint {
   return fingerprintSchema.parse(sha256Fingerprint(canonicalJson(value)));
+}
+
+function task9TestPath(repositoryRoot: string, absolutePath: string): string {
+  const path = relative(repositoryRoot, resolve(absolutePath)).replaceAll("\\", "/");
+  if (
+    path.length === 0 ||
+    path === ".." ||
+    path.startsWith("../") ||
+    isAbsolute(path) ||
+    !TASK9_CONTRACT_TEST_FILES.some((expected) => expected === path)
+  ) {
+    throw new Error("Task 9 contract report contains an unexpected test path");
+  }
+  return path;
+}
+
+export async function runTask9ContractMatrix(
+  repositoryRoot: string,
+  platform: "WINDOWS" | "UBUNTU",
+) {
+  const reportRoot = await mkdtemp(join(tmpdir(), "hpi-task9-contract-"));
+  try {
+    const vitestEntry = resolve(repositoryRoot, "node_modules/vitest/vitest.mjs");
+    const vitestStats = await lstat(vitestEntry);
+    if (!vitestStats.isFile() || vitestStats.isSymbolicLink()) {
+      throw new Error("Task 9 contract runner is not a physical file");
+    }
+    const reportPath = join(reportRoot, "report.json");
+    await execFileAsync(
+      process.execPath,
+      [
+        vitestEntry,
+        "run",
+        ...TASK9_CONTRACT_TEST_FILES,
+        "--reporter=json",
+        "--outputFile",
+        reportPath,
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+      },
+    );
+    const report = vitestJsonReportSchema.parse(
+      JSON.parse(await readFile(reportPath, "utf8")) as unknown,
+    );
+    const expectedSkipped = platform === "WINDOWS" ? 0 : 1;
+    const expectedPassed = TASK9_CONTRACT_TEST_COUNT - expectedSkipped;
+    if (
+      report.numTotalTests !== TASK9_CONTRACT_TEST_COUNT ||
+      report.numPassedTests !== expectedPassed ||
+      report.numFailedTests !== 0 ||
+      report.numPendingTests !== expectedSkipped ||
+      report.numTodoTests !== 0 ||
+      report.testResults.length !== TASK9_CONTRACT_TEST_FILES.length
+    ) {
+      throw new Error("Task 9 contract report counts are incomplete or platform-mismatched");
+    }
+
+    const resultsByPath = new Map<string, (typeof report.testResults)[number]>();
+    for (const result of report.testResults) {
+      const path = task9TestPath(repositoryRoot, result.name);
+      if (resultsByPath.has(path)) throw new Error("Task 9 contract report repeats a test file");
+      resultsByPath.set(path, result);
+    }
+    const assertions = new Map<string, string>();
+    for (const path of TASK9_CONTRACT_TEST_FILES) {
+      const result = resultsByPath.get(path);
+      if (result?.assertionResults.length !== TASK9_CONTRACT_TEST_COUNTS[path]) {
+        throw new Error("Task 9 contract report changed an exact test-file count");
+      }
+      for (const assertion of result.assertionResults) {
+        if (assertions.has(assertion.fullName)) {
+          throw new Error("Task 9 contract report repeats an assertion identity");
+        }
+        assertions.set(assertion.fullName, assertion.status);
+      }
+    }
+    if (assertions.size !== TASK9_CONTRACT_TEST_COUNT) {
+      throw new Error("Task 9 contract report omitted an assertion identity");
+    }
+    for (const [name, status] of assertions) {
+      const allowedUbuntuSkip =
+        platform === "UBUNTU" &&
+        name === TASK9_WINDOWS_PATH_ALIAS_ASSERTION &&
+        (status === "pending" || status === "skipped");
+      if (status !== "passed" && !allowedUbuntuSkip) {
+        throw new Error("Task 9 contract report contains an unapproved non-passing assertion");
+      }
+    }
+    for (const name of TASK9_CRITICAL_CONTRACT_ASSERTIONS) {
+      if (assertions.get(name) !== "passed") {
+        throw new Error("Task 9 contract report did not pass a critical daily-use assertion");
+      }
+    }
+    const pathAliasStatus = assertions.get(TASK9_WINDOWS_PATH_ALIAS_ASSERTION);
+    if (
+      (platform === "WINDOWS" && pathAliasStatus !== "passed") ||
+      (platform === "UBUNTU" && pathAliasStatus !== "pending" && pathAliasStatus !== "skipped")
+    ) {
+      throw new Error("Task 9 Windows path-alias assertion has the wrong host result");
+    }
+
+    return task9ContractMatrixFactsSchema.parse({
+      status: "PASS",
+      definitionFingerprint: TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+      testFileCount: TASK9_CONTRACT_TEST_FILES.length,
+      testCount: TASK9_CONTRACT_TEST_COUNT,
+      passedTestCount: report.numPassedTests,
+      skippedTestCount: report.numPendingTests,
+      windowsPathAlias: platform === "WINDOWS" ? "PASS" : "NOT_APPLICABLE",
+      forcedTerminationRecovery: "PASS",
+      secondDeviceProjection: "PASS",
+    });
+  } finally {
+    await rm(reportRoot, { force: true, recursive: true });
+  }
 }
 
 export async function runTask9FinalityFixture() {
@@ -342,7 +490,7 @@ export async function runTask9FinalityFixture() {
       throw new Error("Task 9 durable finality replay changed immutable facts");
     }
 
-    return task9PlatformFactsSchema.parse({
+    return task9FinalityFactsSchema.parse({
       process: {
         terminalFinality: final.receipt.terminalFinality,
         processTreeState: final.receipt.processTreeState,
@@ -381,9 +529,9 @@ function failureReceipt(
   error: unknown,
 ): Task9PlatformFailureReceipt {
   return task9PlatformFailureReceiptSchema.parse({
-    schemaVersion: "hpi-task9-platform-failure.v1",
+    schemaVersion: "hpi-task9-platform-failure.v2",
     kind: "hunter-pi/task9-platform-failure",
-    status: stage === "FINALITY_EXECUTION" ? "FAIL" : "NOT_PROVEN",
+    status: stage === "FINALITY_EXECUTION" || stage === "CONTRACT_MATRIX" ? "FAIL" : "NOT_PROVEN",
     stage,
     platform,
     source:
@@ -418,15 +566,18 @@ export async function runTask9PlatformProbe(
     platform = await platformLabel();
     stage = "SOURCE_IDENTITY";
     source = await sourceIdentity(repositoryRoot);
+    stage = "CONTRACT_MATRIX";
+    const contractMatrix = await runTask9ContractMatrix(repositoryRoot, platform);
     stage = "FINALITY_EXECUTION";
-    const facts = await runTask9FinalityFixture();
+    const finalityFacts = await runTask9FinalityFixture();
+    const facts = task9PlatformFactsSchema.parse({ ...finalityFacts, contractMatrix });
     stage = "SOURCE_REVALIDATION";
     const sourceAfter = await sourceIdentity(repositoryRoot);
     if (canonicalJson(sourceAfter) !== canonicalJson(source)) {
       throw new Error("Task 9 source identity changed during platform execution");
     }
     const receipt: Task9PlatformReceipt = task9PlatformReceiptSchema.parse({
-      schemaVersion: "hpi-task9-platform-receipt.v1",
+      schemaVersion: "hpi-task9-platform-receipt.v2",
       kind: "hunter-pi/task9-platform-receipt",
       status: "PASS",
       platform: { os: platform, architecture: "x64", nodeMajor: 24 },
@@ -437,16 +588,19 @@ export async function runTask9PlatformProbe(
         fingerprint: source.sourceFingerprint,
       },
       verifier: {
-        version: "task9-platform-verifier.v1",
+        version: "task9-platform-verifier.v2",
         pathspec: TASK9_VERIFIER_PATHSPEC,
         fingerprint: source.verifierFingerprint,
         commandFingerprint: sha256Fingerprint(
-          canonicalJson([
-            "node@24",
-            "dist/tools/task9-platform-probe.js",
-            "--output",
-            "<APPROVED_TASK9_EVIDENCE_PATH>",
-          ]),
+          canonicalJson({
+            probe: [
+              "node@24",
+              "dist/tools/task9-platform-probe.js",
+              "--output",
+              "<APPROVED_TASK9_EVIDENCE_PATH>",
+            ],
+            contractMatrix: TASK9_CONTRACT_COMMAND_IDENTITY,
+          }),
         ),
       },
       facts,

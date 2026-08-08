@@ -3,6 +3,64 @@ import { z } from "zod";
 import { fingerprintSchema, timestampSchema, type Fingerprint } from "@hunter-pi/domain";
 import { canonicalJson, sha256Fingerprint } from "@hunter-pi/evidence";
 
+export const TASK9_CONTRACT_TEST_FILES = [
+  "test/atomic-write.test.ts",
+  "test/file-lease-manager.test.ts",
+  "test/task9-archive.test.ts",
+  "test/task9-recovery.test.ts",
+  "test/task9-checkpoint.test.ts",
+  "test/task9-cancellation.test.ts",
+  "test/task9-attempt-finality-store.test.ts",
+  "test/task9-attempt-finality-adapter.test.ts",
+] as const;
+
+export const TASK9_CONTRACT_TEST_COUNTS = {
+  "test/atomic-write.test.ts": 21,
+  "test/file-lease-manager.test.ts": 13,
+  "test/task9-archive.test.ts": 24,
+  "test/task9-recovery.test.ts": 11,
+  "test/task9-checkpoint.test.ts": 2,
+  "test/task9-cancellation.test.ts": 3,
+  "test/task9-attempt-finality-store.test.ts": 5,
+  "test/task9-attempt-finality-adapter.test.ts": 8,
+} as const satisfies Readonly<Record<(typeof TASK9_CONTRACT_TEST_FILES)[number], number>>;
+
+export const TASK9_WINDOWS_PATH_ALIAS_ASSERTION =
+  "durable mutation-lock recovery elects one reconciler for Windows path aliases of the same physical lock";
+
+export const TASK9_CRITICAL_CONTRACT_ASSERTIONS = [
+  "durable mutation-lock recovery recovers when the elected stale-owner reconciler is force-killed at AFTER_RECONCILIATION_CLAIM_PUBLISH",
+  "durable mutation-lock recovery recovers when the elected stale-owner reconciler is force-killed at AFTER_RECONCILIATION_RECEIPT_PUBLISH",
+  "durable mutation-lock recovery recovers when the elected stale-owner reconciler is force-killed at AFTER_STALE_OWNER_REMOVE",
+  "file-backed exclusive lease manager recovers an abandoned mutation lock before reopening lease state",
+  "Task 9 Run Archive reopens a clean-device import as an exact archive-bound READ_ONLY projection",
+  "Task 9 Run Archive resumes an interrupted device import from exact durable policy state without manual editing",
+] as const;
+
+export const TASK9_CONTRACT_TEST_COUNT = Object.values(TASK9_CONTRACT_TEST_COUNTS).reduce(
+  (total, count) => total + count,
+  0,
+);
+
+export const TASK9_CONTRACT_DEFINITION_FINGERPRINT = sha256Fingerprint(
+  canonicalJson({
+    files: TASK9_CONTRACT_TEST_FILES,
+    testCounts: TASK9_CONTRACT_TEST_COUNTS,
+    windowsPathAliasAssertion: TASK9_WINDOWS_PATH_ALIAS_ASSERTION,
+    criticalAssertions: TASK9_CRITICAL_CONTRACT_ASSERTIONS,
+  }),
+);
+
+export const TASK9_CONTRACT_COMMAND_IDENTITY = [
+  "node@24",
+  "node_modules/vitest/vitest.mjs",
+  "run",
+  ...TASK9_CONTRACT_TEST_FILES,
+  "--reporter=json",
+  "--outputFile",
+  "<TEMPORARY_TASK9_JSON_REPORT>",
+] as const;
+
 export const TASK9_SOURCE_PATHSPEC = [
   ".github/workflows/ci.yml",
   "package.json",
@@ -23,6 +81,7 @@ export const TASK9_SOURCE_PATHSPEC = [
 export const TASK9_VERIFIER_PATHSPEC = [
   "package.json",
   "package-lock.json",
+  ...TASK9_CONTRACT_TEST_FILES,
   "test/task9-platform-evidence.test.ts",
   "tools/task9-platform-evidence.ts",
   "tools/task9-platform-probe.ts",
@@ -30,6 +89,7 @@ export const TASK9_VERIFIER_PATHSPEC = [
 ] as const;
 
 export const TASK9_PLATFORM_CHECKS = [
+  { id: "DAILY_USE_CONTRACT_MATRIX" },
   { id: "PROCESS_FINAL_RECEIPT" },
   { id: "WRITER_LEASE_RELEASED" },
   { id: "ATTEMPT_FINALITY_BOUND" },
@@ -72,17 +132,41 @@ const privacyFactsSchema = z.strictObject({
   credentialFree: z.literal(true),
 });
 
-export const task9PlatformFactsSchema = z.strictObject({
+export const task9ContractMatrixFactsSchema = z.strictObject({
+  status: z.literal("PASS"),
+  definitionFingerprint: fingerprintSchema.refine(
+    (value) => value === TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+    "Task 9 contract definition fingerprint is not exact",
+  ),
+  testFileCount: z.literal(TASK9_CONTRACT_TEST_FILES.length),
+  testCount: z.literal(TASK9_CONTRACT_TEST_COUNT),
+  passedTestCount: z.union([
+    z.literal(TASK9_CONTRACT_TEST_COUNT - 1),
+    z.literal(TASK9_CONTRACT_TEST_COUNT),
+  ]),
+  skippedTestCount: z.union([z.literal(0), z.literal(1)]),
+  windowsPathAlias: z.enum(["PASS", "NOT_APPLICABLE"]),
+  forcedTerminationRecovery: z.literal("PASS"),
+  secondDeviceProjection: z.literal("PASS"),
+});
+
+export const task9FinalityFactsSchema = z.strictObject({
   process: processFactsSchema,
   writerLease: writerLeaseFactsSchema,
   attemptFinality: attemptFinalityFactsSchema,
   durableReplay: durableReplayFactsSchema,
   privacy: privacyFactsSchema,
 });
+
+export const task9PlatformFactsSchema = task9FinalityFactsSchema.extend({
+  contractMatrix: task9ContractMatrixFactsSchema,
+});
 export type Task9PlatformFacts = z.infer<typeof task9PlatformFactsSchema>;
 
 function checkPayload(id: Task9PlatformCheckId, facts: Task9PlatformFacts): unknown {
   switch (id) {
+    case "DAILY_USE_CONTRACT_MATRIX":
+      return facts.contractMatrix;
     case "PROCESS_FINAL_RECEIPT":
       return facts.process;
     case "WRITER_LEASE_RELEASED":
@@ -128,7 +212,7 @@ function containsPrivateOrCredentialText(value: unknown): boolean {
 
 export const task9PlatformReceiptSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-task9-platform-receipt.v1"),
+    schemaVersion: z.literal("hpi-task9-platform-receipt.v2"),
     kind: z.literal("hunter-pi/task9-platform-receipt"),
     status: z.literal("PASS"),
     platform: z.strictObject({
@@ -143,7 +227,7 @@ export const task9PlatformReceiptSchema = z
       fingerprint: fingerprintSchema,
     }),
     verifier: z.strictObject({
-      version: z.literal("task9-platform-verifier.v1"),
+      version: z.literal("task9-platform-verifier.v2"),
       pathspec: exactOrderedStrings(TASK9_VERIFIER_PATHSPEC, "Task 9 verifier pathspec"),
       fingerprint: fingerprintSchema,
       commandFingerprint: fingerprintSchema,
@@ -161,6 +245,20 @@ export const task9PlatformReceiptSchema = z
     observedAt: timestampSchema,
   })
   .superRefine((receipt, context) => {
+    const contract = receipt.facts.contractMatrix;
+    const windows = receipt.platform.os === "WINDOWS";
+    if (
+      contract.passedTestCount !==
+        (windows ? TASK9_CONTRACT_TEST_COUNT : TASK9_CONTRACT_TEST_COUNT - 1) ||
+      contract.skippedTestCount !== (windows ? 0 : 1) ||
+      contract.windowsPathAlias !== (windows ? "PASS" : "NOT_APPLICABLE")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["facts", "contractMatrix"],
+        message: "Task 9 contract matrix does not match its Windows or Ubuntu host",
+      });
+    }
     for (const [index, expected] of TASK9_PLATFORM_CHECKS.entries()) {
       const actual = receipt.checks[index];
       if (
@@ -181,12 +279,13 @@ export const task9PlatformReceiptSchema = z
 export type Task9PlatformReceipt = z.infer<typeof task9PlatformReceiptSchema>;
 
 export const task9PlatformFailureReceiptSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-task9-platform-failure.v1"),
+  schemaVersion: z.literal("hpi-task9-platform-failure.v2"),
   kind: z.literal("hunter-pi/task9-platform-failure"),
   status: z.enum(["FAIL", "NOT_PROVEN"]),
   stage: z.enum([
     "PLATFORM_IDENTITY",
     "SOURCE_IDENTITY",
+    "CONTRACT_MATRIX",
     "FINALITY_EXECUTION",
     "SOURCE_REVALIDATION",
   ]),

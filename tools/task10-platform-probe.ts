@@ -170,6 +170,33 @@ function fixtureFingerprint(value: unknown): Fingerprint {
   return sha256Fingerprint(canonicalJson(value));
 }
 
+async function makeFixtureTreeRemovable(path: string): Promise<void> {
+  let status;
+  try {
+    status = await lstat(path);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (status.isSymbolicLink()) {
+    await rm(path, { force: true });
+    return;
+  }
+  if (status.isDirectory()) {
+    await chmod(path, 0o700).catch(() => undefined);
+    for (const entry of await readdir(path)) {
+      await makeFixtureTreeRemovable(join(path, entry));
+    }
+    return;
+  }
+  await chmod(path, 0o600).catch(() => undefined);
+}
+
+async function removeFixtureTree(path: string): Promise<void> {
+  await makeFixtureTreeRemovable(path);
+  await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+}
+
 async function createPackage(options: {
   readonly root: string;
   readonly name: string;
@@ -577,7 +604,7 @@ async function runPackageFixtures(
       },
     });
   } finally {
-    await rm(fixtureRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+    await removeFixtureTree(fixtureRoot);
   }
 }
 

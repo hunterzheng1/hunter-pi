@@ -88,6 +88,20 @@ describe("Task 9 platform Evidence", () => {
   it("accepts the exact contract, finality, lease, replay, and privacy matrix", () => {
     expect(receipt("WINDOWS").status).toBe("PASS");
     expect(TASK9_CONTRACT_TEST_FILES).toHaveLength(8);
+    expect(TASK9_SOURCE_PATHSPEC).toEqual(
+      expect.arrayContaining([
+        "vitest.config.ts",
+        "packages/evidence/package.json",
+        "packages/execution/package.json",
+      ]),
+    );
+    expect(TASK9_VERIFIER_PATHSPEC).toEqual(
+      expect.arrayContaining([
+        "vitest.config.ts",
+        "packages/evidence/package.json",
+        "packages/execution/package.json",
+      ]),
+    );
   });
 
   it("rejects a partial or reordered check matrix", () => {

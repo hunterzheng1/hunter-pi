@@ -69,6 +69,15 @@ const pilotArchiveIdentityReceiptSchema = z.strictObject({
 });
 type PilotArchiveIdentityReceipt = z.infer<typeof pilotArchiveIdentityReceiptSchema>;
 
+const pilotArchiveCommitReceiptSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-archive-commit.v1"),
+  archiveId: archiveIdSchema,
+  archiveFingerprint: fingerprintSchema,
+  observedAt: timestampSchema,
+  proof: fingerprintSchema,
+});
+type PilotArchiveCommitReceipt = z.infer<typeof pilotArchiveCommitReceiptSchema>;
+
 export const pilotArchiveSchema = z
   .strictObject({
     ...pilotArchiveFactsSchema.shape,
@@ -140,6 +149,7 @@ const storeKeyFilename = ".pilot-store-key";
 const archiveDirectoryName = "archives";
 const packageFilename = "package.json";
 const archiveIdentityFilenameSuffix = ".identity.json";
+const archiveCommitFilenameSuffix = ".committed.json";
 const trustedStoreToken = Symbol("trusted-pilot-archive-store");
 
 function deepFreeze<T>(value: T): T {
@@ -225,7 +235,7 @@ function loadOrCreateStoreKey(stateRoot: string): Buffer {
   const path = join(stateRoot, storeKeyFilename);
   if (!existsSync(path)) {
     try {
-      writeFileSync(path, randomBytes(32), { flag: "wx", mode: 0o600 });
+      writeFileSync(path, randomBytes(32), { flag: "wx", mode: 0o600, flush: true });
     } catch {
       // Another writer may have created the key. The exact file is verified below.
     }
@@ -239,6 +249,10 @@ function packagePath(stateRoot: string, archiveId: string): string {
 
 function identityReceiptPath(stateRoot: string, archiveId: string): string {
   return join(stateRoot, archiveDirectoryName, `${archiveId}${archiveIdentityFilenameSuffix}`);
+}
+
+function commitReceiptPath(stateRoot: string, archiveId: string): string {
+  return join(stateRoot, archiveDirectoryName, `${archiveId}${archiveCommitFilenameSuffix}`);
 }
 
 function writeImmutableAtomically(path: string, content: string): void {
@@ -293,8 +307,23 @@ function identityReceiptFor(
   });
 }
 
+function commitReceiptFor(
+  archiveId: string,
+  archiveFingerprint: Fingerprint,
+  observedAt: string,
+  key: Uint8Array,
+): PilotArchiveCommitReceipt {
+  return pilotArchiveCommitReceiptSchema.parse({
+    schemaVersion: "hpi-pilot-archive-commit.v1",
+    archiveId,
+    archiveFingerprint,
+    observedAt,
+    proof: storeProof(key, archiveId, archiveFingerprint, observedAt),
+  });
+}
+
 function assertIdentityReceiptMatches(
-  receipt: PilotArchiveIdentityReceipt,
+  receipt: Pick<PilotArchiveIdentityReceipt, "archiveId" | "archiveFingerprint" | "observedAt">,
   archive: Pick<PilotArchive, "archiveId" | "archiveFingerprint" | "observedAt">,
 ): void {
   if (
@@ -319,6 +348,42 @@ function ensureIdentityReceipt(
     }
   }
   const actual = parseIdentityReceipt(path, key);
+  assertIdentityReceiptMatches(actual, expected);
+  return actual;
+}
+
+function parseCommitReceipt(path: string, key: Uint8Array): PilotArchiveCommitReceipt {
+  assertExactRegularFile(path, "pilot Archive commit receipt is not an exact regular file");
+  let receipt: PilotArchiveCommitReceipt;
+  try {
+    receipt = pilotArchiveCommitReceiptSchema.parse(
+      JSON.parse(readFileSync(path, "utf8")) as unknown,
+    );
+  } catch {
+    throw new PilotArchiveStoreError("pilot Archive commit receipt is invalid or corrupt");
+  }
+  if (
+    receipt.proof !==
+    storeProof(key, receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
+  ) {
+    throw new PilotArchiveStoreError("pilot Archive commit receipt proof is invalid");
+  }
+  return receipt;
+}
+
+function ensureCommitReceipt(
+  path: string,
+  expected: PilotArchiveCommitReceipt,
+  key: Uint8Array,
+): PilotArchiveCommitReceipt {
+  if (!existsSync(path)) {
+    try {
+      writeImmutableAtomically(path, `${JSON.stringify(expected)}\n`);
+    } catch (error) {
+      if (!existsSync(path)) throw error;
+    }
+  }
+  const actual = parseCommitReceipt(path, key);
   assertIdentityReceiptMatches(actual, expected);
   return actual;
 }
@@ -355,7 +420,7 @@ function parseTrustedPackage(path: string, key: Uint8Array): TrustedPilotArchive
   return createTrustedPilotArchive(archive);
 }
 
-function parseBoundArchive(
+function parsePackageBoundToIdentity(
   stateRoot: string,
   archiveId: string,
   key: Uint8Array,
@@ -363,6 +428,17 @@ function parseBoundArchive(
   const identity = parseIdentityReceipt(identityReceiptPath(stateRoot, archiveId), key);
   const trusted = parseTrustedPackage(packagePath(stateRoot, archiveId), key);
   assertIdentityReceiptMatches(identity, trusted.archive);
+  return trusted;
+}
+
+function parseBoundArchive(
+  stateRoot: string,
+  archiveId: string,
+  key: Uint8Array,
+): TrustedPilotArchive {
+  const trusted = parsePackageBoundToIdentity(stateRoot, archiveId, key);
+  const commit = parseCommitReceipt(commitReceiptPath(stateRoot, archiveId), key);
+  assertIdentityReceiptMatches(commit, trusted.archive);
   return trusted;
 }
 
@@ -374,6 +450,15 @@ export class TrustedPilotArchive {
     Object.freeze(this);
   }
 
+  public static isTrusted(value: unknown): value is TrustedPilotArchive {
+    if (!(value instanceof TrustedPilotArchive)) return false;
+    try {
+      return value.#archive === value.archive;
+    } catch {
+      return false;
+    }
+  }
+
   public static fromStore(archive: PilotArchive, token: symbol): TrustedPilotArchive {
     if (token !== trustedStoreToken)
       throw new PilotArchiveStoreError("pilot Archive is not trusted");
@@ -383,6 +468,10 @@ export class TrustedPilotArchive {
   public get archive(): PilotArchive {
     return this.#archive;
   }
+}
+
+export function isTrustedPilotArchive(value: unknown): value is TrustedPilotArchive {
+  return TrustedPilotArchive.isTrusted(value);
 }
 
 export class FilePilotArchiveStore {
@@ -439,10 +528,12 @@ export class FilePilotArchiveStore {
     const path = packagePath(this.#stateRoot, archive.archiveId);
     const archivesDirectory = join(this.#stateRoot, archiveDirectoryName);
     const identityPath = identityReceiptPath(this.#stateRoot, archive.archiveId);
+    const commitPath = commitReceiptPath(this.#stateRoot, archive.archiveId);
     ensureExactDirectory(archivesDirectory, "pilot Archive directory is not exact");
     ensureExactDirectory(dirname(path), "pilot Archive identity directory is not exact");
     const packageExists = existsSync(path);
     const identityExists = existsSync(identityPath);
+    const commitExists = existsSync(commitPath);
     if (packageExists && !identityExists) {
       throw new PilotArchiveStoreError("pilot Archive identity receipt is missing");
     }
@@ -451,28 +542,39 @@ export class FilePilotArchiveStore {
       identityReceiptFor(archive.archiveId, archive.archiveFingerprint, archive.observedAt, key),
       key,
     );
+    const expectedCommit = commitReceiptFor(
+      archive.archiveId,
+      archive.archiveFingerprint,
+      archive.observedAt,
+      key,
+    );
+    if (commitExists) {
+      const committed = parseCommitReceipt(commitPath, key);
+      assertIdentityReceiptMatches(committed, archive);
+      if (!existsSync(path)) {
+        throw new PilotArchiveStoreError(
+          "pilot Archive committed identity is reserved but its package is missing",
+        );
+      }
+    }
+    let storedArchive: TrustedPilotArchive;
     if (existsSync(path)) {
-      const existing = parseBoundArchive(this.#stateRoot, archive.archiveId, key).archive;
-      assertIdentityReceiptMatches(identity, existing);
-      if (canonicalJson(existing) !== canonicalJson(archive)) {
-        throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
+      storedArchive = parsePackageBoundToIdentity(this.#stateRoot, archive.archiveId, key);
+    } else {
+      try {
+        writeImmutableAtomically(path, `${JSON.stringify(archive)}\n`);
+        storedArchive = parsePackageBoundToIdentity(this.#stateRoot, archive.archiveId, key);
+      } catch (error) {
+        if (!existsSync(path)) throw error;
+        storedArchive = parsePackageBoundToIdentity(this.#stateRoot, archive.archiveId, key);
       }
-      return createTrustedPilotArchive(existing);
     }
-    if (identityExists) {
-      throw new PilotArchiveStoreError("pilot Archive identity is already reserved");
+    assertIdentityReceiptMatches(identity, storedArchive.archive);
+    if (canonicalJson(storedArchive.archive) !== canonicalJson(archive)) {
+      throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
     }
-    try {
-      writeImmutableAtomically(path, `${JSON.stringify(archive)}\n`);
-    } catch (error) {
-      if (!existsSync(path)) throw error;
-      const existing = parseBoundArchive(this.#stateRoot, archive.archiveId, key).archive;
-      if (canonicalJson(existing) !== canonicalJson(archive)) {
-        throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
-      }
-      return createTrustedPilotArchive(existing);
-    }
-    return createTrustedPilotArchive(archive);
+    ensureCommitReceipt(commitPath, expectedCommit, key);
+    return parseBoundArchive(this.#stateRoot, archive.archiveId, key);
   }
 
   public read(archiveId: string): TrustedPilotArchive {

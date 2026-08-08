@@ -192,4 +192,34 @@ describe("Task 12 trusted pilot Archive store", () => {
       }),
     ).toThrow(/bound|reserved|identity|immutable/u);
   });
+
+  it("can finish an interrupted reservation before its commit receipt exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-archive-"));
+    roots.push(root);
+    const plan = completePilotExecutionPlan();
+    const evidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const store = new FilePilotArchiveStore({ stateRoot: root });
+    store.write({
+      archiveId: "pilot-archive-incomplete-reservation-test",
+      planFingerprint: plan.planFingerprint,
+      capture: testPilotEvidenceCapture(evidence),
+      observedAt: evidence.observedAt,
+    });
+    rmSync(join(root, "archives", "pilot-archive-incomplete-reservation-test", "package.json"));
+    rmSync(join(root, "archives", "pilot-archive-incomplete-reservation-test.committed.json"), {
+      force: true,
+    });
+
+    expect(() =>
+      store.write({
+        archiveId: "pilot-archive-incomplete-reservation-test",
+        planFingerprint: plan.planFingerprint,
+        capture: testPilotEvidenceCapture(evidence),
+        observedAt: evidence.observedAt,
+      }),
+    ).not.toThrow();
+    expect(store.read("pilot-archive-incomplete-reservation-test").archive.archiveStatus).toBe(
+      "ARCHIVED",
+    );
+  });
 });

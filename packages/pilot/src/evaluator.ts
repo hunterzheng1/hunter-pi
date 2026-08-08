@@ -7,7 +7,7 @@ import {
   type PilotEvidence,
   type PilotMetrics,
 } from "./contracts.js";
-import type { TrustedPilotArchive } from "./archive.js";
+import { isTrustedPilotArchive, type TrustedPilotArchive } from "./archive.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 
 const invalidEvidenceFingerprint = pilotFingerprint({
@@ -260,6 +260,9 @@ function archiveProblems(
   trustedArchive: TrustedPilotArchive | undefined,
 ): string[] {
   if (trustedArchive === undefined) return [];
+  if (!isTrustedPilotArchive(trustedArchive)) {
+    return ["trusted pilot Archive handle was not issued by the trusted store"];
+  }
   const archive = trustedArchive.archive;
   const reasons: string[] = [];
   if (

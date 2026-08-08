@@ -72,6 +72,18 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.outcome).toBe("GO");
   });
 
+  it("does not trust a structurally forged Archive handle", () => {
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const trustedArchive = trustedArchiveFor(evidence, plan, "pilot-archive-forged-handle-test");
+    const forgedArchive = { archive: trustedArchive.archive } as never;
+
+    const decision = new PilotEvaluator().evaluate(evidence, plan, forgedArchive);
+
+    expect(decision.outcome).toBe("NOT_PROVEN");
+    expect(decision.reasons.join(" ")).toMatch(/trusted.*handle|store/u);
+  });
+
   it("stops when linked Provider usage exceeds the frozen request/token/cost budget", () => {
     const plan = new PilotPlanCompiler().compile({
       ...completePilotPlanInput(),

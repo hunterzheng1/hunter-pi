@@ -176,10 +176,13 @@ implementation now closes the specific authority gaps identified there:
   itself as a live capture. It resolves an append-only Archive package from an exact local directory and
   regular file, verifies immutable facts, the Evidence digest, observed time, and a local store proof,
   and returns a trusted handle only for `REAL_WINDOWS_PILOT` / `LIVE_WINDOWS_PILOT` data;
-- an HMAC-bound identity reservation survives package deletion, and both the identity receipt and package
-  are flushed before publication through non-overwriting hard links; the trusted handle itself is frozen;
+- an HMAC-bound identity reservation survives package deletion; a separate immutable commit receipt
+  distinguishes an interrupted reservation that may be completed from a committed Archive whose package
+  disappeared. The reservation, package, and commit receipt are flushed before publication through
+  non-overwriting hard links; the trusted handle itself is frozen;
 - the evaluator and CLI require the trusted Archive and exact frozen plan before a decision can be
-  considered complete, so fixture-shaped JSON or a plain Evidence file cannot yield daily-use `GO`;
+  considered complete, and its runtime private-field brand rejects structurally forged handles, so
+  fixture-shaped JSON or a plain Evidence file cannot yield daily-use `GO`;
 - linked Run Archive receipts require one reachable root and one terminal Run per task, aggregate
   replacement Runs without rewriting history, reject duplicate predecessor/replacement references, require
   an interrupted predecessor to be terminal `INCOMPLETE`/`CANCELLED`, and bind successful interruption

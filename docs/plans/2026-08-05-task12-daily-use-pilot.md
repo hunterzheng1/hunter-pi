@@ -49,11 +49,13 @@ Task 12 now uses plan-input/execution-plan v2 and Evidence v5. Live pilot Eviden
 Archive package whose immutable facts, Evidence fingerprint, observed time, and local store receipt
 are verified before a `TrustedPilotArchive` handle is returned. The persistence boundary accepts only an
 opaque capture authority issued by the capture runtime; raw JSON cannot promote itself to live Evidence.
-An HMAC-bound identity reservation remains after package deletion, and packages/identity receipts publish
-through flushed temporary files and non-overwriting hard links. Fixture/test provenance, plain Evidence
-files, modified packages, store aliases, and mismatched observation times fail closed. The evaluator and
-CLI require that trusted Archive for any decision that could otherwise resemble `GO`; the CLI form is
-`hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json`.
+An HMAC-bound identity reservation remains after package deletion; a separate immutable commit receipt
+distinguishes a recoverable interrupted reservation from a committed Archive whose package disappeared.
+The package, reservation, and commit receipt each publish through flushed temporary files and
+non-overwriting hard links. Fixture/test provenance, plain Evidence files, modified packages, store
+aliases, and mismatched observation times fail closed. The evaluator and CLI require that trusted Archive
+for any decision that could otherwise resemble `GO`; the CLI form is `hpi pilot evaluate --plan <file>
+--evidence <file> --archive <file> --json`.
 
 Each Evidence task result now records Provider request/token/cost counts, and the linked Run Archive
 chain must have one reachable root and one terminal Run. Replacement Runs are aggregated for both

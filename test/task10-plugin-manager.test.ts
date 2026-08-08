@@ -1,10 +1,19 @@
+import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { pluginManifestSchema } from "@hunter-pi/plugin-manager";
-import { FilePluginManager, type PluginSource } from "@hunter-pi/plugin-manager";
+import { createPluginRegistryPresentation } from "@hunter-pi/cli";
+import { pluginManifestSchema, pluginManifestV2Schema } from "@hunter-pi/plugin-manager";
+import {
+  FilePluginManager,
+  FilePluginJournal,
+  PluginJournalCorruptError,
+  withPluginLifecycleTransaction,
+  type PluginSource,
+} from "@hunter-pi/plugin-manager";
+import { canonicalJson, sha256Fingerprint } from "@hunter-pi/evidence";
 
 import { fixtureFingerprint, fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
@@ -27,6 +36,32 @@ function manifestFor(source: PluginSource, suffix: string, toolName = `tool-${su
       tools: [{ name: toolName, description: "A fixture tool" }],
       hooks: [{ name: `hook-${suffix}`, description: "A fixture hook" }],
     },
+  });
+}
+
+function manifestV2For(source: PluginSource, suffix: string) {
+  return pluginManifestV2Schema.parse({
+    schemaVersion: "hpi-plugin-manifest.v2",
+    pluginId: `plugin_${suffix}`,
+    version: "1.2.3",
+    source,
+    packageFingerprint: fixtureFingerprint,
+    license: "MIT",
+    provenance: {
+      upstreamName: `fixture-${suffix}`,
+      sourceReference: `https://example.invalid/${suffix}`,
+      sourceFingerprint: fixtureFingerprint,
+      licenseReference: "LICENSE",
+    },
+    resources: {
+      tools: [{ name: `tool-${suffix}`, description: "A fixture tool" }],
+      hooks: [],
+      extensions: [],
+      skills: [],
+      prompts: [],
+      themes: [],
+    },
+    executableSurface: "NONE",
   });
 }
 
@@ -62,17 +97,17 @@ describe("Task 10 standard Pi Plugin manager", () => {
       contentFingerprint: fixtureFingerprint,
     };
     expect(() =>
-      pluginManifestSchema.parse({
-        ...manifestFor(localSource, "privacy"),
+      pluginManifestV2Schema.parse({
+        ...manifestV2For(localSource, "privacy"),
         provenance: {
-          ...manifestFor(localSource, "privacy").provenance,
+          ...manifestV2For(localSource, "privacy").provenance,
           sourceReference: "C:\\fixture-private\\plugin",
         },
       }),
     ).toThrow();
     expect(() =>
-      pluginManifestSchema.parse({
-        ...manifestFor(
+      pluginManifestV2Schema.parse({
+        ...manifestV2For(
           {
             kind: "NPM",
             registry: "https://registry.npmjs.org",
@@ -83,21 +118,21 @@ describe("Task 10 standard Pi Plugin manager", () => {
           "privacy-url",
         ),
         provenance: {
-          ...manifestFor(localSource, "privacy").provenance,
+          ...manifestV2For(localSource, "privacy").provenance,
           sourceReference: "https://fixture-user@example.invalid/plugin",
         },
       }),
     ).toThrow();
     for (const sourceReference of [
       "file:///C:/Users/private/plugin",
-      "https://example.invalid/plugin?token=super-secret",
-      "https://example.invalid/plugin#access_token=super-secret",
+      "https://example.invalid/plugin?token=REDACTED",
+      "https://example.invalid/plugin#access_token=REDACTED",
     ]) {
       expect(() =>
-        pluginManifestSchema.parse({
-          ...manifestFor(localSource, "privacy-reference"),
+        pluginManifestV2Schema.parse({
+          ...manifestV2For(localSource, "privacy-reference"),
           provenance: {
-            ...manifestFor(localSource, "privacy-reference").provenance,
+            ...manifestV2For(localSource, "privacy-reference").provenance,
             sourceReference,
           },
         }),
@@ -106,25 +141,167 @@ describe("Task 10 standard Pi Plugin manager", () => {
     for (const source of [
       {
         kind: "NPM",
-        registry: "https://registry.npmjs.org?token=super-secret",
+        registry: "https://registry.npmjs.org?token=REDACTED",
         packageName: "privacy-fixture",
         version: "1.2.3",
         integrity: fixtureFingerprint,
       },
       {
         kind: "GIT",
-        remote: "https://github.com/example/fixture-plugin.git#access_token=super-secret",
+        remote: "https://github.com/example/fixture-plugin.git#access_token=REDACTED",
         commit: "0123456789abcdef0123456789abcdef01234567",
         treeFingerprint: fixtureFingerprint,
       },
     ]) {
       expect(() =>
-        pluginManifestSchema.parse({
-          ...manifestFor(localSource, "privacy-source"),
+        pluginManifestV2Schema.parse({
+          ...manifestV2For(localSource, "privacy-source"),
           source,
         }),
       ).toThrow();
     }
+    const portableV2 = manifestV2For(localSource, "privacy-v2");
+    expect(() =>
+      pluginManifestV2Schema.parse({
+        ...portableV2,
+        resources: {
+          ...portableV2.resources,
+          tools: [{ name: "privacy-tool", description: "password=REDACTED" }],
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      pluginManifestV2Schema.parse({
+        ...portableV2,
+        license: "C:\\Users\\private\\LICENSE",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps historical v1 Manifest references replay-compatible while v2 stays portable", async () => {
+    const historicalSource = {
+      kind: "NPM" as const,
+      registry: "https://registry.npmjs.org?token=legacy-registry-secret#historical",
+      packageName: "legacy-plugin",
+      version: "1.2.3",
+      integrity: fixtureFingerprint,
+    };
+    const historical = {
+      ...manifestFor(historicalSource, "legacy-history"),
+      provenance: {
+        ...manifestFor(historicalSource, "legacy-history").provenance,
+        sourceReference: "file:///legacy/plugin/source",
+      },
+      license: "C:\\Users\\legacy-private\\LICENSE",
+      resources: {
+        tools: [
+          {
+            name: "tool-legacy-history",
+            description: "https://example.invalid/tool?token=legacy-resource-secret",
+          },
+        ],
+        hooks: [],
+      },
+    };
+
+    expect(pluginManifestSchema.parse(historical)).toMatchObject({
+      schemaVersion: "hpi-plugin-manifest.v1",
+      source: historicalSource,
+      provenance: { sourceReference: "file:///legacy/plugin/source" },
+    });
+    expect(() =>
+      pluginManifestV2Schema.parse({
+        ...manifestV2For(
+          {
+            kind: "LOCAL",
+            label: "legacy-history-v2",
+            pathFingerprint: fixtureFingerprint,
+            contentFingerprint: fixtureFingerprint,
+          },
+          "legacy-history-v2",
+        ),
+        source: historicalSource,
+      }),
+    ).toThrow();
+
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task10-v1-replay-");
+    const stateRoot = join(root, "state");
+    const currentSource = { ...historicalSource, registry: "https://registry.npmjs.org" };
+    const manager = new FilePluginManager({
+      stateRoot,
+      resolve: (source) => Promise.resolve(manifestFor(source, "legacy-history")),
+      compatibilityVerifierFingerprint: fixtureFingerprint,
+      verifyCompatibility: verifiedCompatibility,
+    });
+    await manager.install(installRequest(currentSource, "legacy-history"));
+    const journalRoot = join(stateRoot, "journal");
+    const filename = (await readdir(journalRoot)).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new Error("legacy journal fixture is missing");
+    const entry = JSON.parse(await readFile(join(journalRoot, filename), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const record = entry["record"] as {
+      manifest: {
+        source: unknown;
+        provenance: { sourceReference: string };
+      };
+    };
+    record.manifest.source = historicalSource;
+    record.manifest.provenance.sourceReference = "file:///legacy/plugin/source";
+    Object.assign(record.manifest, {
+      license: historical.license,
+      resources: historical.resources,
+    });
+    const payload = { ...entry };
+    delete payload["entryFingerprint"];
+    const entryFingerprint = sha256Fingerprint(canonicalJson(payload));
+    entry["entryFingerprint"] = entryFingerprint;
+    const replacementFilename = `${String(entry["sequence"]).padStart(12, "0")}-${entryFingerprint.slice(
+      "sha256:".length,
+    )}.json`;
+    await writeFile(join(journalRoot, filename), `${canonicalJson(entry)}\n`, "utf8");
+    await rename(join(journalRoot, filename), join(journalRoot, replacementFilename));
+
+    const reopened = new FilePluginManager({
+      stateRoot,
+      resolve: () => Promise.reject(new Error("historical replay must not resolve a source")),
+    });
+    await expect(reopened.list()).resolves.toMatchObject([
+      {
+        manifest: {
+          source: historicalSource,
+          provenance: { sourceReference: "file:///legacy/plugin/source" },
+        },
+      },
+    ]);
+    const presentation = createPluginRegistryPresentation(
+      await reopened.list(),
+      await reopened.inventory(),
+    );
+    const serializedPresentation = JSON.stringify(presentation);
+    expect(serializedPresentation).not.toContain("file:///");
+    expect(serializedPresentation).not.toContain("legacy-registry-secret");
+    expect(serializedPresentation).not.toContain("legacy-resource-secret");
+    expect(serializedPresentation).not.toContain("C:\\\\Users");
+    expect(serializedPresentation).not.toContain("#historical");
+    expect(presentation.records).toMatchObject([
+      {
+        manifest: { legacyMetadata: "REDACTED", sourceKind: "NPM" },
+      },
+    ]);
+    expect(presentation.inventory?.declaredTools).toMatchObject([
+      { description: "REDACTED_LEGACY_METADATA" },
+    ]);
+    await expect(
+      reopened.disable({
+        schemaVersion: "hpi-plugin-disable.v1",
+        operationId: "op_plugin-disable-legacy-history",
+        operationFingerprint: `sha256:${"d".repeat(64)}`,
+        pluginId: "plugin_legacy-history",
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({ outcome: "APPLIED" });
   });
 
   it("installs exact local/npm/Git sources without loading plugin code", async () => {
@@ -277,6 +454,45 @@ describe("Task 10 standard Pi Plugin manager", () => {
     expect(resolve).toHaveBeenCalledOnce();
   });
 
+  it("treats every Pi built-in tool override as reserved before activation", async () => {
+    for (const [index, builtIn] of [
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "grep",
+      "find",
+      "ls",
+    ].entries()) {
+      const root = await createTemporaryTestDirectory(
+        tmpdir(),
+        `hunter-pi-task10-built-in-${builtIn}-`,
+      );
+      const source: PluginSource = {
+        kind: "LOCAL",
+        label: `built-in-${builtIn}-fixture`,
+        pathFingerprint: fixtureFingerprint,
+        contentFingerprint: fixtureFingerprint,
+      };
+      const suffix = `built-in-${String(index)}`;
+      const manager = new FilePluginManager({
+        stateRoot: join(root, "state"),
+        resolve: (candidate) => Promise.resolve(manifestFor(candidate, suffix, builtIn)),
+        compatibilityVerifierFingerprint: fixtureFingerprint,
+        verifyCompatibility: verifiedCompatibility,
+      });
+
+      await manager.install(installRequest(source, suffix));
+
+      const startup = await manager.startup();
+      expect(startup.mode).toBe("SAFE_MODE");
+      expect(startup.reasons).toEqual(["PLUGIN_QUARANTINED", "RESERVED_RESOURCE_COLLISION"]);
+      const inventory = await manager.inventory();
+      expect(inventory.effectiveTools).toEqual([]);
+      expect(inventory.conflicts.some((conflict) => conflict.resourceName === builtIn)).toBe(true);
+    }
+  });
+
   it("persists disable/remove and rejects operation identity reuse", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task10-lifecycle-");
     const source: PluginSource = {
@@ -294,6 +510,15 @@ describe("Task 10 standard Pi Plugin manager", () => {
     });
     const request = installRequest(source, "lifecycle");
     await manager.install(request);
+    const missingCommittedEntry = Object.assign(new Error("committed entry disappeared"), {
+      code: "ENOENT",
+    });
+    await expect(
+      new FilePluginJournal({
+        stateRoot: join(root, "state", "journal"),
+        readEntry: () => Promise.reject(missingCommittedEntry),
+      }).read(),
+    ).rejects.toBeInstanceOf(PluginJournalCorruptError);
     await expect(manager.install(request)).resolves.toMatchObject({ outcome: "APPLIED" });
     await expect(
       manager.install({
@@ -366,5 +591,28 @@ describe("Task 10 standard Pi Plugin manager", () => {
       trust: "USER_APPROVED",
       isolation: "PROCESS_AUTHORITY",
     });
+  });
+
+  it("serializes complete Plugin lifecycle transactions", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task10-lifecycle-lock-");
+    const stateRoot = join(root, "state");
+    let active = 0;
+    let maximumActive = 0;
+
+    await Promise.all(
+      Array.from({ length: 4 }, () =>
+        withPluginLifecycleTransaction(stateRoot, async () => {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          try {
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, 15));
+          } finally {
+            active -= 1;
+          }
+        }),
+      ),
+    );
+
+    expect(maximumActive).toBe(1);
   });
 });

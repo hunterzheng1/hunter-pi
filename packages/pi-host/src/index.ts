@@ -108,3 +108,43 @@ export {
   type PiPublicInterfaceProbeReport,
   type PiPublicInterfaceSurfaces,
 } from "./schemas.js";
+export {
+  PI_PACKAGE_INSTALL_WORKER_ARGUMENT,
+  type PiPackageInstallWorkerPayload,
+} from "./pi-package-install-contract.js";
+export { runPiPackageInstallWorkerPayload } from "./pi-package-install-worker.js";
+export {
+  PiPackageManifestResolver,
+  createLocalPiPluginSource,
+  createPiPackageInstallWorkerArguments,
+  createPiPackageNpmCommand,
+  fingerprintNpmRegistryIntegrity,
+  fingerprintPiPackageDirectory,
+  fingerprintPiPackageResource,
+  type PiPackageInspection,
+  type PiPackageInstallBudget,
+  type PiPackageManifestResolverOptions,
+  type PiPackageRuntimeBinding,
+  type PiPackageRuntimeResource,
+} from "./pi-package-resolver.js";
+export {
+  FilePiPackageBindingStore,
+  piPackageRuntimeBindingReceiptSchema,
+  prepareQualifiedPiPluginActivation,
+  type PiPluginActivationCompatibilityContext,
+  type PiPackageRuntimeBindingReceipt,
+  type QualifiedPiPluginActivation,
+} from "./plugin-activation.js";
+export {
+  HpiPluginOperationError,
+  hpiPluginOperationError,
+  type HpiPluginOperationErrorCode,
+} from "./plugin-errors.js";
+export {
+  PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
+  fingerprintPiPackageManifest,
+  piPackageQualificationReceiptSchema,
+  qualifyPiPackageInspection,
+  readPiPackageQualificationReceipt,
+  type PiPackageQualificationReceipt,
+} from "./plugin-qualification.js";

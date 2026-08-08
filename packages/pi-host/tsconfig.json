@@ -11,6 +11,8 @@
   "references": [
     { "path": "../domain" },
     { "path": "../engine-contracts" },
-    { "path": "../execution" }
+    { "path": "../evidence" },
+    { "path": "../execution" },
+    { "path": "../plugin-manager" }
   ]
 }

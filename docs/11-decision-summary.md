@@ -30,6 +30,13 @@ The following decisions form the initial owner-approved Hunter Pi baseline.
 24. Run outcome and Archive status are separate. Any ready, failed, blocked, cancelled, or incomplete Run may be archived without rewriting its outcome.
 25. Local-first means local canonical state, not zero network egress. Model-provider data categories, destination, external retention limits, and Hunter-controlled telemetry/network settings are disclosed and acknowledged before first send.
 26. Hunter Pi original source and documentation use the MIT License. Third-party material retains its own terms and requires an immutable NOTICE/provenance record before incorporation or publication.
+27. The standard Pi Package path may metadata-qualify and activate exact non-executable resources,
+    but executable extensions remain quarantined until an independent exact compatibility verifier
+    exists. Runtime path bindings stay device-local; portable Manifest and qualification Evidence
+    remain path-free. A failed startup revalidation selects Safe Mode rather than evaluating the
+    package. Qualified runtime bytes come from a Hunter-owned read-only content snapshot rather than
+    the mutable source; bounded child-process installation and exact managed-snapshot cleanup are
+    required. This is not an OS-containment claim against same-authority concurrent mutation.
 
 ## Open owner decisions
 

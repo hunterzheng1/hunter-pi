@@ -246,6 +246,9 @@ export interface HpiPaths {
   readonly configurationFile: string;
   readonly piAgentDirectory: string;
   readonly sessionDirectory: string;
+  readonly pluginRegistryDirectory: string;
+  readonly pluginBindingDirectory: string;
+  readonly pluginPackageDirectory: string;
 }
 
 export function resolveHpiPaths(
@@ -271,6 +274,9 @@ export function resolveHpiPaths(
     configurationFile: join(root, "config.json"),
     piAgentDirectory: join(root, "engine", "agent"),
     sessionDirectory: join(root, "sessions"),
+    pluginRegistryDirectory: join(root, "plugins", "registry"),
+    pluginBindingDirectory: join(root, "plugins", "bindings"),
+    pluginPackageDirectory: join(root, "plugins", "packages"),
   };
 }
 
@@ -453,10 +459,16 @@ export async function assertHpiRuntimePathsSafe(paths: HpiPaths): Promise<void> 
   assertContainedPath(paths.root, paths.configurationFile);
   assertContainedPath(paths.root, paths.piAgentDirectory);
   assertContainedPath(paths.root, paths.sessionDirectory);
+  assertContainedPath(paths.root, paths.pluginRegistryDirectory);
+  assertContainedPath(paths.root, paths.pluginBindingDirectory);
+  assertContainedPath(paths.root, paths.pluginPackageDirectory);
   await assertDirectoryIsNotLink(paths.root);
   await Promise.all([
     assertPhysicalDirectoryChain(paths.root, paths.piAgentDirectory),
     assertPhysicalDirectoryChain(paths.root, paths.sessionDirectory),
+    assertPhysicalDirectoryChain(paths.root, paths.pluginRegistryDirectory),
+    assertPhysicalDirectoryChain(paths.root, paths.pluginBindingDirectory),
+    assertPhysicalDirectoryChain(paths.root, paths.pluginPackageDirectory),
     assertPhysicalFileIfPresent(paths.configurationFile),
     assertPhysicalFileIfPresent(join(paths.piAgentDirectory, "auth.json")),
     assertPhysicalFileIfPresent(join(paths.piAgentDirectory, "models.json")),
@@ -465,6 +477,13 @@ export async function assertHpiRuntimePathsSafe(paths: HpiPaths): Promise<void> 
     await assertPhysicalRuntimeTree(paths.piAgentDirectory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  for (const metadataDirectory of [paths.pluginRegistryDirectory, paths.pluginBindingDirectory]) {
+    try {
+      await assertPhysicalRuntimeTree(metadataDirectory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 
@@ -565,5 +584,8 @@ async function ensurePhysicalDirectory(root: string, target: string): Promise<vo
 export async function prepareHpiRuntimeDirectories(paths: HpiPaths): Promise<void> {
   await ensurePhysicalDirectory(paths.root, paths.piAgentDirectory);
   await ensurePhysicalDirectory(paths.root, paths.sessionDirectory);
+  await ensurePhysicalDirectory(paths.root, paths.pluginRegistryDirectory);
+  await ensurePhysicalDirectory(paths.root, paths.pluginBindingDirectory);
+  await ensurePhysicalDirectory(paths.root, paths.pluginPackageDirectory);
   await assertHpiRuntimePathsSafe(paths);
 }

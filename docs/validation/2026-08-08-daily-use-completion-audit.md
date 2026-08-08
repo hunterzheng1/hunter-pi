@@ -50,17 +50,45 @@ Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 
 ## Task 10 — standard Pi Packages
 
-Status: `PARTIAL`; user Plugin activation remains blocked.
+Status: `IMPLEMENTATION COMPLETE / HOSTED EVIDENCE PENDING` within the exact resource-only package
+boundary; arbitrary executable Plugin compatibility and OS containment remain `NOT_PROVEN`.
 
-The current module proves metadata parsing, an append-only lifecycle journal, and policy-shaped
-Compatibility/Trust/Isolation values in fixtures. The manifest boundary now rejects `file:`,
-non-HTTPS, userinfo-bearing, query-bearing, and fragment-bearing package/provenance URLs. It does
-not yet prove standard Pi package installation, effective post-load resource graphs, two
-representative external packages, or OS containment. Until exact
-release/Engine/platform/configuration/verifier identities are durable, no arbitrary package may
-be called compatible, trusted, or isolated.
+The replacement implementation now proves within its current local/contract boundary:
 
-Relevant implementation: [`contracts.ts`](../../packages/plugin-manager/src/contracts.ts) and
+- real public PackageManager metadata resolution for exact LOCAL and explicitly selected Pi-import
+  fixtures, plus exact NPM-SRI and Git-commit/tree adapter contracts; a bounded public npm install
+  also passed through the installed single-artifact CLI on the current Windows development machine,
+  including quarantine and managed removal, but real public Git and lifecycle attack-package
+  installation remain `NOT_RUN` in platform Evidence. One post-hardening rerun first exposed a
+  transient compile-cache enumeration race; its failure is retained in the Task 10 plan, the
+  regression is fixed, and the exact local observation subsequently passed;
+- no extension evaluation during metadata resolution, qualification, inventory, startup, or Safe
+  Mode, including two locked external Pi examples and five frozen malicious fixture classes;
+- portable v2 Manifests and qualification receipts separated from exact device-local runtime path
+  bindings, with private/credential-shaped metadata rejected and v1 journal parsing frozen to its
+  historical contract;
+- append-only install/disable/remove replay, reserved Hunter/Pi built-in collision rejection, and
+  serialized cross-process lifecycle mutations, plus automatic Safe Mode for quarantine,
+  corruption, collision, missing/tampered bindings, or changed package resources;
+- exact startup activation for metadata-qualified resource-only skills/prompts/themes from a
+  Hunter-owned, content-addressed, read-only snapshot; installation has finite time/output/tree/free
+  space budgets, private empty npm/Git credential configuration, single-artifact worker routing,
+  and failed generations are removed.
+
+Executable extensions remain `UNVERIFIED` and quarantined in the standard path. Ordinary extension
+code would retain `PROCESS_AUTHORITY`; no permission profile is presented as an OS sandbox, and a
+same-authority attacker changing a snapshot after final revalidation is not claimed contained.
+Registry removal deletes the validated Hunter-owned runtime snapshot/binding while preserving
+append-only journal/qualification history; LOCAL and selected PI source directories are untouched.
+Package-tree hashing excludes `.git` and `node_modules`, so this audit does not infer extension
+dependency-closure qualification from the resource-only result.
+
+The 18-test Task 10 contract matrix, platform probe, and exact Windows/Ubuntu comparator are checked
+in, but their clean-commit hosted receipts remain `PENDING` until CI runs. Relevant implementation:
+[`pi-package-resolver.ts`](../../packages/pi-host/src/pi-package-resolver.ts),
+[`plugin-activation.ts`](../../packages/pi-host/src/plugin-activation.ts),
+[`plugin-qualification.ts`](../../packages/pi-host/src/plugin-qualification.ts),
+[`contracts.ts`](../../packages/plugin-manager/src/contracts.ts), and
 [`manager.ts`](../../packages/plugin-manager/src/manager.ts).
 
 ## Task 11 — portable release and updates
@@ -109,8 +137,8 @@ credentials, the Hunter Pi repository, or disposable fixtures.
 
 1. Close Task 9 process/lease finality, crash recovery, immutable receipt, and platform Evidence
    gates.
-2. Close Task 10 reference privacy and exact Compatibility/Trust/Isolation identity gates before
-   enabling any user package.
+2. Run and compare the exact Task 10 Windows/Ubuntu receipts before treating its resource-only
+   package path as closed; keep executable extensions quarantined.
 3. Implement and verify the Task 11 Windows activation, migration, rollback, exact portable
    artifact, signing/promotion, and machine Evidence path.
 4. Bind Task 12 evaluation to immutable non-fixture Archives and exact Provider authorization.

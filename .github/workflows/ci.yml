@@ -47,7 +47,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (Task 9 acceptance runs once in its Evidence probe)
+      - name: Unit tests (Task 9 and Task 10 acceptance run once in their Evidence probes)
         run: npm run test:ci
 
       - name: Strict compiler fixture
@@ -105,8 +105,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Run Task 10 package-safety probe
+        run: >-
+          npm run probe:task10:compiled --
+          --output .artifacts/task10-platform/${{ runner.os }}.json
+
+      - name: Upload Task 10 platform receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task10-platform-${{ runner.os }}
+          path: .artifacts/task10-platform/${{ runner.os }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   pi-evidence-consistency:
-    name: Pi + Task 9 Evidence / Windows + Ubuntu identity
+    name: Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -178,6 +192,33 @@ jobs:
         with:
           name: task9-platform-consistency
           path: .artifacts/task9-platform-aggregate/consistency.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Download Windows Task 10 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task10-platform-Windows
+          path: .artifacts/task10-platform-aggregate/windows
+
+      - name: Download Ubuntu Task 10 receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: task10-platform-Linux
+          path: .artifacts/task10-platform-aggregate/ubuntu
+
+      - name: Compare exact Task 10 package-safety identities
+        run: >-
+          npm run compare:task10-evidence:compiled --
+          --windows .artifacts/task10-platform-aggregate/windows/Windows.json
+          --ubuntu .artifacts/task10-platform-aggregate/ubuntu/Linux.json
+          --output .artifacts/task10-platform-aggregate/consistency.json
+
+      - name: Upload Task 10 consistency receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task10-platform-consistency
+          path: .artifacts/task10-platform-aggregate/consistency.json
           if-no-files-found: error
           retention-days: 14
 

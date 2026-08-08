@@ -57,16 +57,18 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(workflow).toContain("run: npm run probe:pi:compiled");
     expect(workflow).toContain("run: npm run probe:task7:compiled");
     expect(workflow).toContain("npm run probe:task9:compiled");
+    expect(workflow).toContain("npm run probe:task10:compiled");
     expect(workflow).toContain("npm run compare:task7-evidence:compiled");
     expect(workflow).toContain("npm run compare:task9-evidence:compiled");
+    expect(workflow).toContain("npm run compare:task10-evidence:compiled");
     expect(workflow).not.toContain("name: Managed process platform tests");
     expect(workflow).not.toMatch(
-      /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7|probe:task9)(?:\s|$)/u,
+      /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7|probe:task9|probe:task10)(?:\s|$)/u,
     );
-    expect(workflow).not.toMatch(/npm run compare:task(?:7|9)-evidence(?:\s|$)/u);
+    expect(workflow).not.toMatch(/npm run compare:task(?:7|9|10)-evidence(?:\s|$)/u);
   });
 
-  it("reuses quality and Pi aggregation jobs for Task 9 platform Evidence", () => {
+  it("reuses quality and Pi aggregation jobs for Task 9 and Task 10 platform Evidence", () => {
     const qualitySection =
       /\x20{2}quality:\r?\n([\s\S]*?)\r?\n\x20{2}pi-evidence-consistency:/u.exec(workflow)?.[1];
     const aggregateSection =
@@ -80,7 +82,14 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(aggregateSection).toContain("Download Ubuntu Task 9 receipt");
     expect(aggregateSection).toContain("Compare exact Task 9 platform identities");
     expect(aggregateSection).toContain("Upload Task 9 consistency receipt");
+    expect(qualitySection).toContain("Run Task 10 package-safety probe");
+    expect(qualitySection).toContain("Upload Task 10 platform receipt");
+    expect(aggregateSection).toContain("Download Windows Task 10 receipt");
+    expect(aggregateSection).toContain("Download Ubuntu Task 10 receipt");
+    expect(aggregateSection).toContain("Compare exact Task 10 package-safety identities");
+    expect(aggregateSection).toContain("Upload Task 10 consistency receipt");
     expect(workflow).not.toMatch(/^\x20{2}task9-platform:/mu);
+    expect(workflow).not.toMatch(/^\x20{2}task10-platform:/mu);
   });
 
   it("runs the Task 9 daily-use matrix once inside its Evidence probe", () => {
@@ -101,13 +110,23 @@ describe("GitHub Actions CI efficiency policy", () => {
     }
     expect(qualityTestScript).toContain("--exclude test/managed-process-platform.test.ts");
     expect(qualityTestScript).not.toContain("task9-platform-evidence.test.ts");
+    for (const path of [
+      "test/task10-plugin-manager.test.ts",
+      "test/task10-pi-package-adapter.test.ts",
+      "test/task10-plugin-activation.test.ts",
+    ]) {
+      expect(qualityTestScript).toContain(`--exclude ${path}`);
+    }
+    expect(qualityTestScript).not.toContain("task10-platform-evidence.test.ts");
 
     const qualitySection =
       /\x20{2}quality:\r?\n([\s\S]*?)\r?\n\x20{2}pi-evidence-consistency:/u.exec(workflow)?.[1];
     const buildIndex = qualitySection?.indexOf("run: npm run build") ?? -1;
     const task9ProbeIndex = qualitySection?.indexOf("npm run probe:task9:compiled") ?? -1;
+    const task10ProbeIndex = qualitySection?.indexOf("npm run probe:task10:compiled") ?? -1;
     expect(buildIndex).toBeGreaterThanOrEqual(0);
     expect(task9ProbeIndex).toBeGreaterThan(buildIndex);
+    expect(task10ProbeIndex).toBeGreaterThan(buildIndex);
   });
 
   it("preserves and retries only structured Task 7 test-execution failures once", () => {

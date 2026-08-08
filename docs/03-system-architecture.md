@@ -138,6 +138,35 @@ Uses standard Pi package discovery and loading while maintaining a Hunter-owned 
 
 Core Extension names and workflow event channels are reserved. A Plugin that overrides critical tools or lifecycle hooks is `INCOMPATIBLE` with the affected Managed policy unless the exact compatibility suite proves the resulting behavior. Even then, Compatibility `VERIFIED` does not imply safety: ordinary Pi extensions share the Agent process and remain `PROCESS_AUTHORITY` unless a separately verified isolation adapter contains them.
 
+The fixed Pi Host adapter resolves LOCAL, NPM, Git, and explicitly selected Pi-import sources through
+Pi's public `DefaultPackageManager`. NPM/Git installation runs in a sanitized child process with
+finite elapsed, output, file-count, byte, and free-space budgets; lifecycle scripts are disabled
+before Hunter qualification. npm/Git global credential configuration is replaced by private empty
+configuration and credential-bearing proxy URLs are not inherited. The installed single-artifact
+CLI routes the child through its integrity-stamped product shell, so packaging cannot omit an
+untracked companion executable. The portable v2 Manifest stores only normalized package-relative
+resource paths and fingerprints. Qualified bytes are copied to a Hunter-owned, content-addressed,
+read-only snapshot, while its absolute runtime paths remain in a separate device-local binding
+store. Every normal startup revalidates the snapshot tree, each selected resource, and the binding
+before passing an explicit `--extension`, `--skill`, `--prompt-template`, or `--theme` path to Pi.
+Hunter Pi disables Pi's ambient extension, skill, prompt-template, theme, and context-file discovery
+on every launch, including Managed Change, so only those explicitly qualified paths can enter the
+runtime. Activation also rebinds the stored Compatibility Receipt to the current Hunter Pi release,
+Pi Engine release/fingerprint, platform, resource-configuration fingerprint, verifier, and the exact
+physical qualification Evidence file. Historical v1 journal records remain replayable, but CLI list
+and doctor views replace their legacy references and descriptions with fixed redaction markers.
+
+The standard metadata verifier marks only packages with no executable extension surface as
+Compatibility `VERIFIED`. Such packages may contribute exact skill, prompt, and theme resources.
+Executable extensions remain `UNVERIFIED` and quarantined unless a later independent verifier proves
+the exact release/Engine/platform/configuration tuple. Quarantine, journal corruption, reserved or
+duplicate resources, a missing binding, or post-qualification drift causes fail-closed Safe Mode;
+none of those checks imply an OS sandbox or protection from a same-authority attacker that changes
+the snapshot after the final revalidation. Registry removal deletes only validated Hunter-owned
+snapshots/bindings and never deletes LOCAL or explicitly selected PI source directories.
+Removal first validates the binding filename and payload plus the current snapshot fingerprint; a
+drifted binding or snapshot is retained and fails closed instead of authorizing deletion.
+
 ### Verification
 
 Runs declared checks outside the Agent's success assertion. It binds the command definition, workspace identity, environment identity, inputs, outputs, timestamps, and result digest into an immutable receipt.

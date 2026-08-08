@@ -420,6 +420,27 @@ try {
     USERPROFILE: cliProfile,
   });
 
+  const installWorkerRoutingResult = spawnSync(
+    process.execPath,
+    [installedProductShell, "--hpi-internal-pi-package-install-worker-v1", "invalid-payload"],
+    {
+      cwd: cliConsumerDirectory,
+      encoding: "utf8",
+      env: safeCliEnvironment,
+      maxBuffer: subprocessOutputLimitBytes,
+      shell: false,
+      windowsHide: true,
+    },
+  );
+  if (
+    installWorkerRoutingResult.error !== undefined ||
+    installWorkerRoutingResult.status !== 1 ||
+    installWorkerRoutingResult.stdout.length !== 0 ||
+    installWorkerRoutingResult.stderr.length !== 0
+  ) {
+    throw new Error("Packaged hpi did not route its silent bounded-install worker entrypoint.");
+  }
+
   const versionResult = spawnSync(process.execPath, [installedProductShell, "version", "--json"], {
     cwd: cliConsumerDirectory,
     encoding: "utf8",
@@ -726,6 +747,109 @@ try {
   const coreCheck = configuredDoctor.checks.find((check) => check.id === "core_extension");
   if (coreCheck?.status !== "DETECTED") {
     throw new Error("Packaged Hunter Pi did not detect its physical Core Extension entrypoint.");
+  }
+  if (process.env["HPI_TASK10_PUBLIC_NPM_OBSERVATION"] === "1") {
+    const publicNpmSri = runNpm(
+      [
+        "view",
+        "picocolors@1.1.1",
+        "dist.integrity",
+        "--registry=https://registry.npmjs.org",
+        "--silent",
+      ],
+      cliConsumerDirectory,
+      join(npmIsolationRoot, "task10-public-npm-view"),
+      npmDiagnosticRoots,
+    ).trim();
+    if (!/^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/u.test(publicNpmSri)) {
+      throw new Error("Public npm observation did not receive an exact registry SRI.");
+    }
+    const publicInstall = spawnSync(
+      process.execPath,
+      [
+        installedProductShell,
+        "plugin",
+        "install",
+        "npm",
+        "picocolors@1.1.1",
+        "--integrity",
+        publicNpmSri,
+        "--registry",
+        "https://registry.npmjs.org",
+        "--acknowledge-provenance",
+        "--allow-process-authority",
+      ],
+      {
+        cwd: cliConsumerDirectory,
+        encoding: "utf8",
+        env: safeCliEnvironment,
+        maxBuffer: subprocessOutputLimitBytes,
+        shell: false,
+        windowsHide: true,
+      },
+    );
+    if (publicInstall.error !== undefined || publicInstall.status !== 0) {
+      throw new Error(
+        summarizeProcessFailure("Packaged hpi public npm observation", {
+          status: publicInstall.status,
+          stderr: publicInstall.stderr,
+          stdout: publicInstall.stdout,
+        }),
+      );
+    }
+    const publicInstallReceipt = z
+      .looseObject({
+        status: z.literal("QUARANTINED"),
+        manifest: z.looseObject({
+          pluginId: z.string(),
+          executableSurface: z.literal("UNKNOWN_NOT_EXECUTED"),
+          source: z.strictObject({
+            kind: z.literal("NPM"),
+            registry: z.literal("https://registry.npmjs.org"),
+            packageName: z.literal("picocolors"),
+            version: z.literal("1.1.1"),
+            integrity: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+          }),
+        }),
+      })
+      .parse(parseJson(publicInstall.stdout));
+    const publicRemove = spawnSync(
+      process.execPath,
+      [installedProductShell, "plugin", "remove", publicInstallReceipt.manifest.pluginId],
+      {
+        cwd: cliConsumerDirectory,
+        encoding: "utf8",
+        env: safeCliEnvironment,
+        maxBuffer: subprocessOutputLimitBytes,
+        shell: false,
+        windowsHide: true,
+      },
+    );
+    if (publicRemove.error !== undefined || publicRemove.status !== 0) {
+      throw new Error(
+        summarizeProcessFailure("Packaged hpi public npm cleanup", {
+          status: publicRemove.status,
+          stderr: publicRemove.stderr,
+          stdout: publicRemove.stdout,
+        }),
+      );
+    }
+    z.looseObject({
+      filesDeleted: z.literal(true),
+      managedBindingsDeleted: z.literal(1),
+      managedSnapshotsDeleted: z.literal(1),
+      journalHistoryRetained: z.literal(true),
+    }).parse(parseJson(publicRemove.stdout));
+    const publicOutput = `${publicInstall.stdout}\n${publicRemove.stdout}`;
+    if (
+      publicOutput.includes(temporaryRoot) ||
+      /api[_-]?key|cookie|authorization|bearer/iu.test(publicOutput)
+    ) {
+      throw new Error("Packaged public npm observation exposed private or credential-shaped data.");
+    }
+    process.stdout.write(
+      "Optional packaged public npm observation passed (picocolors@1.1.1, quarantined, removed).\n",
+    );
   }
   await proveInstalledCoreInputGate({
     installedPiRoot,

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import { link, mkdir, open, readFile, readdir, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import type { z } from "zod";
 
@@ -22,7 +23,8 @@ import {
   pluginImportFromPiRequestSchema,
   pluginInstallRequestSchema,
   pluginIsolationVerificationSchema,
-  pluginInventorySchema,
+  pluginInventoryV1Schema,
+  pluginInventoryV2Schema,
   pluginJournalEntrySchema,
   pluginManifestSchema,
   pluginOperationReceiptSchema,
@@ -72,6 +74,13 @@ function digestOf(value: unknown): Fingerprint {
   return fingerprintSchema.parse(
     `sha256:${createHash("sha256").update(canonicalJson(value), "utf8").digest("hex")}`,
   );
+}
+
+export function pluginCompatibilityConfigurationFingerprint(
+  manifestInput: PluginManifest,
+): Fingerprint {
+  const manifest = pluginManifestSchema.parse(manifestInput);
+  return digestOf({ source: manifest.source, resources: manifest.resources });
 }
 
 function installRequestFingerprint(
@@ -126,6 +135,18 @@ async function withJournalAppendLock<T>(key: string, operation: () => Promise<T>
   } finally {
     if (journalAppendLocks.get(key) === current) journalAppendLocks.delete(key);
   }
+}
+
+export function withPluginLifecycleTransaction<T>(
+  stateRoot: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const canonicalKey = resolve(stateRoot);
+  const lockName = createHash("sha256").update(canonicalKey, "utf8").digest("hex");
+  const lockPath = join(dirname(canonicalKey), ".plugin-lifecycle-locks", `${lockName}.lock`);
+  return withJournalAppendLock(`lifecycle:${canonicalKey}`, () =>
+    withDurableMutationLock(lockPath, operation),
+  );
 }
 
 async function writeImmutableAtomically(options: {
@@ -185,43 +206,61 @@ function generatedIdentity(prefix: "compat" | "assurance", value: unknown): stri
 
 export interface FilePluginJournalOptions {
   readonly stateRoot: string;
+  readonly readEntry?: (path: string) => Promise<string>;
+}
+
+export class PluginJournalCorruptError extends Error {
+  public constructor(cause?: unknown) {
+    super("Plugin journal is corrupt or incompatible", cause === undefined ? undefined : { cause });
+    this.name = "PluginJournalCorruptError";
+  }
 }
 
 export class FilePluginJournal {
   readonly #stateRoot: string;
+  readonly #readEntry: (path: string) => Promise<string>;
 
   public constructor(options: FilePluginJournalOptions) {
     this.#stateRoot = resolve(options.stateRoot);
+    this.#readEntry = options.readEntry ?? ((path) => readFile(path, "utf8"));
   }
 
   public async read(): Promise<readonly PluginJournalEntry[]> {
     await assertSafeDirectoryPath(this.#stateRoot);
-    let entries: string[];
     try {
-      const directoryEntries = await readdir(this.#stateRoot, { withFileTypes: true });
-      if (
-        directoryEntries.some(
-          (entry) =>
-            !entry.name.startsWith(".pending-") &&
-            entry.name !== ".journal-mutation-lock" &&
-            (!entry.isFile() || !entry.name.endsWith(".json")),
-        )
-      ) {
-        throw new Error("plugin journal contains an unexpected committed entry");
-      }
-      entries = directoryEntries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-        .map((entry) => entry.name);
+      return await this.#readExisting();
+    } catch (error) {
+      if (error instanceof PluginJournalCorruptError) throw error;
+      throw new PluginJournalCorruptError(error);
+    }
+  }
+
+  async #readExisting(): Promise<readonly PluginJournalEntry[]> {
+    let directoryEntries: Dirent[];
+    try {
+      directoryEntries = await readdir(this.#stateRoot, { withFileTypes: true });
     } catch (error) {
       if (isMissing(error)) return [];
       throw error;
     }
-
+    if (
+      directoryEntries.some(
+        (entry) =>
+          !entry.name.startsWith(".pending-") &&
+          entry.name !== ".journal-mutation-lock" &&
+          (!entry.isFile() || !entry.name.endsWith(".json")),
+      )
+    ) {
+      throw new PluginJournalCorruptError();
+    }
+    const entries = directoryEntries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name);
     const parsed = await Promise.all(
       entries.map(async (filename) => ({
         filename,
         entry: pluginJournalEntrySchema.parse(
-          JSON.parse(await readFile(join(this.#stateRoot, filename), "utf8")) as unknown,
+          JSON.parse(await this.#readEntry(join(this.#stateRoot, filename))) as unknown,
         ),
       })),
     );
@@ -235,7 +274,7 @@ export class FilePluginJournal {
         entry.entryFingerprint !== digestOf(entryPayload(entry)) ||
         entryFilename(entry) !== item.filename
       ) {
-        throw new Error("plugin journal failed sequence, hash, or filename validation");
+        throw new PluginJournalCorruptError();
       }
       previous = entry.entryFingerprint;
     }
@@ -333,7 +372,19 @@ export class FilePluginManager implements PluginManager {
       options.isolationVerifierFingerprint === undefined
         ? undefined
         : fingerprintSchema.parse(options.isolationVerifierFingerprint);
-    this.#reservedTools = new Set(options.reservedTools ?? ["hunter-status", "workflow-status"]);
+    this.#reservedTools = new Set(
+      options.reservedTools ?? [
+        "hunter-status",
+        "workflow-status",
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "grep",
+        "find",
+        "ls",
+      ],
+    );
     this.#reservedHooks = new Set(options.reservedHooks ?? ["hunter-workflow-lifecycle"]);
     this.#bundledPluginIds = new Set(options.bundledPluginIds ?? []);
     this.#verifyCompatibility =
@@ -435,7 +486,8 @@ export class FilePluginManager implements PluginManager {
     );
     if (replay !== undefined) return replay;
     const records = this.#project(entries);
-    if (!records.has(parsed.pluginId)) {
+    const current = records.get(parsed.pluginId);
+    if (current === undefined) {
       return this.#append({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
@@ -454,6 +506,7 @@ export class FilePluginManager implements PluginManager {
       action: "REMOVE",
       pluginId: parsed.pluginId,
       outcome: "APPLIED",
+      journalVersion: current.schemaVersion === "hpi-plugin-record.v2" ? "v2" : "v1",
       observedAt: parsed.observedAt,
     });
   }
@@ -636,10 +689,7 @@ export class FilePluginManager implements PluginManager {
       engineReleaseId: this.#engineReleaseId,
       engineReleaseFingerprint: this.#engineReleaseFingerprint,
       platformFingerprint: this.#platformFingerprint,
-      configurationFingerprint: digestOf({
-        source: manifest.source,
-        resources: manifest.resources,
-      }),
+      configurationFingerprint: pluginCompatibilityConfigurationFingerprint(manifest),
       outcome: compatibility,
       checkedAt: request.observedAt,
       evidenceIds,
@@ -663,7 +713,10 @@ export class FilePluginManager implements PluginManager {
         ? "ENABLED"
         : "QUARANTINED";
     return pluginRecordSchema.parse({
-      schemaVersion: "hpi-plugin-record.v1",
+      schemaVersion:
+        manifest.schemaVersion === "hpi-plugin-manifest.v2"
+          ? "hpi-plugin-record.v2"
+          : "hpi-plugin-record.v1",
       pluginId: manifest.pluginId,
       manifest,
       state,
@@ -777,13 +830,52 @@ export class FilePluginManager implements PluginManager {
                 .map((resource) => ({ pluginId: record.pluginId, ...resource }))
             : [],
         );
-    return pluginInventorySchema.parse({
-      schemaVersion: "hpi-plugin-inventory.v1",
+    if (records.every((record) => record.schemaVersion === "hpi-plugin-record.v1")) {
+      return pluginInventoryV1Schema.parse({
+        schemaVersion: "hpi-plugin-inventory.v1",
+        safeMode,
+        declaredTools,
+        declaredHooks,
+        effectiveTools,
+        effectiveHooks,
+        conflicts,
+      });
+    }
+    const piResources = (kind: "extensions" | "skills" | "prompts" | "themes") =>
+      records.flatMap((record) =>
+        record.schemaVersion === "hpi-plugin-record.v2"
+          ? record.manifest.resources[kind].map((resource) => ({
+              pluginId: record.pluginId,
+              ...resource,
+            }))
+          : [],
+      );
+    const effectivePiResources = (kind: "extensions" | "skills" | "prompts" | "themes") =>
+      safeMode
+        ? []
+        : records.flatMap((record) =>
+            record.schemaVersion === "hpi-plugin-record.v2" && record.state === "ENABLED"
+              ? record.manifest.resources[kind].map((resource) => ({
+                  pluginId: record.pluginId,
+                  ...resource,
+                }))
+              : [],
+          );
+    return pluginInventoryV2Schema.parse({
+      schemaVersion: "hpi-plugin-inventory.v2",
       safeMode,
       declaredTools,
       declaredHooks,
       effectiveTools,
       effectiveHooks,
+      declaredExtensions: piResources("extensions"),
+      declaredSkills: piResources("skills"),
+      declaredPrompts: piResources("prompts"),
+      declaredThemes: piResources("themes"),
+      effectiveExtensions: effectivePiResources("extensions"),
+      effectiveSkills: effectivePiResources("skills"),
+      effectivePrompts: effectivePiResources("prompts"),
+      effectiveThemes: effectivePiResources("themes"),
       conflicts,
     });
   }
@@ -830,6 +922,7 @@ export class FilePluginManager implements PluginManager {
     readonly outcome: PluginOperationReceipt["outcome"];
     readonly record?: PluginRecord;
     readonly reason?: string;
+    readonly journalVersion?: "v1" | "v2";
     readonly observedAt: string;
   }): Promise<PluginOperationReceipt> {
     const receipt = pluginOperationReceiptSchema.parse({
@@ -850,8 +943,11 @@ export class FilePluginManager implements PluginManager {
       observedAt: input.observedAt,
     });
     const entries = await this.#journal.read();
+    const journalVersion =
+      input.journalVersion ??
+      (input.record?.schemaVersion === "hpi-plugin-record.v2" ? "v2" : "v1");
     const entryWithoutFingerprint = pluginJournalEntrySchema.parse({
-      schemaVersion: "hpi-plugin-journal.v1",
+      schemaVersion: journalVersion === "v2" ? "hpi-plugin-journal.v2" : "hpi-plugin-journal.v1",
       sequence: entries.length + 1,
       operationId: input.operationId,
       operationFingerprint: input.operationFingerprint,
@@ -863,7 +959,7 @@ export class FilePluginManager implements PluginManager {
       createdAt: input.observedAt,
       previousEntryFingerprint: entries.at(-1)?.entryFingerprint ?? null,
       entryFingerprint: digestOf({
-        schemaVersion: "hpi-plugin-journal.v1",
+        schemaVersion: journalVersion === "v2" ? "hpi-plugin-journal.v2" : "hpi-plugin-journal.v1",
         sequence: entries.length + 1,
         operationId: input.operationId,
         operationFingerprint: input.operationFingerprint,

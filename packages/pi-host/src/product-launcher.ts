@@ -11,6 +11,7 @@ import {
   type HpiPaths,
 } from "./configuration.js";
 import { HPI_CORE_EXTENSION_ID } from "./core-extension.js";
+import type { QualifiedPiPluginActivation } from "./plugin-activation.js";
 
 export type HpiLaunchBlockCode =
   | "CONFIGURATION_REQUIRED"
@@ -54,6 +55,7 @@ export interface CreatePiLaunchPlanOptions {
   readonly displayHeader?: string;
   readonly resolvedProviderDestination?: PiProviderDestination;
   readonly blockPromptInput?: boolean;
+  readonly pluginActivation?: QualifiedPiPluginActivation;
 }
 
 export interface PiProviderDestination {
@@ -228,6 +230,10 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
     "--offline",
     "--no-approve",
     "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
     "--session-dir",
     options.paths.sessionDirectory,
     "--provider",
@@ -238,9 +244,6 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
   if (options.providerAuthConfigured) {
     arguments_.push("--models", qualifiedModel);
   }
-  if (options.safeMode) {
-    arguments_.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files");
-  }
   arguments_.push("--extension", coreExtensionPath);
 
   if (!options.safeMode && configuration.plugins.some((entry) => entry.enabled)) {
@@ -248,6 +251,24 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
       "PLUGIN_CONFIGURATION_INVALID",
       "User plugin activation is not qualified in this developer preview; disable plugins or use Safe Mode.",
     );
+  }
+  if (!options.safeMode && options.pluginActivation !== undefined) {
+    for (const extension of options.pluginActivation.extensions) {
+      requireAbsolutePath(extension, "Qualified Plugin extension path");
+      arguments_.push("--extension", extension);
+    }
+    for (const skill of options.pluginActivation.skills) {
+      requireAbsolutePath(skill, "Qualified Plugin skill path");
+      arguments_.push("--skill", skill);
+    }
+    for (const prompt of options.pluginActivation.prompts) {
+      requireAbsolutePath(prompt, "Qualified Plugin prompt path");
+      arguments_.push("--prompt-template", prompt);
+    }
+    for (const theme of options.pluginActivation.themes) {
+      requireAbsolutePath(theme, "Qualified Plugin theme path");
+      arguments_.push("--theme", theme);
+    }
   }
   if (options.continueSession === true) {
     arguments_.push("--continue");
@@ -339,6 +360,12 @@ export function createQuickSessionHeader(options: {
   readonly configuration: HpiConfiguration;
   readonly repository: { readonly name: string; readonly branch: string; readonly dirty: boolean };
   readonly safeMode: boolean;
+  readonly qualifiedPlugins?: readonly {
+    readonly pluginId: string;
+    readonly compatibility: "VERIFIED";
+    readonly trust: "BUNDLED" | "USER_APPROVED";
+    readonly isolation: "CONTAINED" | "PROCESS_AUTHORITY";
+  }[];
 }): string {
   const configuration = hpiConfigurationSchema.parse(options.configuration);
   const sanitizeDisplayValue = (value: string): string =>
@@ -355,12 +382,18 @@ export function createQuickSessionHeader(options: {
   const permission = options.safeMode ? "SAFE" : configuration.permissionProfile;
   const pluginLines = options.safeMode
     ? ["UserPlugins=IGNORED_SAFE_MODE"]
-    : configuration.plugins
-        .filter((plugin) => plugin.enabled)
-        .map(
+    : [
+        ...configuration.plugins
+          .filter((plugin) => plugin.enabled)
+          .map(
+            (plugin) =>
+              `${sanitizeDisplayValue(plugin.id)} Compatibility=${plugin.compatibility} Trust=${plugin.trust} Isolation=${plugin.isolation}`,
+          ),
+        ...(options.qualifiedPlugins ?? []).map(
           (plugin) =>
-            `${sanitizeDisplayValue(plugin.id)} Compatibility=${plugin.compatibility} Trust=${plugin.trust} Isolation=${plugin.isolation}`,
-        );
+            `${sanitizeDisplayValue(plugin.pluginId)} Compatibility=${plugin.compatibility} Trust=${plugin.trust} Isolation=${plugin.isolation}`,
+        ),
+      ];
   return [
     `Hunter Pi | Mode=QUICK | Repository=${sanitizeDisplayValue(options.repository.name)}@${sanitizeDisplayValue(options.repository.branch)} ${options.repository.dirty ? "DIRTY" : "CLEAN"}`,
     `Provider=${sanitizeDisplayValue(configuration.provider.id)} Model=${model} Permission=${permission}`,

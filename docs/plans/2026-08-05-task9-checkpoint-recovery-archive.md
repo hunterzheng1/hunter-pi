@@ -52,16 +52,20 @@ The provider-neutral contract now rejects cancellation after only `AGENT_RETURNE
 reconciliation, persists process-final, lease-release, and Attempt Finality Receipts across reopen,
 and retains their Evidence in Archive completeness checks. A clean-profile import creates an exact
 archive-bound `READ_ONLY` projection; its v3 device receipt records exact policy reconciliation and
-resumes an interrupted import without manual state editing. The importer rescans the complete
-canonical Archive text and rejects path- or credential-shaped content even when metadata is forged.
+resumes an interrupted import without manual state editing. Intent and final-receipt publication
+also recover after real process termination at every atomic-write boundary while malformed or
+foreign hard-linked remnants fail closed. The importer rescans the complete canonical Archive text
+and rejects path- or credential-shaped content, including quoted JSON credential fields, even when
+metadata is forged.
 
 The durable mutation-lock seam publishes a complete owner record through an atomic no-replace hard
 link. Process identity is a signed Ed25519 challenge-response endpoint; PID is informational and PID
 reuse cannot authorize recovery. One physical-path-normalized reconciliation claim elects the
 winner, immutable receipts bind every recovery fact, and a successor recovers after forced process
 termination at each of the three claim/receipt/removal boundaries. File-backed Writer Leases reuse
-this seam rather than maintaining a weaker second lock implementation. The exact Windows-local v2
-matrix passes 87/87 tests across eight files and binds forced-termination recovery, lease reopen,
+this seam rather than maintaining a weaker second lock implementation. Claim-recovery v2 receipts
+separate the original claim time from the successor's truthful recovery observation time. The exact
+Windows-local v2 matrix passes 89/89 tests across eight files and binds forced-termination recovery, lease reopen,
 second-device projection, finality replay, and privacy. Hosted Windows/Ubuntu execution for the
 final source, real OS power loss, real repositories, and Provider recovery remain open; Task 9 stays
 `PARTIAL` until the hosted receipts and comparator pass.

@@ -28,10 +28,12 @@ real implementations. The following daily-use gates remain open:
   claim/receipt/removal boundaries. Windows-local Evidence passes; hosted Ubuntu, exact aggregate
   comparison, and real OS power loss remain unproven;
 - import/export/delete replay and clean-profile second-device projection now use immutable intents,
-  exact archive/operation identities, v3 policy reconciliation, and interrupted-import resume.
-  A physically separate operator-device pilot remains unproven.
+  exact archive/operation identities, v3 policy reconciliation, quoted-JSON credential rejection,
+  and interrupted-import resume. Intent and final receipt publication recover from process death at
+  every atomic boundary while foreign remnants fail closed. A physically separate operator-device
+  pilot remains unproven.
 
-The Windows-local v2 receipt binds 87/87 fixed daily-use assertions and six direct finality/privacy
+The Windows-local v2 receipt binds 89/89 fixed daily-use assertions and six direct finality/privacy
 checks. It is provider-neutral local Evidence, not a hosted cross-platform or real-repository claim.
 
 The Archive boundary now independently rescans retained Evidence summary and capture text. A

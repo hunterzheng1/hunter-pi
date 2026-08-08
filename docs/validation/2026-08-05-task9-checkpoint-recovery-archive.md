@@ -22,20 +22,26 @@ No real Provider request or user repository mutation was performed.
 - exact archive-bound read-only projection after reopen, v1 import-receipt reconciliation, v3 device
   receipts, immutable import intent, exact policy clone reconciliation, and interrupted-import resume
   without duplicate policy writes or manual file editing;
+- process-termination recovery for device intent and final-receipt publication at all four atomic
+  boundaries, with exact reserved-name/physical-link checks and fail-closed foreign remnants;
 - forced owner/reconciler termination recovery at claim publication, receipt publication, and stale
-  owner removal, including Windows path aliases and File Lease reopen through the same lock seam.
+  owner removal, including Windows path aliases, concurrent successors, truthful v2 recovery
+  observation time, and File Lease reopen through the same lock seam.
 
 ## Local evidence
 
 The current Windows-local Task 9 platform receipt is
-`hpi-task9-platform-receipt.v2` at source `0d7a9b2f39a8616973c474c1e43d15c0f8a68e3d`.
-It passes all 87 assertions in the fixed eight-file daily-use matrix, including three forced-kill
-reconciler boundaries, abandoned File Lease recovery, exact second-device read-only projection,
-interrupted import resume, durable recovery, cancellation, Checkpoint, and Attempt Finality cases.
+`hpi-task9-platform-receipt.v2` at source `0e2a369b5a8ef6c7c49e8d616a00ad4134a91829`.
+It passes all 89 assertions in the fixed eight-file daily-use matrix, including three forced-kill
+reconciler boundaries, eight device-publication process kills, abandoned File Lease recovery, exact
+second-device read-only projection, quoted-JSON privacy rejection, interrupted import resume,
+durable recovery, cancellation, Checkpoint, and Attempt Finality cases.
 The direct finality fixture adds process-final, Writer Lease release, Attempt Finality, durable
 reopen, and privacy checks, for six fact-bound checks in the receipt. The non-duplicated CI test set
-also passes locally (46 files / 393 tests), the focused lock/lease/Archive regression passes (3 files
-/ 58 tests), and the concurrent reconciler case passed 15 consecutive Windows stress iterations.
+also passes locally (46 files / 393 tests), full `npm run verify` passes (55 files / 491 tests plus
+strict compile, build, format, external package install, single-artifact smoke, clean locked install,
+and Pi probe), the focused lock/lease/Archive regression passes (3 files / 60 tests), and the
+concurrent reconciler case passed 15 consecutive Windows stress iterations.
 The implementation never terminates an owner outside the test harness.
 
 Historical Task 6 Evidence remains parseable through the backward-compatible empty

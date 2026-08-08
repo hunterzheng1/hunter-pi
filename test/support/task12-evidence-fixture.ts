@@ -78,7 +78,7 @@ export function completePilotEvidence(
         archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}`,
         archiveFingerprint: fixtureFingerprint,
         sourceFingerprint: oracle.sourceFingerprint,
-        terminalOutcome: "READY" as const,
+        terminalOutcome: [0, 5, 6].includes(index) ? ("INCOMPLETE" as const) : ("READY" as const),
         providerRequestCount: 1,
         providerTokenCount: 100,
         providerCostMinor: 1,

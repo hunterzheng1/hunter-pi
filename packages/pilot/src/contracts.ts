@@ -621,6 +621,26 @@ export const pilotEvidenceSchema = z
       });
     }
     if (
+      new Set(evidence.interruptions.map((item) => item.interruptedRunId)).size !==
+      evidence.interruptions.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["interruptions"],
+        message: "interruption predecessor Run identities must be unique",
+      });
+    }
+    if (
+      new Set(evidence.interruptions.map((item) => item.replacementRunId)).size !==
+      evidence.interruptions.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["interruptions"],
+        message: "interruption replacement Run identities must be unique",
+      });
+    }
+    if (
       new Set(evidence.updateRollbackCycles.map((item) => item.cycleId)).size !==
       evidence.updateRollbackCycles.length
     ) {
@@ -731,6 +751,8 @@ export const pilotEvidenceSchema = z
       if (
         resultByTaskId.get(interruption.taskId) === undefined ||
         interruptedRun?.taskId !== interruption.taskId ||
+        (interruptedRun.terminalOutcome !== "INCOMPLETE" &&
+          interruptedRun.terminalOutcome !== "CANCELLED") ||
         replacementRun?.taskId !== interruption.taskId ||
         replacementRun.replacementOfRunId !== interruption.interruptedRunId ||
         replacementRun.archiveFingerprint !== interruption.replacementArchiveFingerprint ||

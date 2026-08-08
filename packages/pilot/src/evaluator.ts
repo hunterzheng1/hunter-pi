@@ -61,14 +61,20 @@ function median(samples: readonly number[]): number {
 
 function successfullyResumedInterruptionCount(evidence: PilotEvidence): number {
   const runById = new Map(evidence.runArchives.map((run) => [run.runId, run]));
+  const countedReplacementRunIds = new Set<string>();
   return evidence.interruptions.filter((interruption) => {
+    const interrupted = runById.get(interruption.interruptedRunId);
     const replacement = runById.get(interruption.replacementRunId);
-    return (
+    const resumed =
       interruption.resumeOutcome === "READY" &&
+      (interrupted?.terminalOutcome === "INCOMPLETE" ||
+        interrupted?.terminalOutcome === "CANCELLED") &&
       replacement?.replacementOfRunId === interruption.interruptedRunId &&
       replacement.archiveFingerprint === interruption.replacementArchiveFingerprint &&
-      replacement.terminalOutcome === "READY"
-    );
+      replacement.terminalOutcome === "READY";
+    if (!resumed || countedReplacementRunIds.has(interruption.replacementRunId)) return false;
+    countedReplacementRunIds.add(interruption.replacementRunId);
+    return true;
   }).length;
 }
 

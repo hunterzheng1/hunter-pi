@@ -1,10 +1,12 @@
 import { createHmac, randomBytes } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -12,6 +14,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fingerprintSchema, timestampSchema, type Fingerprint } from "@hunter-pi/domain";
 import { z } from "zod";
 
+import { TrustedPilotEvidenceCapture } from "./capture.js";
 import { type PilotEvidence, pilotEvidenceSchema } from "./contracts.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 
@@ -56,6 +59,15 @@ const pilotArchiveStoreReceiptSchema = z.strictObject({
   observedAt: timestampSchema,
   proof: fingerprintSchema,
 });
+
+const pilotArchiveIdentityReceiptSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-archive-identity.v1"),
+  archiveId: archiveIdSchema,
+  archiveFingerprint: fingerprintSchema,
+  observedAt: timestampSchema,
+  proof: fingerprintSchema,
+});
+type PilotArchiveIdentityReceipt = z.infer<typeof pilotArchiveIdentityReceiptSchema>;
 
 export const pilotArchiveSchema = z
   .strictObject({
@@ -113,7 +125,7 @@ export type PilotArchive = z.infer<typeof pilotArchiveSchema>;
 export interface PilotArchiveWriteInput {
   readonly archiveId: string;
   readonly planFingerprint: Fingerprint;
-  readonly evidence: PilotEvidence;
+  readonly capture: TrustedPilotEvidenceCapture;
   readonly observedAt: string;
 }
 
@@ -125,7 +137,9 @@ export class PilotArchiveStoreError extends Error {
 }
 
 const storeKeyFilename = ".pilot-store-key";
+const archiveDirectoryName = "archives";
 const packageFilename = "package.json";
+const archiveIdentityFilenameSuffix = ".identity.json";
 const trustedStoreToken = Symbol("trusted-pilot-archive-store");
 
 function deepFreeze<T>(value: T): T {
@@ -220,7 +234,93 @@ function loadOrCreateStoreKey(stateRoot: string): Buffer {
 }
 
 function packagePath(stateRoot: string, archiveId: string): string {
-  return join(stateRoot, "archives", archiveId, packageFilename);
+  return join(stateRoot, archiveDirectoryName, archiveId, packageFilename);
+}
+
+function identityReceiptPath(stateRoot: string, archiveId: string): string {
+  return join(stateRoot, archiveDirectoryName, `${archiveId}${archiveIdentityFilenameSuffix}`);
+}
+
+function writeImmutableAtomically(path: string, content: string): void {
+  const temporaryPath = join(dirname(path), `.pending-${randomBytes(16).toString("hex")}`);
+  try {
+    // Node's flush option uses the platform-supported file flush primitive;
+    // direct fsyncSync reports EPERM for ordinary files on Windows.
+    writeFileSync(temporaryPath, content, { flag: "wx", mode: 0o600, flush: true });
+    linkSync(temporaryPath, path);
+  } catch {
+    throw new PilotArchiveStoreError("pilot Archive file could not be written immutably");
+  } finally {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Best-effort cleanup; the pending file cannot become the final path.
+    }
+  }
+}
+
+function parseIdentityReceipt(path: string, key: Uint8Array): PilotArchiveIdentityReceipt {
+  assertExactRegularFile(path, "pilot Archive identity receipt is not an exact regular file");
+  let receipt: PilotArchiveIdentityReceipt;
+  try {
+    receipt = pilotArchiveIdentityReceiptSchema.parse(
+      JSON.parse(readFileSync(path, "utf8")) as unknown,
+    );
+  } catch {
+    throw new PilotArchiveStoreError("pilot Archive identity receipt is invalid or corrupt");
+  }
+  if (
+    receipt.proof !==
+    storeProof(key, receipt.archiveId, receipt.archiveFingerprint, receipt.observedAt)
+  ) {
+    throw new PilotArchiveStoreError("pilot Archive identity receipt proof is invalid");
+  }
+  return receipt;
+}
+
+function identityReceiptFor(
+  archiveId: string,
+  archiveFingerprint: Fingerprint,
+  observedAt: string,
+  key: Uint8Array,
+): PilotArchiveIdentityReceipt {
+  return pilotArchiveIdentityReceiptSchema.parse({
+    schemaVersion: "hpi-pilot-archive-identity.v1",
+    archiveId,
+    archiveFingerprint,
+    observedAt,
+    proof: storeProof(key, archiveId, archiveFingerprint, observedAt),
+  });
+}
+
+function assertIdentityReceiptMatches(
+  receipt: PilotArchiveIdentityReceipt,
+  archive: Pick<PilotArchive, "archiveId" | "archiveFingerprint" | "observedAt">,
+): void {
+  if (
+    receipt.archiveId !== archive.archiveId ||
+    receipt.archiveFingerprint !== archive.archiveFingerprint ||
+    receipt.observedAt !== archive.observedAt
+  ) {
+    throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
+  }
+}
+
+function ensureIdentityReceipt(
+  path: string,
+  expected: PilotArchiveIdentityReceipt,
+  key: Uint8Array,
+): PilotArchiveIdentityReceipt {
+  if (!existsSync(path)) {
+    try {
+      writeImmutableAtomically(path, `${JSON.stringify(expected)}\n`);
+    } catch (error) {
+      if (!existsSync(path)) throw error;
+    }
+  }
+  const actual = parseIdentityReceipt(path, key);
+  assertIdentityReceiptMatches(actual, expected);
+  return actual;
 }
 
 function createTrustedPilotArchive(archive: PilotArchive): TrustedPilotArchive {
@@ -255,11 +355,23 @@ function parseTrustedPackage(path: string, key: Uint8Array): TrustedPilotArchive
   return createTrustedPilotArchive(archive);
 }
 
+function parseBoundArchive(
+  stateRoot: string,
+  archiveId: string,
+  key: Uint8Array,
+): TrustedPilotArchive {
+  const identity = parseIdentityReceipt(identityReceiptPath(stateRoot, archiveId), key);
+  const trusted = parseTrustedPackage(packagePath(stateRoot, archiveId), key);
+  assertIdentityReceiptMatches(identity, trusted.archive);
+  return trusted;
+}
+
 export class TrustedPilotArchive {
   readonly #archive: PilotArchive;
 
   private constructor(archive: PilotArchive) {
     this.#archive = archive;
+    Object.freeze(this);
   }
 
   public static fromStore(archive: PilotArchive, token: symbol): TrustedPilotArchive {
@@ -281,7 +393,15 @@ export class FilePilotArchiveStore {
   }
 
   public write(input: PilotArchiveWriteInput): TrustedPilotArchive {
-    const evidence = pilotEvidenceSchema.parse(input.evidence);
+    if (!(input.capture instanceof TrustedPilotEvidenceCapture)) {
+      throw new PilotArchiveStoreError("pilot Archive requires a trusted live capture authority");
+    }
+    let evidence: PilotEvidence;
+    try {
+      evidence = pilotEvidenceSchema.parse(input.capture.evidence);
+    } catch {
+      throw new PilotArchiveStoreError("pilot Archive capture authority is invalid");
+    }
     if (evidence.captureProvenance !== "LIVE_WINDOWS_PILOT") {
       throw new PilotArchiveStoreError(
         "pilot Archive Evidence is not marked as a live Windows capture",
@@ -317,29 +437,47 @@ export class FilePilotArchiveStore {
       },
     });
     const path = packagePath(this.#stateRoot, archive.archiveId);
-    ensureExactDirectory(join(this.#stateRoot, "archives"), "pilot Archive directory is not exact");
+    const archivesDirectory = join(this.#stateRoot, archiveDirectoryName);
+    const identityPath = identityReceiptPath(this.#stateRoot, archive.archiveId);
+    ensureExactDirectory(archivesDirectory, "pilot Archive directory is not exact");
     ensureExactDirectory(dirname(path), "pilot Archive identity directory is not exact");
+    const packageExists = existsSync(path);
+    const identityExists = existsSync(identityPath);
+    if (packageExists && !identityExists) {
+      throw new PilotArchiveStoreError("pilot Archive identity receipt is missing");
+    }
+    const identity = ensureIdentityReceipt(
+      identityPath,
+      identityReceiptFor(archive.archiveId, archive.archiveFingerprint, archive.observedAt, key),
+      key,
+    );
     if (existsSync(path)) {
-      const existing = parseTrustedPackage(path, key).archive;
+      const existing = parseBoundArchive(this.#stateRoot, archive.archiveId, key).archive;
+      assertIdentityReceiptMatches(identity, existing);
       if (canonicalJson(existing) !== canonicalJson(archive)) {
         throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
       }
       return createTrustedPilotArchive(existing);
     }
+    if (identityExists) {
+      throw new PilotArchiveStoreError("pilot Archive identity is already reserved");
+    }
     try {
-      writeFileSync(path, JSON.stringify(archive), { flag: "wx", mode: 0o600 });
-    } catch {
-      throw new PilotArchiveStoreError("pilot Archive package could not be written immutably");
+      writeImmutableAtomically(path, `${JSON.stringify(archive)}\n`);
+    } catch (error) {
+      if (!existsSync(path)) throw error;
+      const existing = parseBoundArchive(this.#stateRoot, archive.archiveId, key).archive;
+      if (canonicalJson(existing) !== canonicalJson(archive)) {
+        throw new PilotArchiveStoreError("pilot Archive identity is already bound to other facts");
+      }
+      return createTrustedPilotArchive(existing);
     }
     return createTrustedPilotArchive(archive);
   }
 
   public read(archiveId: string): TrustedPilotArchive {
     const parsedArchiveId = archiveIdSchema.parse(archiveId);
-    return parseTrustedPackage(
-      packagePath(this.#stateRoot, parsedArchiveId),
-      readStoreKey(this.#stateRoot),
-    );
+    return parseBoundArchive(this.#stateRoot, parsedArchiveId, readStoreKey(this.#stateRoot));
   }
 
   public static readPackageFile(path: string): TrustedPilotArchive {

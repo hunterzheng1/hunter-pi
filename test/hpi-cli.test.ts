@@ -28,6 +28,7 @@ import {
   completePilotPlanInput,
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
+import { testPilotEvidenceCapture } from "./support/task12-test-capture.js";
 import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
@@ -429,7 +430,7 @@ describe("hpi command", () => {
     new FilePilotArchiveStore({ stateRoot: archiveStoreRoot }).write({
       archiveId: "pilot-archive-cli-test",
       planFingerprint: plan.planFingerprint,
-      evidence,
+      capture: testPilotEvidenceCapture(evidence),
       observedAt: evidence.observedAt,
     });
     await writeFile(planPath, JSON.stringify(plan), "utf8");
@@ -488,7 +489,7 @@ describe("hpi command", () => {
     new FilePilotArchiveStore({ stateRoot: archiveStoreRoot }).write({
       archiveId: "pilot-archive-cli-invalid-evidence",
       planFingerprint: plan.planFingerprint,
-      evidence: validEvidence,
+      capture: testPilotEvidenceCapture(validEvidence),
       observedAt: validEvidence.observedAt,
     });
     await writeFile(planPath, JSON.stringify(plan), "utf8");

@@ -17,6 +17,7 @@ import { FilePilotArchiveStore, pilotArchiveSchema } from "@hunter-pi/pilot";
 
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
 import { completePilotExecutionPlan } from "./support/task12-plan-fixture.js";
+import { testPilotEvidenceCapture } from "./support/task12-test-capture.js";
 
 const roots: string[] = [];
 
@@ -35,13 +36,14 @@ describe("Task 12 trusted pilot Archive store", () => {
     const trusted = store.write({
       archiveId: "pilot-archive-real-test",
       planFingerprint: plan.planFingerprint,
-      evidence,
+      capture: testPilotEvidenceCapture(evidence),
       observedAt: evidence.observedAt,
     });
 
     expect(trusted.archive.archiveStatus).toBe("ARCHIVED");
     expect(trusted.archive.provenance).toBe("REAL_WINDOWS_PILOT");
     expect(trusted.archive.fixture).toBe(false);
+    expect(Object.isFrozen(trusted)).toBe(true);
     expect(Object.isFrozen(trusted.archive)).toBe(true);
     expect(Object.isFrozen(trusted.archive.evidence)).toBe(true);
     expect(Object.isFrozen(trusted.archive.evidence.taskResults)).toBe(true);
@@ -112,8 +114,24 @@ describe("Task 12 trusted pilot Archive store", () => {
         planFingerprint: plan.planFingerprint,
         evidence,
         observedAt: evidence.observedAt,
-      }),
-    ).toThrow(/fixture|live|provenance/u);
+      } as never),
+    ).toThrow(/capture|attest|authority|fixture|live|provenance/u);
+  });
+
+  it("does not promote caller-authored live-labeled Evidence without a capture authority", () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-archive-"));
+    roots.push(root);
+    const plan = completePilotExecutionPlan();
+    const evidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+
+    expect(() =>
+      new FilePilotArchiveStore({ stateRoot: root }).write({
+        archiveId: "pilot-archive-live-label-only",
+        planFingerprint: plan.planFingerprint,
+        evidence,
+        observedAt: evidence.observedAt,
+      } as never),
+    ).toThrow(/capture|attest|authority/u);
   });
 
   it("rejects an archive directory alias before writing outside the trusted store", () => {
@@ -128,7 +146,7 @@ describe("Task 12 trusted pilot Archive store", () => {
       new FilePilotArchiveStore({ stateRoot: root }).write({
         archiveId: "pilot-archive-symlink-test",
         planFingerprint: plan.planFingerprint,
-        evidence,
+        capture: testPilotEvidenceCapture(evidence),
         observedAt: evidence.observedAt,
       }),
     ).toThrow(/directory|store|exact|immutable/u);
@@ -145,9 +163,33 @@ describe("Task 12 trusted pilot Archive store", () => {
       new FilePilotArchiveStore({ stateRoot: root }).write({
         archiveId: "pilot-archive-observed-at-test",
         planFingerprint: plan.planFingerprint,
-        evidence,
+        capture: testPilotEvidenceCapture(evidence),
         observedAt: "2026-08-09T00:00:00.000Z",
       }),
     ).toThrow(/observ|time|bind/u);
+  });
+
+  it("does not allow a deleted package identity to be reused", () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-pi-pilot-archive-"));
+    roots.push(root);
+    const plan = completePilotExecutionPlan();
+    const evidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const store = new FilePilotArchiveStore({ stateRoot: root });
+    store.write({
+      archiveId: "pilot-archive-delete-reuse-test",
+      planFingerprint: plan.planFingerprint,
+      capture: testPilotEvidenceCapture(evidence),
+      observedAt: evidence.observedAt,
+    });
+    rmSync(join(root, "archives", "pilot-archive-delete-reuse-test", "package.json"));
+
+    expect(() =>
+      store.write({
+        archiveId: "pilot-archive-delete-reuse-test",
+        planFingerprint: plan.planFingerprint,
+        capture: testPilotEvidenceCapture(evidence),
+        observedAt: evidence.observedAt,
+      }),
+    ).toThrow(/bound|reserved|identity|immutable/u);
   });
 });

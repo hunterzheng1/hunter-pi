@@ -21,6 +21,7 @@ import {
   secondSourceFingerprint,
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence as completeEvidence } from "./support/task12-evidence-fixture.js";
+import { testPilotEvidenceCapture } from "./support/task12-test-capture.js";
 
 const archiveRoots: string[] = [];
 
@@ -38,7 +39,7 @@ function trustedArchiveFor(
   return new FilePilotArchiveStore({ stateRoot: root }).write({
     archiveId,
     planFingerprint: plan.planFingerprint,
-    evidence,
+    capture: testPilotEvidenceCapture(evidence),
     observedAt: evidence.observedAt,
   });
 }
@@ -62,7 +63,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const trustedArchive = new FilePilotArchiveStore({ stateRoot: root }).write({
       archiveId: "pilot-archive-evaluator-test",
       planFingerprint: plan.planFingerprint,
-      evidence,
+      capture: testPilotEvidenceCapture(evidence),
       observedAt: evidence.observedAt,
     });
 
@@ -153,6 +154,45 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
           providerCostMinor: 0,
         },
       ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects multiple interruption receipts that reuse one replacement Run", () => {
+    const evidence = completeEvidence();
+    const first = evidence.interruptions[0];
+    const second = evidence.interruptions[1];
+    const third = evidence.interruptions[2];
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error("fixture interruption missing");
+    }
+
+    const parsed = pilotEvidenceSchema.safeParse({
+      ...evidence,
+      interruptions: [
+        first,
+        {
+          ...second,
+          taskId: first.taskId,
+          interruptedRunId: first.interruptedRunId,
+          replacementRunId: first.replacementRunId,
+          replacementArchiveFingerprint: first.replacementArchiveFingerprint,
+        },
+        third,
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects an interruption whose predecessor was already READY", () => {
+    const evidence = completeEvidence();
+    const parsed = pilotEvidenceSchema.safeParse({
+      ...evidence,
+      runArchives: evidence.runArchives.map((run) =>
+        run.runId === "run-pilot-01" ? { ...run, terminalOutcome: "READY" as const } : run,
+      ),
     });
 
     expect(parsed.success).toBe(false);

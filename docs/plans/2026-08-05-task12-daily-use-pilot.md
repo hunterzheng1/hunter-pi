@@ -47,7 +47,10 @@ The hardening commit `386abba` merged as PR #47 (`c3aa454`); exact main CI [`311
 Task 12 now uses plan-input/execution-plan v2 and Evidence v5. Live pilot Evidence carries an explicit
 `LIVE_WINDOWS_PILOT` capture provenance. A `FilePilotArchiveStore` writes an append-only, path-free
 Archive package whose immutable facts, Evidence fingerprint, observed time, and local store receipt
-are verified before a `TrustedPilotArchive` handle is returned. Fixture/test provenance, plain Evidence
+are verified before a `TrustedPilotArchive` handle is returned. The persistence boundary accepts only an
+opaque capture authority issued by the capture runtime; raw JSON cannot promote itself to live Evidence.
+An HMAC-bound identity reservation remains after package deletion, and packages/identity receipts publish
+through flushed temporary files and non-overwriting hard links. Fixture/test provenance, plain Evidence
 files, modified packages, store aliases, and mismatched observation times fail closed. The evaluator and
 CLI require that trusted Archive for any decision that could otherwise resemble `GO`; the CLI form is
 `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json`.
@@ -55,10 +58,13 @@ CLI require that trusted Archive for any decision that could otherwise resemble 
 Each Evidence task result now records Provider request/token/cost counts, and the linked Run Archive
 chain must have one reachable root and one terminal Run. Replacement Runs are aggregated for both
 Provider authorization and task outcomes; only a READY replacement whose linked Run and Archive
-fingerprint match an interruption counts as a successful recovery. Explicit Provider scopes require
-finite maximum request, token, and cost budgets, and over-budget usage is a zero-tolerance STOP.
+fingerprint match an interruption counts as a successful recovery, and its interrupted predecessor must
+be terminal `INCOMPLETE` or `CANCELLED`; interruption receipts cannot reuse a predecessor or replacement
+Run. Explicit Provider scopes require finite maximum request, token, and cost budgets, and over-budget
+usage is a zero-tolerance STOP.
 
 These gates harden the authority boundary but do not create a real pilot. No external repository,
-credential, or Provider request was inferred or touched; daily-use acceptance remains `NOT_RUN / NOT_PROVEN`
-until a separately authorized Windows pilot produces its complete immutable Archive and exact hosted
-Windows/Ubuntu receipts.
+credential, or Provider request was inferred or touched. The source-level test capture helper is not a
+package export, and the current product has no production capture finalizer; daily-use acceptance remains
+`NOT_RUN / NOT_PROVEN` until a separately authorized Windows pilot produces its complete immutable
+Archive and exact hosted Windows/Ubuntu receipts.

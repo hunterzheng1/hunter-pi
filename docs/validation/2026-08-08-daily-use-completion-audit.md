@@ -172,20 +172,27 @@ The earlier Task 12 section is retained as the pre-hardening boundary snapshot. 
 implementation now closes the specific authority gaps identified there:
 
 - plan-input/execution-plan v2 and `hpi-pilot-evidence.v5` require explicit capture provenance;
-- `FilePilotArchiveStore` resolves an append-only Archive package from an exact local directory and
+- `FilePilotArchiveStore` accepts only an opaque capture authority, so caller-authored JSON cannot relabel
+  itself as a live capture. It resolves an append-only Archive package from an exact local directory and
   regular file, verifies immutable facts, the Evidence digest, observed time, and a local store proof,
   and returns a trusted handle only for `REAL_WINDOWS_PILOT` / `LIVE_WINDOWS_PILOT` data;
+- an HMAC-bound identity reservation survives package deletion, and both the identity receipt and package
+  are flushed before publication through non-overwriting hard links; the trusted handle itself is frozen;
 - the evaluator and CLI require the trusted Archive and exact frozen plan before a decision can be
   considered complete, so fixture-shaped JSON or a plain Evidence file cannot yield daily-use `GO`;
 - linked Run Archive receipts require one reachable root and one terminal Run per task, aggregate
-  replacement Runs without rewriting history, and bind successful interruption counts to READY
-  replacement outcomes and matching Archive fingerprints;
+  replacement Runs without rewriting history, reject duplicate predecessor/replacement references, require
+  an interrupted predecessor to be terminal `INCOMPLETE`/`CANCELLED`, and bind successful interruption
+  counts to READY replacement outcomes and matching Archive fingerprints;
 - explicit Provider authorization now binds finite maximum request, token, and cost budgets, with
   over-budget usage as a zero-tolerance STOP. The CLI requires
   `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json`.
 
-Local focused and static checks pass on the isolated Windows worktree. Hosted PR/main verification is
-pending for this new head. This hardening is not a real pilot: no external repository, credential, or
-Provider request was inferred or touched. The daily-use disposition therefore remains
-`NOT_RUN / NOT_PROVEN` until the separately authorized Windows pilot produces its complete Archive,
-exact Windows/Ubuntu receipts, and real observations.
+The isolated Windows worktree passes 60 test files / 541 tests, the focused Task 12 suites (72/72),
+typecheck, lint, format, strict compiler smoke, build, external package smoke, clean-install smoke, and
+the compiled Pi public-interface probe. Hosted PR/main verification is pending for this new head. The
+source-level test capture helper is not a package export, and the current product has no production
+capture finalizer. This hardening is not a real pilot: no external repository, credential, or Provider
+request was inferred or touched. The daily-use disposition therefore remains `NOT_RUN / NOT_PROVEN`
+until the separately authorized Windows pilot produces its complete Archive, exact Windows/Ubuntu
+receipts, and real observations.

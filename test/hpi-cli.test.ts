@@ -23,7 +23,10 @@ import {
   completePilotPlanInput,
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
-import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
+import {
+  createTemporaryTestDirectory,
+  removeTemporaryTestDirectory,
+} from "./support/temporary-test-directory.js";
 
 const createdRoots: string[] = [];
 const coreFixtureSource = "export default () => {};\n";
@@ -31,17 +34,7 @@ const coreFixtureIntegrity = `sha256:${createHash("sha256").update(coreFixtureSo
 const productShellFixtureIntegrity = `sha256:${"c".repeat(64)}`;
 
 afterEach(async () => {
-  const { rm } = await import("node:fs/promises");
-  await Promise.all(
-    createdRoots.splice(0).map((root) =>
-      rm(root, {
-        force: true,
-        maxRetries: 5,
-        recursive: true,
-        retryDelay: 100,
-      }),
-    ),
-  );
+  await Promise.all(createdRoots.splice(0).map(removeTemporaryTestDirectory));
 });
 
 interface CapturedIo extends HpiCliIo {

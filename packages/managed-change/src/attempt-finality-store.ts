@@ -23,6 +23,7 @@ import {
   assertSafeDirectoryPath,
   canonicalJson,
   DurableStoreError,
+  FileEvidenceStore,
   isErrnoException,
   sha256Fingerprint,
   writeImmutableAtomically,
@@ -49,13 +50,6 @@ const writerLeaseReleaseRecordSchema = z.strictObject({
   fingerprint: fingerprintSchema,
 });
 type WriterLeaseReleaseRecord = z.infer<typeof writerLeaseReleaseRecordSchema>;
-
-const attemptFinalityEvidenceRecordSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-attempt-finality-evidence-record.v1"),
-  request: attemptFinalityEvidenceRequestSchema,
-  fingerprint: fingerprintSchema,
-});
-type AttemptFinalityEvidenceRecord = z.infer<typeof attemptFinalityEvidenceRecordSchema>;
 
 function fingerprintOf(value: unknown): Fingerprint {
   return sha256Fingerprint(canonicalJson(value));
@@ -101,28 +95,6 @@ function parseProcessRecord(text: string, sessionId: ManagedProcessSessionId): P
     throw new DurableStoreError(
       "STORE_CORRUPT",
       "The immutable managed-process final Receipt is invalid.",
-      error,
-    );
-  }
-}
-
-function parseEvidenceRecord(
-  text: string,
-  evidenceId: AttemptFinalityEvidenceRequest["evidenceId"],
-): AttemptFinalityEvidenceRecord {
-  try {
-    const record = attemptFinalityEvidenceRecordSchema.parse(JSON.parse(text) as unknown);
-    if (
-      record.request.evidenceId !== evidenceId ||
-      record.fingerprint !== fingerprintOf(record.request)
-    ) {
-      throw new Error("Attempt-finality Evidence record binding changed");
-    }
-    return record;
-  } catch (error) {
-    throw new DurableStoreError(
-      "STORE_CORRUPT",
-      "The immutable Attempt-finality Evidence record is invalid.",
       error,
     );
   }
@@ -331,10 +303,10 @@ export function createReleaseReceiptPersistingLeaseManager(options: {
 }
 
 export class FileAttemptFinalityEvidenceCapture implements AttemptFinalityEvidenceCapture {
-  readonly #stateRoot: string;
+  readonly #evidenceStore: FileEvidenceStore;
 
   public constructor(options: FileAttemptFinalityStoreOptions) {
-    this.#stateRoot = resolve(options.stateRoot);
+    this.#evidenceStore = new FileEvidenceStore({ stateRoot: resolve(options.stateRoot) });
   }
 
   public async capture(input: AttemptFinalityEvidenceRequest): Promise<{
@@ -342,42 +314,39 @@ export class FileAttemptFinalityEvidenceCapture implements AttemptFinalityEviden
     readonly fingerprint: Fingerprint;
   }> {
     const request = attemptFinalityEvidenceRequestSchema.parse(input);
-    const record = attemptFinalityEvidenceRecordSchema.parse({
-      schemaVersion: "hpi-attempt-finality-evidence-record.v1",
-      request,
-      fingerprint: fingerprintOf(request),
+    const content = canonicalJson(request);
+    const fingerprint = fingerprintOf(request);
+    const summary = "Attempt finality reconciled from immutable process and Writer Lease receipts.";
+    const envelope = await this.#evidenceStore.capture({
+      schemaVersion: "1.0.0",
+      evidenceId: request.evidenceId,
+      kind: "checkpoint",
+      scope: { runId: request.runId, attemptId: request.attemptId },
+      createdAt: request.observedAt,
+      sourceFingerprint: request.sourceFingerprint,
+      summary,
+      contentClass: "SUMMARY",
+      content,
     });
-    await ensureStateRoot(this.#stateRoot);
-    const filename = `${request.evidenceId}.json`;
-    const path = join(this.#stateRoot, filename);
-    const existingText = await readImmutableText(path);
-    if (existingText !== undefined) {
-      const existing = parseEvidenceRecord(existingText, request.evidenceId);
-      if (canonicalJson(existing) === canonicalJson(record)) {
-        return { evidenceId: existing.request.evidenceId, fingerprint: existing.fingerprint };
-      }
+    if (
+      envelope.evidenceId !== request.evidenceId ||
+      envelope.kind !== "checkpoint" ||
+      envelope.scope.runId !== request.runId ||
+      envelope.scope.attemptId !== request.attemptId ||
+      envelope.createdAt !== request.observedAt ||
+      envelope.sourceFingerprint !== request.sourceFingerprint ||
+      envelope.contentClass !== "SUMMARY" ||
+      envelope.contentHash !== fingerprint ||
+      envelope.summary !== summary ||
+      envelope.capture.retentionStatus !== "RETAINED" ||
+      envelope.capture.capturedText !== content ||
+      envelope.redaction.applied
+    ) {
       throw new DurableStoreError(
-        "IDENTITY_CONFLICT",
-        "The Attempt-finality Evidence identity is already bound to different facts.",
+        "STORE_CORRUPT",
+        "Canonical Attempt-finality Evidence changed identity, content, or retention state.",
       );
     }
-
-    try {
-      await writeImmutableAtomically({
-        directory: this.#stateRoot,
-        filename,
-        content: serialize(record),
-      });
-      return { evidenceId: request.evidenceId, fingerprint: record.fingerprint };
-    } catch (error) {
-      if (!(error instanceof DurableStoreError) || error.code !== "IDENTITY_CONFLICT") throw error;
-      const racedText = await readImmutableText(path);
-      if (racedText === undefined) throw error;
-      const raced = parseEvidenceRecord(racedText, request.evidenceId);
-      if (canonicalJson(raced) === canonicalJson(record)) {
-        return { evidenceId: raced.request.evidenceId, fingerprint: raced.fingerprint };
-      }
-      throw error;
-    }
+    return { evidenceId: envelope.evidenceId, fingerprint };
   }
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   managedProcessSessionIdSchema,
   type ManagedProcessHost,
 } from "@hunter-pi/execution";
+import { FileEvidenceStore } from "@hunter-pi/evidence";
 import {
   createFinalReceiptPersistingManagedProcessHost,
   ExecutionAttemptFinalityAdapter,
@@ -228,7 +229,20 @@ describe("Task 9 durable Attempt-finality stores", () => {
 
     const first = await store.capture(request);
     await expect(store.capture(request)).resolves.toEqual(first);
-    await writeFile(join(root, `${request.evidenceId}.json`), "{}\n", "utf8");
+    const envelope = await new FileEvidenceStore({ stateRoot: root }).read(request.evidenceId);
+    expect(envelope).toMatchObject({
+      evidenceId: request.evidenceId,
+      kind: "checkpoint",
+      scope: { runId: request.runId, attemptId: request.attemptId },
+      contentHash: first.fingerprint,
+      capture: { capturedText: canonicalJson(request) },
+      redaction: { applied: false },
+    });
+    const evidenceDirectory = join(root, "evidence", request.evidenceId);
+    const records = await readdir(evidenceDirectory);
+    const record = records.find((name) => name.endsWith(".json"));
+    if (record === undefined) throw new Error("fixture Evidence record is missing");
+    await writeFile(join(evidenceDirectory, record), "{}\n", "utf8");
     await expect(store.capture(request)).rejects.toMatchObject({ code: "STORE_CORRUPT" });
   });
 });

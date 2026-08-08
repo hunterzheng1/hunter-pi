@@ -12,6 +12,11 @@ inspection into a high-frequency API poller.
 - Locked installs use npm's offline-preferred mode and disable audit/fund
   network work. Compiled checks reuse the build already produced by the same
   job instead of rebuilding before each smoke.
+- The Windows `quality` job has a 55-minute bound because hosted filesystem
+  variance affects the two isolated npm installation smokes and the exact
+  portable artifact assembly. The portable artifact is still built once, only
+  on Windows, after the shared quality build; the wider bound prevents a
+  passing artifact from consuming the old 40-minute margin.
 - Task 9 and Task 10 contract matrices are excluded from the generic unit-test
   invocation and run exactly once inside their source-bound platform probes.
   Task 10 reuses the existing Windows/Ubuntu `quality` jobs and the existing

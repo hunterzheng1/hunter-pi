@@ -18,9 +18,10 @@ jobs:
   quality:
     name: ${{ matrix.os }} / Node 24
     runs-on: ${{ matrix.os }}
-    # Windows runs two isolated npm installation smokes; observed network variance
-    # can exceed 20 minutes even when every completed assertion passes.
-    timeout-minutes: 40
+    # Windows runs two isolated npm installation smokes plus the exact portable
+    # artifact assembly; hosted filesystem variance can exceed 40 minutes even
+    # when every completed assertion passes.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:

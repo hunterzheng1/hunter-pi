@@ -149,6 +149,23 @@ async function readReconciliationReceipts(lockPath: string): Promise<readonly st
   return Promise.all(filenames.map((filename) => readFile(join(directory, filename), "utf8")));
 }
 
+async function readClaimRecoveryReceipts(lockPath: string): Promise<readonly string[]> {
+  const directory = join(
+    dirname(lockPath),
+    ".pending-hpi-mutation-lock-metadata",
+    "claim-receipts",
+  );
+  try {
+    const filenames = (await readdir(directory))
+      .filter((filename) => filename.endsWith(".json"))
+      .sort();
+    return Promise.all(filenames.map((filename) => readFile(join(directory, filename), "utf8")));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 describe("atomic durable write target containment", () => {
   it.each(["../escaped.txt", "..\\escaped.txt"])(
     "rejects an escaping filename %s before touching the target",
@@ -192,11 +209,13 @@ describe("durable mutation-lock recovery", () => {
     expect(Object.keys(ownerRecord).sort()).toEqual([
       "acquiredAt",
       "lockId",
+      "ownerLivenessId",
       "ownerPid",
+      "ownerPublicKey",
       "schemaVersion",
     ]);
     expect(ownerRecord).toMatchObject({
-      schemaVersion: "hpi-durable-mutation-lock-owner.v1",
+      schemaVersion: "hpi-durable-mutation-lock-owner.v2",
       ownerPid: owner.pid,
     });
     owner.child.stdin.end("release\n");
@@ -255,6 +274,76 @@ describe("durable mutation-lock recovery", () => {
     await expect(successor.completion).resolves.toMatchObject({ code: 0, signal: null });
     expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
   });
+
+  it("recovers when an unrelated live process has reused the dead owner's PID", async () => {
+    const root = await createRoot();
+    const lockPath = join(root, ".mutation-lock");
+    const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
+    await waitForFixtureOutput(owner, '"event":"LOCKED"');
+    const deadOwnerRecord = JSON.parse(await readFile(lockPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await owner.completion;
+    await rm(lockPath);
+    await writeFile(lockPath, `${JSON.stringify({ ...deadOwnerRecord, ownerPid: process.pid })}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+
+    await expect(withDurableMutationLock(lockPath, () => Promise.resolve("recovered"))).resolves.toBe(
+      "recovered",
+    );
+    expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
+  });
+
+  it("recovers when the elected stale-owner reconciler is force-killed after publishing its claim", async () => {
+    const root = await createRoot();
+    const lockPath = join(root, ".mutation-lock");
+    const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
+    await waitForFixtureOutput(owner, '"event":"LOCKED"');
+    await owner.completion;
+
+    const interrupted = startLockFixture(lockPath, "HOLD_FOR_MS", 20, {
+      HPI_TEST_RECONCILIATION_PAUSE: "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+    });
+    await waitForFixtureOutput(interrupted, '"event":"RECONCILIATION_PAUSED"');
+    await forceKill(interrupted);
+
+    const successor = startLockFixture(lockPath, "HOLD_FOR_MS", 20);
+    await waitForFixtureOutput(successor, '"event":"LOCKED"');
+    await expect(successor.completion).resolves.toMatchObject({ code: 0, signal: null });
+    expect(await readClaimRecoveryReceipts(lockPath)).toHaveLength(1);
+    expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "elects one reconciler for Windows path aliases of the same physical lock",
+    async () => {
+      const root = await createRoot();
+      const lockPath = join(root, ".mutation-lock");
+      const aliasPath = join(root.toUpperCase(), ".MUTATION-LOCK");
+      const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
+      await waitForFixtureOutput(owner, '"event":"LOCKED"');
+      await owner.completion;
+
+      const first = startLockFixture(lockPath, "HOLD_FOR_MS", 20, {
+        HPI_TEST_RECONCILIATION_PAUSE: "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+      });
+      await waitForFixtureOutput(first, '"event":"RECONCILIATION_PAUSED"');
+      const second = startLockFixture(aliasPath, "HOLD_FOR_MS", 20, {
+        HPI_TEST_RECONCILIATION_PAUSE: "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+      });
+      await delay(500);
+
+      const metadataRoot = join(root, ".pending-hpi-mutation-lock-metadata");
+      const activeClaims = (await readdir(metadataRoot)).filter((filename) =>
+        filename.startsWith("active-claim-"),
+      );
+      expect(activeClaims).toHaveLength(1);
+      await Promise.all([forceKill(first), forceKill(second)]);
+    },
+  );
 
   it("elects only one reconciler when contenders observe the same dead owner", async () => {
     const root = await createRoot();

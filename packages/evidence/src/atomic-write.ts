@@ -102,13 +102,14 @@ export type DurableMutationLockReconciliationReceipt = z.infer<
 
 export const durableMutationLockClaimRecoveryReceiptSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-durable-mutation-lock-claim-recovery-receipt.v1"),
+    schemaVersion: z.literal("hpi-durable-mutation-lock-claim-recovery-receipt.v2"),
     receiptId: fingerprintSchema,
     claimId: lockIdentitySchema,
     staleLockId: lockIdentitySchema,
     staleReconcilerPid: z.number().int().positive(),
     staleReconcilerLivenessFingerprint: fingerprintSchema,
     claimRecordFingerprint: fingerprintSchema,
+    claimObservedAt: timestampSchema,
     observedAt: timestampSchema,
     outcome: z.literal("RECONCILER_PROCESS_NOT_FOUND"),
   })
@@ -118,6 +119,13 @@ export const durableMutationLockClaimRecoveryReceiptSchema = z
         code: "custom",
         path: ["receiptId"],
         message: "Mutation-lock claim recovery receipt identity does not match its facts",
+      });
+    }
+    if (Date.parse(receipt.observedAt) < Date.parse(receipt.claimObservedAt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["observedAt"],
+        message: "Mutation-lock claim recovery cannot predate its stale claim",
       });
     }
   });
@@ -154,6 +162,7 @@ function claimRecoveryReceiptFingerprint(
       staleReconcilerPid: receipt.staleReconcilerPid,
       staleReconcilerLivenessFingerprint: receipt.staleReconcilerLivenessFingerprint,
       claimRecordFingerprint: receipt.claimRecordFingerprint,
+      claimObservedAt: receipt.claimObservedAt,
       observedAt: receipt.observedAt,
       outcome: receipt.outcome,
     }),
@@ -705,9 +714,9 @@ async function readReconciliationClaimSnapshot(
   };
 }
 
-function claimRecoveryIdentity(snapshot: ReconciliationClaimSnapshot) {
+function claimRecoveryIdentity(snapshot: ReconciliationClaimSnapshot, observedAt: string) {
   return {
-    schemaVersion: "hpi-durable-mutation-lock-claim-recovery-receipt.v1",
+    schemaVersion: "hpi-durable-mutation-lock-claim-recovery-receipt.v2",
     claimId: snapshot.claim.claimId,
     staleLockId: snapshot.claim.staleLockId,
     staleReconcilerPid: snapshot.claim.reconcilerPid,
@@ -716,7 +725,8 @@ function claimRecoveryIdentity(snapshot: ReconciliationClaimSnapshot) {
       snapshot.claim.reconcilerPublicKey,
     ),
     claimRecordFingerprint: snapshot.fingerprint,
-    observedAt: snapshot.claim.observedAt,
+    claimObservedAt: snapshot.claim.observedAt,
+    observedAt,
     outcome: "RECONCILER_PROCESS_NOT_FOUND",
   } as const;
 }
@@ -748,7 +758,7 @@ async function persistClaimRecoveryReceipt(
   lockPath: string,
   snapshot: ReconciliationClaimSnapshot,
 ): Promise<void> {
-  const identity = claimRecoveryIdentity(snapshot);
+  const identity = claimRecoveryIdentity(snapshot, new Date().toISOString());
   const receipt = durableMutationLockClaimRecoveryReceiptSchema.parse({
     ...identity,
     receiptId: claimRecoveryReceiptFingerprint(identity),
@@ -765,7 +775,18 @@ async function persistClaimRecoveryReceipt(
     if (!(error instanceof DurableStoreError && error.code === "IDENTITY_CONFLICT")) throw error;
   }
   const prior = await readClaimRecoveryReceipt(target.path);
-  if (canonicalJson(prior) !== canonicalJson(receipt)) {
+  if (
+    prior.claimId !== snapshot.claim.claimId ||
+    prior.staleLockId !== snapshot.claim.staleLockId ||
+    prior.staleReconcilerPid !== snapshot.claim.reconcilerPid ||
+    prior.staleReconcilerLivenessFingerprint !==
+      livenessFingerprint(
+        snapshot.claim.reconcilerLivenessId,
+        snapshot.claim.reconcilerPublicKey,
+      ) ||
+    prior.claimRecordFingerprint !== snapshot.fingerprint ||
+    prior.claimObservedAt !== snapshot.claim.observedAt
+  ) {
     throw new DurableStoreError(
       "STORE_CORRUPT",
       "A durable mutation-lock claim recovery receipt conflicts with the stale claim.",

@@ -271,9 +271,16 @@ describe("durable mutation-lock recovery", () => {
     await waitForFixtureOutput(owner, '"event":"LOCKED"');
     await forceKill(owner);
 
-    const successor = startLockFixture(lockPath, "HOLD_FOR_MS", 20);
-    await waitForFixtureOutput(successor, '"event":"LOCKED"');
-    await expect(successor.completion).resolves.toMatchObject({ code: 0, signal: null });
+    const firstSuccessor = startLockFixture(lockPath, "HOLD_FOR_MS", 20);
+    const secondSuccessor = startLockFixture(lockPath, "HOLD_FOR_MS", 20);
+    const successorResults = await Promise.all([
+      firstSuccessor.completion,
+      secondSuccessor.completion,
+    ]);
+    expect(successorResults).toEqual([
+      expect.objectContaining({ code: 0, signal: null }),
+      expect.objectContaining({ code: 0, signal: null }),
+    ]);
     expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
   });
 

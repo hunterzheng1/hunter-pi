@@ -30,8 +30,10 @@ No real Provider request or user repository mutation was performed.
 
 ## Local evidence
 
-The current Windows-local Task 9 platform receipt is
-`hpi-task9-platform-receipt.v2` at source `0e2a369b5a8ef6c7c49e8d616a00ad4134a91829`.
+The final reviewed Windows-local Task 9 platform receipt is
+`hpi-task9-platform-receipt.v2`, generated from a clean product source. Its embedded source commit,
+source fingerprint, verifier fingerprint, and command fingerprint preserve the exact identity
+without making this documentation-only record invalidate itself.
 It passes all 89 assertions in the fixed eight-file daily-use matrix, including three forced-kill
 reconciler boundaries, eight device-publication process kills, abandoned File Lease recovery, exact
 second-device read-only projection, quoted-JSON privacy rejection, interrupted import resume,

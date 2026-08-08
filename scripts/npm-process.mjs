@@ -190,10 +190,13 @@ export const shouldRetryNpmFailure = (arguments_, failure, attemptNumber) => {
   ) {
     return false;
   }
-  const codes = [
+  const stderrCodes = [
     ...failure.stderr.matchAll(/^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/gimu),
   ].map((match) => match[1]);
-  return codes.length === 1 && codes[0] === "ECONNRESET";
+  const stdoutCodes = [
+    ...failure.stdout.matchAll(/^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/gimu),
+  ].map((match) => match[1]);
+  return stdoutCodes.length === 0 && stderrCodes.length === 1 && stderrCodes[0] === "ECONNRESET";
 };
 
 /**

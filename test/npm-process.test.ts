@@ -166,6 +166,17 @@ describe("isolated npm process support", () => {
         1,
       ),
     ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code ECONNRESET",
+          stdout: "npm error code E429",
+        },
+        1,
+      ),
+    ).toBe(false);
   });
 
   it("preserves a redacted first failure and returns the single retry result", async () => {

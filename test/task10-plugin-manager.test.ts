@@ -54,7 +54,7 @@ function verifiedCompatibility() {
 }
 
 describe("Task 10 standard Pi Plugin manager", () => {
-  it("rejects private paths and credential-bearing provenance references", () => {
+  it("rejects private paths and credential-bearing package or provenance references", () => {
     const localSource: PluginSource = {
       kind: "LOCAL",
       label: "privacy-fixture",
@@ -88,6 +88,43 @@ describe("Task 10 standard Pi Plugin manager", () => {
         },
       }),
     ).toThrow();
+    for (const sourceReference of [
+      "file:///C:/Users/private/plugin",
+      "https://example.invalid/plugin?token=super-secret",
+      "https://example.invalid/plugin#access_token=super-secret",
+    ]) {
+      expect(() =>
+        pluginManifestSchema.parse({
+          ...manifestFor(localSource, "privacy-reference"),
+          provenance: {
+            ...manifestFor(localSource, "privacy-reference").provenance,
+            sourceReference,
+          },
+        }),
+      ).toThrow();
+    }
+    for (const source of [
+      {
+        kind: "NPM",
+        registry: "https://registry.npmjs.org?token=super-secret",
+        packageName: "privacy-fixture",
+        version: "1.2.3",
+        integrity: fixtureFingerprint,
+      },
+      {
+        kind: "GIT",
+        remote: "https://github.com/example/fixture-plugin.git#access_token=super-secret",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        treeFingerprint: fixtureFingerprint,
+      },
+    ]) {
+      expect(() =>
+        pluginManifestSchema.parse({
+          ...manifestFor(localSource, "privacy-source"),
+          source,
+        }),
+      ).toThrow();
+    }
   });
 
   it("installs exact local/npm/Git sources without loading plugin code", async () => {

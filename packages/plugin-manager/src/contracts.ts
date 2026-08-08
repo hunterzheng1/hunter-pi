@@ -13,10 +13,16 @@ import {
 } from "@hunter-pi/domain";
 
 const nonEmptyTextSchema = z.string().trim().min(1).max(4_096);
-function containsCredentialBearingUrl(value: string): boolean {
+function containsNonPortableUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    return parsed.username.length > 0 || parsed.password.length > 0;
+    return (
+      parsed.protocol !== "https:" ||
+      parsed.username.length > 0 ||
+      parsed.password.length > 0 ||
+      parsed.search.length > 0 ||
+      parsed.hash.length > 0
+    );
   } catch {
     return false;
   }
@@ -41,15 +47,19 @@ const publicReferenceSchema = nonEmptyTextSchema.refine(
     !containsUnsafePath(value) &&
     !/(?:^|[\s"'])[A-Za-z]:[\\/]|(?:^|[\s"'])\/(?:Users|home|private|tmp)\//u.test(value) &&
     !/(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]/iu.test(value) &&
-    !containsCredentialBearingUrl(value),
+    !containsNonPortableUrl(value),
   "private paths and credential material are not portable Plugin references",
 );
 const publicUrlSchema = z.url().refine((value) => {
   const parsed = new URL(value);
   return (
-    parsed.protocol === "https:" && parsed.username.length === 0 && parsed.password.length === 0
+    parsed.protocol === "https:" &&
+    parsed.username.length === 0 &&
+    parsed.password.length === 0 &&
+    parsed.search.length === 0 &&
+    parsed.hash.length === 0
   );
-}, "credential-bearing URLs and non-HTTPS URLs are not portable Plugin references");
+}, "credential-bearing, qualified, and non-HTTPS URLs are not portable Plugin references");
 const exactVersionSchema = z
   .string()
   .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u);

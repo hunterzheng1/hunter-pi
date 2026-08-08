@@ -199,3 +199,20 @@ capture finalizer. This hardening is not a real pilot: no external repository, c
 request was inferred or touched. The daily-use disposition therefore remains `NOT_RUN / NOT_PROVEN`
 until the separately authorized Windows pilot produces its complete Archive, exact Windows/Ubuntu
 receipts, and real observations.
+
+## Addendum (2026-08-09) — Task 12 hosted closure
+
+The authority-hardening head passed the complete hosted verification scope. PR #55 run
+[`31279969974`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31279969974) passed Windows/Ubuntu
+quality, packed-package and developer-preview artifact smoke, clean locked installation, Pi/Task 9/Task 10
+platform probes, Task 7 containment on both platforms, and all cross-platform Evidence comparators. The
+merge commit is `dc2ec35b16c0cdbf3f8eb49a31bfb03226311ef3`; its exact main run
+[`31280957140`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31280957140) passed the same required
+Windows/Ubuntu and Evidence gates.
+
+The final isolated-worktree local verification ran 60 test files / 544 tests, focused Task 12 archive and
+pilot suites, lint, typecheck, format, strict compiler smoke, build, external package smoke, clean-install
+smoke, and the compiled Pi public-interface probe. These results close the provider-neutral implementation
+and hosted CI boundary only. No real repository, Provider credential, or Provider request was used, and the
+product still has no production capture finalizer; the real Windows daily-use pilot and its immutable
+aggregate Archive therefore remain `NOT_RUN / NOT_PROVEN`.

@@ -165,3 +165,37 @@ The artifact remains unsigned and `qualification=NOT_PROVEN`; publication, signi
 promotion, existing-user state migration, real-repository safety, broad Provider reliability,
 and the Task 12 real-use Archive remain unproven. The overall daily-use disposition remains
 `NOT_PROVEN`.
+
+## Addendum (2026-08-09) — Task 12 Archive authority hardening
+
+The earlier Task 12 section is retained as the pre-hardening boundary snapshot. The provider-neutral
+implementation now closes the specific authority gaps identified there:
+
+- plan-input/execution-plan v2 and `hpi-pilot-evidence.v5` require explicit capture provenance;
+- `FilePilotArchiveStore` accepts only an opaque capture authority, so caller-authored JSON cannot relabel
+  itself as a live capture. It resolves an append-only Archive package from an exact local directory and
+  regular file, verifies immutable facts, the Evidence digest, observed time, and a local store proof,
+  and returns a trusted handle only for `REAL_WINDOWS_PILOT` / `LIVE_WINDOWS_PILOT` data;
+- an HMAC-bound identity reservation survives package deletion; a separate immutable commit receipt
+  distinguishes an interrupted reservation that may be completed from a committed Archive whose package
+  disappeared. The reservation, package, and commit receipt are flushed before publication through
+  non-overwriting hard links; the trusted handle itself is frozen;
+- the evaluator and CLI require the trusted Archive and exact frozen plan before a decision can be
+  considered complete, and its runtime private-field brand rejects structurally forged handles, so
+  fixture-shaped JSON or a plain Evidence file cannot yield daily-use `GO`;
+- linked Run Archive receipts require one reachable root and one terminal Run per task, aggregate
+  replacement Runs without rewriting history, reject duplicate predecessor/replacement references, require
+  an interrupted predecessor to be terminal `INCOMPLETE`/`CANCELLED`, and bind successful interruption
+  counts to READY replacement outcomes and matching Archive fingerprints;
+- explicit Provider authorization now binds finite maximum request, token, and cost budgets, with
+  over-budget usage as a zero-tolerance STOP. The CLI requires
+  `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json`.
+
+The isolated Windows worktree passes 60 test files / 541 tests, the focused Task 12 suites (72/72),
+typecheck, lint, format, strict compiler smoke, build, external package smoke, clean-install smoke, and
+the compiled Pi public-interface probe. Hosted PR/main verification is pending for this new head. The
+source-level test capture helper is not a package export, and the current product has no production
+capture finalizer. This hardening is not a real pilot: no external repository, credential, or Provider
+request was inferred or touched. The daily-use disposition therefore remains `NOT_RUN / NOT_PROVEN`
+until the separately authorized Windows pilot produces its complete Archive, exact Windows/Ubuntu
+receipts, and real observations.

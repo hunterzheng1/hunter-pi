@@ -9,6 +9,7 @@ import {
 
 export function completePilotEvidence(
   plan: PilotExecutionPlan = completePilotExecutionPlan(),
+  captureProvenance: "FIXTURE" | "LIVE_WINDOWS_PILOT" = "FIXTURE",
 ): PilotEvidence {
   const targetById = new Map(plan.repositoryTargets.map((target) => [target.targetId, target]));
   const acceptanceCheckById = new Map(
@@ -33,7 +34,8 @@ export function completePilotEvidence(
     };
   });
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v4",
+    schemaVersion: "hpi-pilot-evidence.v5",
+    captureProvenance,
     planFingerprint: plan.planFingerprint,
     operatorScope: plan.operatorScope,
     machine: plan.machineProfile,
@@ -44,7 +46,7 @@ export function completePilotEvidence(
       cleanProfileFingerprint: fixtureFingerprint,
     },
     taskOracles,
-    taskResults: taskOracles.map((oracle) => ({
+    taskResults: taskOracles.map((oracle, index) => ({
       taskId: oracle.taskId,
       repositoryFingerprint: oracle.repositoryFingerprint,
       targetReferenceFingerprint: oracle.targetReferenceFingerprint,
@@ -58,6 +60,9 @@ export function completePilotEvidence(
       sourcePreserved: true,
       rawSecretLeakage: false,
       providerSendAcknowledged: true,
+      providerRequestCount: [0, 5, 6].includes(index) ? 2 : 1,
+      providerTokenCount: [0, 5, 6].includes(index) ? 200 : 100,
+      providerCostMinor: [0, 5, 6].includes(index) ? 2 : 1,
       applicableFactCount: 20,
       capturedFactCount: 20,
       manualInterventions: 1,
@@ -65,14 +70,54 @@ export function completePilotEvidence(
       rawPiCapturedFactCount: 15,
       rawPiManualInterventions: 3,
     })),
-    interruptions: Array.from({ length: 3 }, (_, index) => ({
-      interruptionId: `pilot-interruption-${String(index + 1)}`,
-      kind: "FORCED_PROCESS_KILL" as const,
-      historyPreserved: true,
-      sourcePreserved: true,
-      resumeOutcome: index < 2 ? ("READY" as const) : ("BLOCKED" as const),
-      actionableWithinFiveMinutes: true,
-    })),
+    runArchives: [
+      ...taskOracles.map((oracle, index) => ({
+        runId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
+        taskId: oracle.taskId,
+        replacementOfRunId: null,
+        archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}`,
+        archiveFingerprint: fixtureFingerprint,
+        sourceFingerprint: oracle.sourceFingerprint,
+        terminalOutcome: [0, 5, 6].includes(index) ? ("INCOMPLETE" as const) : ("READY" as const),
+        providerRequestCount: 1,
+        providerTokenCount: 100,
+        providerCostMinor: 1,
+      })),
+      ...[0, 5, 6].map((index) => {
+        const oracle = taskOracles[index];
+        if (oracle === undefined) throw new Error("fixture task oracle missing");
+        return {
+          runId: `run-pilot-${String(index + 1).padStart(2, "0")}-replacement`,
+          taskId: oracle.taskId,
+          replacementOfRunId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
+          archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}-replacement`,
+          archiveFingerprint: secondRepositoryFingerprint,
+          sourceFingerprint: oracle.sourceFingerprint,
+          terminalOutcome: "READY" as const,
+          providerRequestCount: 1,
+          providerTokenCount: 100,
+          providerCostMinor: 1,
+        };
+      }),
+    ],
+    interruptions: Array.from({ length: 3 }, (_, index) => {
+      const pairedTaskIndex = [0, 5, 6][index] ?? 0;
+      const taskOracle = taskOracles[pairedTaskIndex];
+      if (taskOracle === undefined) throw new Error("fixture interruption task missing");
+      const runNumber = pairedTaskIndex + 1;
+      return {
+        interruptionId: `pilot-interruption-${String(index + 1)}`,
+        taskId: taskOracle.taskId,
+        kind: "FORCED_PROCESS_KILL" as const,
+        interruptedRunId: `run-pilot-${String(runNumber).padStart(2, "0")}`,
+        replacementRunId: `run-pilot-${String(runNumber).padStart(2, "0")}-replacement`,
+        replacementArchiveFingerprint: secondRepositoryFingerprint,
+        historyPreserved: true,
+        sourcePreserved: true,
+        resumeOutcome: "READY" as const,
+        actionableWithinFiveMinutes: true,
+      };
+    }),
     discardedWarmups: 5,
     warmStartSamplesMs: Array.from({ length: 20 }, () => 1_000),
     acknowledgementSamplesMs: Array.from({ length: 30 }, () => 100),

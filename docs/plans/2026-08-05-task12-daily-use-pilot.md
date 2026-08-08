@@ -6,7 +6,7 @@
 
 ## Evidence contract
 
-`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v4` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; comparator/task-result binding for both identities and numeric observations; and an explicit receipt that recovery or rollback required no manual Hunter state-file editing. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. Its `PilotPlanCompiler` freezes the machine profile, comparator/check fingerprints, five plugin fixtures, two update candidates, ten tasks, three paired tasks, two distinct repository identities, and the Provider authorization policy into a path-free, fingerprint-bound execution plan. Evidence must carry the exact plan fingerprint and authorization scope, and the evaluator rejects task, paired-comparator, Plugin, update, or machine identities that do not match that plan. A false `READY` is a zero-tolerance `STOP`, not a 9-of-10 quantitative miss. `hpi pilot compile --input <file> --json` emits only a strict, path-free execution plan or the same redacted blocked preflight receipt; `hpi pilot preflight --plan <file> --json` exposes only a redacted `READY`/`BLOCKED` receipt with fixed actionable reason codes; and `hpi pilot evaluate --plan <file> --evidence <file> --json` emits the strict decision, returning exit code 0 only for `GO` and never starting Pi or sending a Provider request. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
+`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v5` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; comparator/task-result binding for both identities and numeric observations; and an explicit receipt that recovery or rollback required no manual Hunter state-file editing. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. Its `PilotPlanCompiler` freezes the machine profile, comparator/check fingerprints, five plugin fixtures, two update candidates, ten tasks, three paired tasks, two distinct repository identities, and the Provider authorization policy into a path-free, fingerprint-bound execution plan. Evidence must carry the exact plan fingerprint and authorization scope, and the evaluator rejects task, paired-comparator, Plugin, update, or machine identities that do not match that plan. A false `READY` is a zero-tolerance `STOP`, not a 9-of-10 quantitative miss. `hpi pilot compile --input <file> --json` emits only a strict, path-free execution plan or the same redacted blocked preflight receipt; `hpi pilot preflight --plan <file> --json` exposes only a redacted `READY`/`BLOCKED` receipt with fixed actionable reason codes; and `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json` emits the strict decision, returning exit code 0 only for `GO` and never starting Pi or sending a Provider request. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
 
 ## Required run
 
@@ -41,3 +41,32 @@ The merged Task 12 product/evidence baseline is `b37f8fb`; its exact main CI run
 The pilot evaluator now emits a zero-tolerance `STOP` when Evidence claims a Provider send under a frozen `NO_PROVIDER_REQUESTS` operator scope, using the frozen plan policy even if Evidence forges another scope. `NO_PROVIDER_REQUESTS` is reserved for preflight/negative fixtures and cannot produce daily-use `GO`; a real daily-use run requires the explicit operator-authorized scope. This closes a contradictory-Evidence path without initiating any Provider request or changing the explicit-authorization path. The regression tests first reproduced the incorrect `GO` and `NOT_PROVEN` outcomes, then passed after the minimal evaluator gate; the real-pilot disposition remains `NOT_RUN` / `NOT_PROVEN`.
 
 The hardening commit `386abba` merged as PR #47 (`c3aa454`); exact main CI [`31176158257`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31176158257) passed all six required jobs. Windows Task 7 attempt-1 `TEST_EXECUTION` failure was retained and its one allowed retry passed; the run did not rewrite that history. One local `npm run verify` invocation also retained an npm `ECONNRESET` during package smoke; the independent package smoke rerun passed, and the failure is classified as external npm registry transport variance rather than a product/test assertion failure.
+
+## Trusted Archive and Provider accounting hardening (2026-08-09)
+
+Task 12 now uses plan-input/execution-plan v2 and Evidence v5. Live pilot Evidence carries an explicit
+`LIVE_WINDOWS_PILOT` capture provenance. A `FilePilotArchiveStore` writes an append-only, path-free
+Archive package whose immutable facts, Evidence fingerprint, observed time, and local store receipt
+are verified before a `TrustedPilotArchive` handle is returned. The persistence boundary accepts only an
+opaque capture authority issued by the capture runtime; raw JSON cannot promote itself to live Evidence.
+An HMAC-bound identity reservation remains after package deletion; a separate immutable commit receipt
+distinguishes a recoverable interrupted reservation from a committed Archive whose package disappeared.
+The package, reservation, and commit receipt each publish through flushed temporary files and
+non-overwriting hard links. Fixture/test provenance, plain Evidence files, modified packages, store
+aliases, and mismatched observation times fail closed. The evaluator and CLI require that trusted Archive
+for any decision that could otherwise resemble `GO`; the CLI form is `hpi pilot evaluate --plan <file>
+--evidence <file> --archive <file> --json`.
+
+Each Evidence task result now records Provider request/token/cost counts, and the linked Run Archive
+chain must have one reachable root and one terminal Run. Replacement Runs are aggregated for both
+Provider authorization and task outcomes; only a READY replacement whose linked Run and Archive
+fingerprint match an interruption counts as a successful recovery, and its interrupted predecessor must
+be terminal `INCOMPLETE` or `CANCELLED`; interruption receipts cannot reuse a predecessor or replacement
+Run. Explicit Provider scopes require finite maximum request, token, and cost budgets, and over-budget
+usage is a zero-tolerance STOP.
+
+These gates harden the authority boundary but do not create a real pilot. No external repository,
+credential, or Provider request was inferred or touched. The source-level test capture helper is not a
+package export, and the current product has no production capture finalizer; daily-use acceptance remains
+`NOT_RUN / NOT_PROVEN` until a separately authorized Windows pilot produces its complete immutable
+Archive and exact hosted Windows/Ubuntu receipts.

@@ -11,7 +11,7 @@ import {
   updateReceiptSchema,
   type UpdateManager,
 } from "@hunter-pi/updater";
-import { createPilotRepositoryTargetReceipt } from "@hunter-pi/pilot";
+import { createPilotRepositoryTargetReceipt, FilePilotArchiveStore } from "@hunter-pi/pilot";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -28,6 +28,7 @@ import {
   completePilotPlanInput,
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
+import { testPilotEvidenceCapture } from "./support/task12-test-capture.js";
 import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
@@ -209,7 +210,7 @@ describe("hpi command", () => {
       expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
       expect(io.stdout.join("\n")).toContain("hpi pilot compile --input <file> --json");
       expect(io.stdout.join("\n")).toContain(
-        "hpi pilot evaluate --plan <file> --evidence <file> --json",
+        "hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json",
       );
     }
   });
@@ -348,7 +349,7 @@ describe("hpi command", () => {
       0,
     );
     const plan = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
-    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v1" });
+    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v2" });
     expect(plan["planFingerprint"]).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan)).not.toContain(root);
   });
@@ -418,8 +419,22 @@ describe("hpi command", () => {
     const plan = completePilotExecutionPlan();
     const planPath = join(root, "pilot-plan.json");
     const evidencePath = join(root, "pilot-evidence.json");
+    const archiveStoreRoot = join(root, "pilot-store");
+    const archivePath = join(
+      archiveStoreRoot,
+      "archives",
+      "pilot-archive-cli-test",
+      "package.json",
+    );
+    const evidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+    new FilePilotArchiveStore({ stateRoot: archiveStoreRoot }).write({
+      archiveId: "pilot-archive-cli-test",
+      planFingerprint: plan.planFingerprint,
+      capture: testPilotEvidenceCapture(evidence),
+      observedAt: evidence.observedAt,
+    });
     await writeFile(planPath, JSON.stringify(plan), "utf8");
-    await writeFile(evidencePath, JSON.stringify(completePilotEvidence(plan)), "utf8");
+    await writeFile(evidencePath, JSON.stringify(evidence), "utf8");
     let launched = false;
     let authChecked = false;
     const evaluationDependencies: HpiCliDependencies = {
@@ -436,7 +451,17 @@ describe("hpi command", () => {
 
     expect(
       await runHpiCli(
-        ["pilot", "evaluate", "--plan", planPath, "--evidence", evidencePath, "--json"],
+        [
+          "pilot",
+          "evaluate",
+          "--plan",
+          planPath,
+          "--evidence",
+          evidencePath,
+          "--archive",
+          archivePath,
+          "--json",
+        ],
         evaluationDependencies,
       ),
     ).toBe(0);
@@ -452,7 +477,22 @@ describe("hpi command", () => {
     const { dependencies, io, root } = await createDependencies();
     const planPath = join(root, "pilot-plan.json");
     const evidencePath = join(root, "pilot-evidence.json");
-    await writeFile(planPath, JSON.stringify(completePilotExecutionPlan()), "utf8");
+    const archiveStoreRoot = join(root, "pilot-store");
+    const archivePath = join(
+      archiveStoreRoot,
+      "archives",
+      "pilot-archive-cli-invalid-evidence",
+      "package.json",
+    );
+    const plan = completePilotExecutionPlan();
+    const validEvidence = completePilotEvidence(plan, "LIVE_WINDOWS_PILOT");
+    new FilePilotArchiveStore({ stateRoot: archiveStoreRoot }).write({
+      archiveId: "pilot-archive-cli-invalid-evidence",
+      planFingerprint: plan.planFingerprint,
+      capture: testPilotEvidenceCapture(validEvidence),
+      observedAt: validEvidence.observedAt,
+    });
+    await writeFile(planPath, JSON.stringify(plan), "utf8");
     await writeFile(
       evidencePath,
       JSON.stringify({ credential: "token=do-not-echo", privatePath: root }),
@@ -461,7 +501,17 @@ describe("hpi command", () => {
 
     expect(
       await runHpiCli(
-        ["pilot", "evaluate", "--plan", planPath, "--evidence", evidencePath, "--json"],
+        [
+          "pilot",
+          "evaluate",
+          "--plan",
+          planPath,
+          "--evidence",
+          evidencePath,
+          "--archive",
+          archivePath,
+          "--json",
+        ],
         dependencies,
       ),
     ).toBe(2);

@@ -115,7 +115,7 @@ export class PilotPlanCompiler {
       pairedTaskIds: parsed.pairedTaskIds,
     };
     return pilotExecutionPlanSchema.parse({
-      schemaVersion: "hpi-pilot-execution-plan.v1",
+      schemaVersion: "hpi-pilot-execution-plan.v2",
       ...body,
       planFingerprint: pilotFingerprint(body),
     });

@@ -106,7 +106,7 @@ jobs:
           retention-days: 14
 
   pi-evidence-consistency:
-    name: Pi Evidence / Windows + Ubuntu identity
+    name: Pi + Task 9 Evidence / Windows + Ubuntu identity
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -29,18 +29,48 @@ export const task9PlatformConsistencySchema = z.strictObject({
   commandFingerprint: fingerprintSchema,
   windowsReceiptFingerprint: fingerprintSchema,
   ubuntuReceiptFingerprint: fingerprintSchema,
-  checks: z.array(
-    z.strictObject({
-      id: z.enum(TASK9_PLATFORM_CHECKS.map(({ id }) => id)),
-      status: z.literal("PASS"),
+  checks: z
+    .array(
+      z.strictObject({
+        id: z.enum(TASK9_PLATFORM_CHECKS.map(({ id }) => id)),
+        status: z.literal("PASS"),
+      }),
+    )
+    .length(TASK9_PLATFORM_CHECKS.length)
+    .superRefine((checks, context) => {
+      if (checks.some((check, index) => check.id !== TASK9_PLATFORM_CHECKS[index]?.id)) {
+        context.addIssue({ code: "custom", message: "Task 9 consistency checks are not exact" });
+      }
     }),
-  ),
   observedAt: timestampSchema,
 });
 export type Task9PlatformConsistency = z.infer<typeof task9PlatformConsistencySchema>;
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function semanticFacts(receipt: Task9PlatformReceipt): unknown {
+  return {
+    process: {
+      terminalFinality: receipt.facts.process.terminalFinality,
+      processTreeState: receipt.facts.process.processTreeState,
+      outputState: receipt.facts.process.outputState,
+      leaseState: receipt.facts.process.leaseState,
+    },
+    writerLease: {
+      state: receipt.facts.writerLease.state,
+      workspaceMatches: receipt.facts.writerLease.workspaceMatches,
+    },
+    attemptFinality: {
+      terminalFinality: receipt.facts.attemptFinality.terminalFinality,
+      processCount: receipt.facts.attemptFinality.processCount,
+      releasedWriterLeaseCount: receipt.facts.attemptFinality.releasedWriterLeaseCount,
+      evidenceCount: receipt.facts.attemptFinality.evidenceCount,
+    },
+    durableReplay: receipt.facts.durableReplay,
+    privacy: receipt.facts.privacy,
+  };
 }
 
 export function compareTask9PlatformEvidence(
@@ -69,6 +99,9 @@ export function compareTask9PlatformEvidence(
     !sameStrings(windows.verifier.pathspec, ubuntu.verifier.pathspec)
   ) {
     throw new Error("Task 9 platform receipts did not bind the same verifier identity");
+  }
+  if (canonicalJson(semanticFacts(windows)) !== canonicalJson(semanticFacts(ubuntu))) {
+    throw new Error("Task 9 platform receipts did not prove the same semantic facts");
   }
 
   const observedAt = [windows.observedAt, ubuntu.observedAt].sort(

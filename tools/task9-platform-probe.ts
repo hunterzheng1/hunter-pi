@@ -68,7 +68,11 @@ type FailureStage = Task9PlatformFailureReceipt["stage"];
 function errorFingerprint(error: unknown): Fingerprint {
   const shape =
     error instanceof Error
-      ? { name: error.name, code: "code" in error ? String(error.code) : "NONE" }
+      ? {
+          name: error.name,
+          code: "code" in error ? String(error.code) : "NONE",
+          message: error.message,
+        }
       : { name: "UnknownFailure", code: "NONE" };
   return sha256Fingerprint(canonicalJson(shape));
 }
@@ -141,7 +145,7 @@ async function trackedEntries(
       throw new Error("Task 9 source entry escaped the repository");
     }
     const status = await lstat(target);
-    if (!status.isFile() || status.isSymbolicLink()) {
+    if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1) {
       throw new Error("Task 9 source entry is not a physical file");
     }
   }

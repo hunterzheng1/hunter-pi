@@ -135,4 +135,25 @@ describe("Task 9 platform Evidence", () => {
       }),
     ).toThrow(/source commit/u);
   });
+
+  it("rejects cross-platform semantic count or lease-finality drift", () => {
+    const ubuntu = receipt("UBUNTU");
+    const facts = task9PlatformFactsSchema.parse({
+      ...ubuntu.facts,
+      attemptFinality: { ...ubuntu.facts.attemptFinality, processCount: 2 },
+    });
+    const drifted = task9PlatformReceiptSchema.parse({
+      ...ubuntu,
+      facts,
+      checks: TASK9_PLATFORM_CHECKS.map(({ id }) => ({
+        id,
+        status: "PASS",
+        fingerprint: task9CheckFingerprint(id, facts),
+      })),
+    });
+
+    expect(() => compareTask9PlatformEvidence(receipt("WINDOWS"), drifted)).toThrow(
+      /semantic facts/u,
+    );
+  });
 });

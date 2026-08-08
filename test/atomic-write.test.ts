@@ -15,6 +15,7 @@ import { createTemporaryTestDirectory } from "./support/temporary-test-directory
 
 const roots: string[] = [];
 const childProcesses = new Set<ChildProcessWithoutNullStreams>();
+const childCompletions = new Map<ChildProcessWithoutNullStreams, Promise<FixtureCompletion>>();
 const fixtureSource = fileURLToPath(
   new URL("./support/durable-mutation-lock-child.ts", import.meta.url),
 );
@@ -39,6 +40,11 @@ beforeAll(async () => {
   fixtureRoot = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-lock-fixture-");
   fixtureBundle = join(fixtureRoot, "durable-mutation-lock-child.mjs");
   await build({
+    alias: {
+      "@hunter-pi/domain": fileURLToPath(
+        new URL("../packages/domain/src/index.ts", import.meta.url),
+      ),
+    },
     bundle: true,
     entryPoints: [fixtureSource],
     format: "esm",
@@ -50,9 +56,13 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  const completions: Promise<FixtureCompletion>[] = [];
   for (const child of childProcesses) {
+    const completion = childCompletions.get(child);
+    if (completion !== undefined) completions.push(completion);
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
+  await Promise.allSettled(completions);
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
@@ -94,9 +104,11 @@ function startLockFixture(
     child.once("error", reject);
     child.once("close", (code, signal) => {
       childProcesses.delete(child);
+      childCompletions.delete(child);
       resolvePromise({ code, signal, stderr, stdout });
     });
   });
+  childCompletions.set(child, completion);
   return { child, completion, pid: child.pid, output: () => stdout };
 }
 
@@ -126,7 +138,7 @@ async function createRoot(prefix = "hunter-pi-mutation-lock-"): Promise<string> 
 }
 
 async function readReconciliationReceipts(lockPath: string): Promise<readonly string[]> {
-  const directory = join(dirname(lockPath), ".hpi-mutation-lock-reconciliation");
+  const directory = join(dirname(lockPath), ".pending-hpi-mutation-lock-metadata", "receipts");
   let filenames: readonly string[];
   try {
     filenames = (await readdir(directory)).filter((filename) => filename.endsWith(".json")).sort();
@@ -263,6 +275,15 @@ describe("durable mutation-lock recovery", () => {
     expect(receipts).toHaveLength(1);
     const receipt = JSON.parse(receipts[0] ?? "") as Record<string, unknown>;
     expect([first.pid, second.pid]).toContain(receipt["reconcilerPid"]);
+    const metadataRoot = join(root, ".pending-hpi-mutation-lock-metadata");
+    expect(
+      (await readdir(metadataRoot)).filter(
+        (filename) =>
+          filename.startsWith("claim-") ||
+          filename.startsWith("owner-") ||
+          filename.startsWith("active-claim-"),
+      ),
+    ).toEqual([]);
   });
 
   it("replays the exact immutable receipt for the same dead owner record", async () => {
@@ -274,7 +295,7 @@ describe("durable mutation-lock recovery", () => {
     await owner.completion;
 
     await withDurableMutationLock(lockPath, () => Promise.resolve());
-    const receiptDirectory = join(root, ".hpi-mutation-lock-reconciliation");
+    const receiptDirectory = join(root, ".pending-hpi-mutation-lock-metadata", "receipts");
     const [receiptFilename] = await readdir(receiptDirectory);
     if (receiptFilename === undefined) throw new Error("expected a reconciliation receipt");
     const receiptPath = join(receiptDirectory, receiptFilename);

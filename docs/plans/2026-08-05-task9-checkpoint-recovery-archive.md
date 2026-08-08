@@ -47,4 +47,14 @@ Make interruption handling and Run finalization durable without rewriting workfl
 
 ## 2026-08-08 hardening status
 
-The provider-neutral local contract now rejects cancellation after only `AGENT_RETURNED` or `PROCESS_EXITED`, rejects recovery when a process or Writer Lease identity is missing from the finality reconciliation, persists the Attempt Finality Receipt across durable reopen, and includes its Evidence in Archive completeness checks. Forced-kill/stale-lock platform fixtures, second-device projection proof, and exact Windows/Ubuntu Task 9 Evidence remain open; Task 9 therefore remains `PARTIAL` rather than production-proven.
+The provider-neutral local contract now rejects cancellation after only `AGENT_RETURNED` or `PROCESS_EXITED`, rejects recovery when a process or Writer Lease identity is missing from the finality reconciliation, persists the Attempt Finality Receipt across durable reopen, and includes its Evidence in Archive completeness checks. Second-device projection proof and exact Windows/Ubuntu Task 9 Evidence remain open; Task 9 therefore remains `PARTIAL` rather than production-proven.
+
+The durable mutation-lock seam now publishes a complete, synchronized owner record through an
+atomic no-replace hard link instead of exposing an empty lock directory. Reconciliation ignores
+age, never sends a signal, and is eligible only when the exact owner PID probe returns `ESRCH`;
+live, inaccessible, ownerless, directory-shaped, and malformed owners fail closed. An atomic
+reconciliation claim elects one contender, and the winner records a path-free immutable receipt
+before removing the exact old file identity. The Windows fixture covers a naturally exited owner,
+an externally forced owner kill, concurrent contenders, receipt replay, privacy, and replacement
+safety. Hosted Ubuntu execution, real power loss, and a second forced kill inside the narrower
+reconciliation-claim window remain open, so Task 9 remains `PARTIAL`.

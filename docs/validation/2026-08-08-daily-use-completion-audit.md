@@ -23,8 +23,11 @@ real implementations. The following daily-use gates remain open:
 - the canonical Kernel and RecoveryCoordinator now require an immutable Attempt Finality
   Receipt with exact Checkpoint process/Writer Lease sets, but a real platform recovery adapter
   has not yet bound Task 7 final receipts and lease releases into it;
-- recovery replay, stale mutation-lock reconciliation, forced-kill crash windows, and a
-  platform-bound Task 9 Evidence comparator are not yet proven;
+- stale mutation-lock reconciliation now has a Windows-local contract and real child-process
+  fixture: owner metadata is atomically published, only an exact missing PID is reclaimed, one
+  contender records an immutable path-free receipt, and an externally forced owner kill recovers
+  without manual deletion. Hosted Ubuntu execution, a kill inside the narrower reconciliation
+  window, real power loss, and a platform-bound Task 9 Evidence comparator remain unproven;
 - import/export/delete receipt replay and the second-device read-only projection need stronger
   immutable reconciliation semantics.
 

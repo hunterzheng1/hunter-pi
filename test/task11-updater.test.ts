@@ -251,6 +251,34 @@ describe("Task 11 qualified updater", () => {
     expect(reason).not.toMatch(/fixture-token|fixture-cookie|password|fixture-query|\/var\/lib/u);
   });
 
+  it("checks the qualification gate and exact artifact digest without activating", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task11-update-check-");
+    const { adapter, stage } = adapterFor();
+    const candidate = candidateFor("release_task11-check");
+    const manager = new FileUpdateManager({
+      stateRoot: join(root, "state"),
+      channel: "STABLE",
+      adapter,
+      artifacts: { read: () => Promise.resolve(artifact) },
+      qualificationVerifierFingerprint: fixtureFingerprint,
+    });
+
+    await expect(manager.check(candidate)).resolves.toMatchObject({
+      status: "AVAILABLE",
+      candidate: { releaseId: candidate.releaseId },
+    });
+    expect(stage).not.toHaveBeenCalled();
+    await expect(
+      manager.check({
+        ...candidate,
+        artifact: { ...candidate.artifact, fingerprint: fixtureFingerprint },
+      }),
+    ).resolves.toMatchObject({
+      status: "BLOCKED",
+      reason: "release artifact bytes do not match the declared candidate digest",
+    });
+  });
+
   it("applies only an exact qualified artifact and records the license inventory", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task11-update-");
     const { adapter, stage, getActive } = adapterFor();

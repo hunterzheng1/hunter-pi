@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runHpiCli, type HpiCliDependencies, type HpiCliIo } from "@hunter-pi/cli";
+import {
+  releaseCandidateSchema,
+  updateReceiptSchema,
+  type UpdateManager,
+} from "@hunter-pi/updater";
 import { createPilotRepositoryTargetReceipt } from "@hunter-pi/pilot";
 import {
   acknowledgeProviderDisclosure,
@@ -32,6 +37,47 @@ const createdRoots: string[] = [];
 const coreFixtureSource = "export default () => {};\n";
 const coreFixtureIntegrity = `sha256:${createHash("sha256").update(coreFixtureSource).digest("hex")}`;
 const productShellFixtureIntegrity = `sha256:${"c".repeat(64)}`;
+const updateArtifactFixture = Buffer.from("hunter-pi-cli-update-artifact\n", "utf8");
+const updateArtifactFixtureIntegrity = `sha256:${createHash("sha256")
+  .update(updateArtifactFixture)
+  .digest("hex")}`;
+const updateCandidateFixture = releaseCandidateSchema.parse({
+  schemaVersion: "hpi-release-candidate.v1",
+  releaseId: "release_cli-update",
+  productVersion: "0.2.0",
+  channel: "PREVIEW",
+  artifact: {
+    reference: "fixture/release_cli-update.bundle.tgz",
+    fingerprint: updateArtifactFixtureIntegrity,
+    byteLength: updateArtifactFixture.byteLength,
+  },
+  engine: {
+    releaseId: "engine-release_pi-0.83.0",
+    fingerprint: `sha256:${"a".repeat(64)}`,
+    piVersion: "0.83.0",
+  },
+  qualification: {
+    status: "PASS",
+    verifierFingerprint: `sha256:${"a".repeat(64)}`,
+    checks: [
+      {
+        name: "cli-update-fixture",
+        outcome: "PASS",
+        evidenceIds: ["evidence_cli-update"],
+      },
+    ],
+    qualifiedAt: "2026-08-03T13:00:00.000Z",
+  },
+  updatePolicy: { piSelfUpdate: "DISABLED", unsigned: true },
+  licenses: [
+    {
+      name: "Hunter Pi",
+      version: "0.2.0",
+      license: "MIT",
+      sourceReference: "NOTICE",
+    },
+  ],
+});
 
 afterEach(async () => {
   await Promise.all(createdRoots.splice(0).map(removeTemporaryTestDirectory));
@@ -63,6 +109,7 @@ async function createDependencies(
     readonly readTextFile?: HpiCliDependencies["readTextFile"];
     readonly readProviderAuthStatus?: HpiCliDependencies["readProviderAuthStatus"];
     readonly getVersionInfo?: HpiCliDependencies["getVersionInfo"];
+    readonly createUpdateManager?: HpiCliDependencies["createUpdateManager"];
   } = {},
 ): Promise<{
   readonly root: string;
@@ -128,6 +175,9 @@ async function createDependencies(
           productShellIntegrity: productShellFixtureIntegrity,
           updateChannel: "developer-preview",
         })),
+    ...(options.createUpdateManager === undefined
+      ? {}
+      : { createUpdateManager: options.createUpdateManager }),
   };
   await writeFile(join(root, "core-extension.js"), coreFixtureSource, "utf8");
   return { root, io, dependencies };
@@ -490,6 +540,96 @@ describe("hpi command", () => {
     expect(version).toHaveProperty("sourceState");
     expect(version).toHaveProperty("coreExtensionIntegrity");
     expect(version).toHaveProperty("productShellIntegrity");
+  });
+
+  it("checks, applies, reports, and rolls back a qualified update through the CLI", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const candidatePath = join(root, "update-candidate.json");
+    const artifactPath = join(root, "update-artifact.bundle.tgz");
+    await writeFile(candidatePath, JSON.stringify(updateCandidateFixture), "utf8");
+    await writeFile(artifactPath, updateArtifactFixture);
+    const calls: string[] = [];
+    const manager: UpdateManager = {
+      check: (candidate) => Promise.resolve({ status: "AVAILABLE", candidate }),
+      apply: (request) => {
+        calls.push(`apply:${request.candidate.releaseId}`);
+        return Promise.resolve(
+          updateReceiptSchema.parse({
+            schemaVersion: "hpi-update-receipt.v1",
+            operationId: request.operationId,
+            operationFingerprint: request.operationFingerprint,
+            action: "APPLY",
+            outcome: "APPLIED",
+            candidateReleaseId: request.candidate.releaseId,
+            activeReleaseId: request.candidate.releaseId,
+            observedAt: request.observedAt,
+          }),
+        );
+      },
+      rollback: (request) => {
+        calls.push(`rollback:${request.targetReleaseId}`);
+        return Promise.resolve(
+          updateReceiptSchema.parse({
+            schemaVersion: "hpi-update-receipt.v1",
+            operationId: request.operationId,
+            operationFingerprint: request.operationFingerprint,
+            action: "ROLLBACK",
+            outcome: "APPLIED",
+            targetReleaseId: request.targetReleaseId,
+            activeReleaseId: request.targetReleaseId,
+            observedAt: request.observedAt,
+          }),
+        );
+      },
+      reconcile: () => Promise.resolve([]),
+      current: () => Promise.resolve({ releaseId: updateCandidateFixture.releaseId }),
+      history: () => Promise.resolve([updateCandidateFixture]),
+    };
+    const updateDependencies: HpiCliDependencies = {
+      ...dependencies,
+      createUpdateManager: ({ artifactPath: selectedArtifactPath }) => {
+        if (selectedArtifactPath !== undefined) expect(selectedArtifactPath).toBe(artifactPath);
+        return Promise.resolve(manager);
+      },
+    };
+
+    expect(
+      await runHpiCli(
+        ["update", "check", "--candidate", candidatePath, "--artifact", artifactPath, "--json"],
+        updateDependencies,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(io.stdout.at(-1) ?? "{}")).toMatchObject({ status: "AVAILABLE" });
+    expect(
+      await runHpiCli(
+        ["update", "apply", "--candidate", candidatePath, "--artifact", artifactPath, "--json"],
+        updateDependencies,
+      ),
+    ).toBe(0);
+    expect(
+      await runHpiCli(
+        ["update", "rollback", updateCandidateFixture.releaseId, "--json"],
+        updateDependencies,
+      ),
+    ).toBe(0);
+    expect(await runHpiCli(["update", "status", "--json"], updateDependencies)).toBe(0);
+    expect(JSON.parse(io.stdout.at(-1) ?? "{}")).toMatchObject({
+      schemaVersion: "hpi-update-status.v1",
+      currentReleaseId: updateCandidateFixture.releaseId,
+    });
+    expect(calls).toEqual(["apply:release_cli-update", "rollback:release_cli-update"]);
+    const output = `${io.stdout.join("\n")} ${io.stderr.join("\n")}`;
+    expect(output).not.toContain(candidatePath);
+    expect(output).not.toContain(artifactPath);
+  });
+
+  it("reports a missing portable installation instead of guessing an update target", async () => {
+    const { dependencies, io } = await createDependencies();
+    expect(await runHpiCli(["update", "status", "--json"], dependencies)).toBe(2);
+    expect(JSON.parse(io.stdout.join(""))).toMatchObject({
+      schemaVersion: "hpi-update-status.v1",
+      status: "NOT_CONFIGURED",
+    });
   });
 
   it("cancels first-run disclosure as BLOCKED without persisting configuration", async () => {

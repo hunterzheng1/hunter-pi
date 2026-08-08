@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import {
@@ -81,6 +81,17 @@ import {
   type PilotRepositoryTargetReceipt,
   type PilotPreflightFailure,
 } from "@hunter-pi/pilot";
+import { operationIdSchema } from "@hunter-pi/domain";
+import {
+  FileUpdateManager,
+  FileWindowsPortableReleaseAdapter,
+  HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+  releaseCandidateSchema,
+  type ReleaseCandidate,
+  type ReleaseCheckResult,
+  type UpdateManager,
+  type UpdateReceipt,
+} from "@hunter-pi/updater";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
 
@@ -125,6 +136,11 @@ export interface HpiCliDependencies {
   readonly getVersionInfo?: () => Promise<HpiVersionInfo>;
   readonly runTask6Process?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
   readonly readTextFile?: (path: string) => Promise<string>;
+  readonly readBinaryFile?: (path: string) => Promise<Uint8Array>;
+  readonly createUpdateManager?: (options: {
+    readonly paths: HpiPaths;
+    readonly artifactPath?: string;
+  }) => Promise<UpdateManager | undefined>;
 }
 
 export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
@@ -336,7 +352,7 @@ function createProcessIo(): HpiCliIo {
 }
 
 function defaultDependencies(): HpiCliDependencies {
-  return {
+  const dependencies: HpiCliDependencies = {
     cwd: process.cwd(),
     environment: process.env,
     homeDirectory: homedir(),
@@ -350,7 +366,49 @@ function defaultDependencies(): HpiCliDependencies {
     temporaryParent: tmpdir(),
     platform: process.platform,
     readTextFile: (path) => readFile(path, "utf8"),
+    readBinaryFile: (path) => readFile(path),
+    createUpdateManager: (options) => createDefaultUpdateManager(dependencies, options),
   };
+  return dependencies;
+}
+
+function createDefaultUpdateManager(
+  dependencies: HpiCliDependencies,
+  options: { readonly paths: HpiPaths; readonly artifactPath?: string },
+): Promise<UpdateManager | undefined> {
+  const portableRoot = dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
+  if (
+    dependencies.platform !== "win32" ||
+    process.arch !== "x64" ||
+    portableRoot === undefined ||
+    !isAbsolute(portableRoot)
+  ) {
+    return Promise.resolve(undefined);
+  }
+  const adapter = new FileWindowsPortableReleaseAdapter({
+    installationRoot: resolve(portableRoot),
+    mutableStateDirectory: options.paths.root,
+    now: dependencies.now,
+  });
+  return Promise.resolve(
+    new FileUpdateManager({
+      stateRoot: join(options.paths.root, "updates"),
+      channel: "PREVIEW",
+      adapter,
+      artifacts: {
+        read: async () => {
+          if (options.artifactPath === undefined) {
+            throw new Error("an update artifact file is required for this operation");
+          }
+          return dependencies.readBinaryFile === undefined
+            ? await readFile(options.artifactPath)
+            : await dependencies.readBinaryFile(options.artifactPath);
+        },
+      },
+      qualificationVerifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+      now: dependencies.now,
+    }),
+  );
 }
 
 function line(io: HpiCliIo, text: string): void {
@@ -363,6 +421,149 @@ function errorLine(io: HpiCliIo, text: string): void {
 
 function sha256(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function updateCandidatePresentation(candidate: ReleaseCandidate): Record<string, unknown> {
+  return {
+    releaseId: candidate.releaseId,
+    productVersion: candidate.productVersion,
+    channel: candidate.channel,
+    artifactFingerprint: candidate.artifact.fingerprint,
+    artifactByteLength: candidate.artifact.byteLength,
+    engine: candidate.engine,
+    qualification: {
+      status: candidate.qualification.status,
+      verifierFingerprint: candidate.qualification.verifierFingerprint,
+      checks: candidate.qualification.checks.map((check) => ({
+        name: check.name,
+        outcome: check.outcome,
+        evidenceIds: check.evidenceIds,
+      })),
+    },
+    updatePolicy: candidate.updatePolicy,
+    licenses: candidate.licenses,
+  };
+}
+
+function updateStatusResult(
+  status: "NOT_CONFIGURED" | "EMPTY" | "READY",
+  reason?: string,
+): Record<string, unknown> {
+  return {
+    schemaVersion: "hpi-update-status.v1",
+    status,
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+
+async function readUpdateCandidate(
+  path: string,
+  dependencies: HpiCliDependencies,
+): Promise<ReleaseCandidate> {
+  const raw = await (
+    dependencies.readTextFile ?? ((filePath: string) => readFile(filePath, "utf8"))
+  )(path);
+  return releaseCandidateSchema.parse(JSON.parse(raw) as unknown);
+}
+
+function updateOperationFingerprint(action: "CHECK" | "APPLY" | "ROLLBACK", value: unknown) {
+  return sha256(`hpi-update\0${action}\0${JSON.stringify(value)}`);
+}
+
+function updateOutcomeExitCode(outcome: UpdateReceipt["outcome"]): number {
+  return outcome === "APPLIED" || outcome === "NOOP" ? 0 : 2;
+}
+
+async function updateCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+): Promise<number> {
+  const subcommand = arguments_[0];
+  const artifactPath =
+    subcommand === "check" || subcommand === "apply"
+      ? optionValue(arguments_.slice(1), "--artifact")
+      : undefined;
+  const manager = await dependencies.createUpdateManager?.({
+    paths,
+    ...(artifactPath === undefined ? {} : { artifactPath }),
+  });
+  if (manager === undefined) {
+    line(
+      dependencies.io,
+      JSON.stringify(
+        updateStatusResult(
+          "NOT_CONFIGURED",
+          "a Windows x64 portable installation is not configured for updates",
+        ),
+      ),
+    );
+    return 2;
+  }
+
+  try {
+    if (subcommand === "status") {
+      const reconciled = await manager.reconcile();
+      const current = await manager.current();
+      const history = await manager.history();
+      line(
+        dependencies.io,
+        JSON.stringify({
+          ...updateStatusResult(current.releaseId === undefined ? "EMPTY" : "READY"),
+          currentReleaseId: current.releaseId ?? null,
+          history: history.map(updateCandidatePresentation),
+          reconciled,
+        }),
+      );
+      return 0;
+    }
+
+    if (subcommand === "check" || subcommand === "apply") {
+      const candidatePath = optionValue(arguments_.slice(1), "--candidate");
+      if (candidatePath === undefined || artifactPath === undefined) throw new HpiCliUsageError();
+      const candidate = await readUpdateCandidate(candidatePath, dependencies);
+      if (subcommand === "check") {
+        const result: ReleaseCheckResult = await manager.check(candidate);
+        line(dependencies.io, JSON.stringify(result));
+        return result.status === "AVAILABLE" ? 0 : 2;
+      }
+      const receipt = await manager.apply({
+        schemaVersion: "hpi-update-apply.v1",
+        operationId: operationIdSchema.parse(`op_update-apply-${randomUUID()}`),
+        operationFingerprint: updateOperationFingerprint("APPLY", candidate),
+        candidate,
+        observedAt: dependencies.now(),
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return updateOutcomeExitCode(receipt.outcome);
+    }
+
+    if (subcommand === "rollback") {
+      const targetReleaseId = arguments_[1];
+      if (targetReleaseId === undefined) throw new HpiCliUsageError();
+      const receipt = await manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: operationIdSchema.parse(`op_update-rollback-${randomUUID()}`),
+        operationFingerprint: updateOperationFingerprint("ROLLBACK", targetReleaseId),
+        targetReleaseId,
+        observedAt: dependencies.now(),
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return updateOutcomeExitCode(receipt.outcome);
+    }
+    throw new HpiCliUsageError();
+  } catch (error) {
+    if (error instanceof HpiCliUsageError) throw error;
+    line(
+      dependencies.io,
+      JSON.stringify({
+        schemaVersion: "hpi-update-operation.v1",
+        status: "BLOCKED",
+        reason: "update input or operation could not be completed",
+      }),
+    );
+    return 2;
+  }
 }
 
 function createPluginCompatibilityContext(
@@ -575,6 +776,31 @@ function assertChangeOptions(arguments_: readonly string[]): void {
   if (!jsonSeen || seen.size !== 2) throw new HpiCliUsageError();
 }
 
+function assertUpdateOptions(arguments_: readonly string[]): void {
+  const subcommand = arguments_[0];
+  if (subcommand === "status") {
+    assertUniqueFlags(arguments_.slice(1), new Set(["--json"]));
+    if (arguments_.length !== 2 || arguments_[1] !== "--json") throw new HpiCliUsageError();
+    return;
+  }
+  if (subcommand === "check" || subcommand === "apply") {
+    assertPilotJsonOptions(arguments_.slice(1), new Set(["--candidate", "--artifact"]));
+    return;
+  }
+  if (subcommand === "rollback") {
+    if (
+      arguments_.length !== 3 ||
+      arguments_[1] === undefined ||
+      arguments_[1].startsWith("-") ||
+      arguments_[2] !== "--json"
+    ) {
+      throw new HpiCliUsageError();
+    }
+    return;
+  }
+  throw new HpiCliUsageError();
+}
+
 function assertPluginOptions(options: readonly string[], valueOptions: ReadonlySet<string>): void {
   const booleanOptions = new Set(["--acknowledge-provenance", "--allow-process-authority"]);
   const seen = new Set<string>();
@@ -658,6 +884,10 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (command === "change") {
     assertChangeOptions(arguments_.slice(1));
+    return;
+  }
+  if (command === "update") {
+    assertUpdateOptions(arguments_.slice(1));
     return;
   }
   if (command === "version") {
@@ -1879,6 +2109,10 @@ function printHelp(io: HpiCliIo): void {
     "       hpi setup [--provider id --model exact-id --policy-reference URL --endpoint-category CATEGORY --destination-origin ORIGIN --permission safe|balanced|full-access]",
   );
   line(io, "       hpi login | doctor [--json] | version --json");
+  line(io, "       hpi update status --json");
+  line(io, "       hpi update check --candidate <file> --artifact <file> --json");
+  line(io, "       hpi update apply --candidate <file> --artifact <file> --json");
+  line(io, "       hpi update rollback <release-id> --json");
   line(io, "       hpi smoke tui");
   line(io, "       hpi change --repo <directory> --plan <file> --json --allow-provider-request");
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
@@ -2039,6 +2273,9 @@ export async function runHpiCli(
     }
     if (command === "change") {
       return await realChangeCommand(arguments_.slice(1), dependencies, paths);
+    }
+    if (command === "update") {
+      return await updateCommand(arguments_.slice(1), dependencies, paths);
     }
     if (command === "plugin") {
       try {

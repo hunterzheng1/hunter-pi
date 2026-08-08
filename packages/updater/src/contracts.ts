@@ -142,6 +142,14 @@ export const releaseCandidateSchema = releaseCandidateBaseSchema.extend({
 export type ReleaseCandidateBase = z.infer<typeof releaseCandidateBaseSchema>;
 export type ReleaseCandidate = z.infer<typeof releaseCandidateSchema>;
 
+/**
+ * Stable identity of the built-in developer-preview qualification policy.
+ * Bump the policy version when its acceptance rules change.
+ */
+export const HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT = fingerprintSchema.parse(
+  "sha256:ed7c79240e64fbf506101745e6aa23e2f2cc778e56058f371ac2b04482673925",
+);
+
 export const qualificationProbeResultSchema = z.strictObject({
   outcome: z.enum(["PASS", "FAIL", "BLOCKED", "NOT_PROVEN"]),
   evidenceIds: z.array(evidenceIdSchema),
@@ -224,6 +232,50 @@ export interface StagedRelease {
 
 export interface MigrationTransaction {
   rollback(): Promise<void>;
+  commit?(): Promise<void>;
+}
+
+export const updateReconciliationSchema = z
+  .strictObject({
+    status: z.enum(["NONE", "RECOVERED", "ABORTED"]),
+    candidate: releaseCandidateSchema.optional(),
+    previousReleaseId: distributionReleaseIdSchema.optional(),
+    activeReleaseId: distributionReleaseIdSchema.optional(),
+    reason: nonEmptyTextSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.status === "RECOVERED" && value.candidate === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["candidate"],
+        message: "a recovered update must bind its exact release candidate",
+      });
+    }
+    if (value.status === "ABORTED" && value.reason === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "an aborted update must explain the recovery decision",
+      });
+    }
+  });
+export type UpdateReconciliation = z.infer<typeof updateReconciliationSchema>;
+
+export const releaseCheckResultSchema = z.strictObject({
+  status: z.enum(["AVAILABLE", "BLOCKED", "NOT_CONFIGURED"]),
+  candidate: releaseCandidateSchema.optional(),
+  reason: nonEmptyTextSchema.optional(),
+});
+export type ReleaseCheckResult = z.infer<typeof releaseCheckResultSchema>;
+
+export interface ReleaseCandidateCheckOptions {
+  readonly channel: ReleaseChannel;
+  readonly qualificationVerifierFingerprint: Fingerprint;
+  readonly artifacts: ReleaseArtifactSource;
+}
+
+export interface ReleaseCandidateCheck {
+  check(candidate: ReleaseCandidate): Promise<ReleaseCheckResult>;
 }
 
 export interface ReleaseAdapter {
@@ -235,15 +287,18 @@ export interface ReleaseAdapter {
   migrate?: (
     release: StagedRelease,
     previousReleaseId: DistributionReleaseId | undefined,
-  ) => Promise<MigrationTransaction>;
+  ) => Promise<MigrationTransaction | undefined>;
   activate(release: StagedRelease): Promise<void>;
   restore(release: StagedRelease): Promise<void>;
   discard(release: StagedRelease): Promise<void>;
+  reconcile?(): Promise<UpdateReconciliation>;
 }
 
 export interface UpdateManager {
+  check(candidate: ReleaseCandidate): Promise<ReleaseCheckResult>;
   apply(request: UpdateApplyRequest): Promise<UpdateReceipt>;
   rollback(request: UpdateRollbackRequest): Promise<UpdateReceipt>;
+  reconcile(): Promise<readonly UpdateReceipt[]>;
   current(): Promise<{ readonly releaseId: DistributionReleaseId | undefined }>;
   history(): Promise<readonly ReleaseCandidate[]>;
 }

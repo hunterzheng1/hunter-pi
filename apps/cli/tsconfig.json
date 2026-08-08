@@ -4,7 +4,8 @@
     "composite": true,
     "outDir": "dist",
     "paths": {
-      "@hunter-pi/pilot": ["../../packages/pilot/src/index.ts"]
+      "@hunter-pi/pilot": ["../../packages/pilot/src/index.ts"],
+      "@hunter-pi/updater": ["../../packages/updater/src/index.ts"]
     },
     "rootDir": "src",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
@@ -16,6 +17,7 @@
     { "path": "../../packages/managed-change" },
     { "path": "../../packages/pi-host" },
     { "path": "../../packages/pilot" },
-    { "path": "../../packages/plugin-manager" }
+    { "path": "../../packages/plugin-manager" },
+    { "path": "../../packages/updater" }
   ]
 }

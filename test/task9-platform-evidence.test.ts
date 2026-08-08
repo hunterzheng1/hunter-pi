@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { compareTask9PlatformEvidence } from "../tools/compare-task9-platform-evidence.js";
 import {
+  TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+  TASK9_CONTRACT_TEST_FILES,
   TASK9_PLATFORM_CHECKS,
   TASK9_SOURCE_PATHSPEC,
   TASK9_VERIFIER_PATHSPEC,
@@ -14,6 +16,17 @@ const fingerprint = `sha256:${"a".repeat(64)}` as const;
 
 function receipt(os: "WINDOWS" | "UBUNTU") {
   const facts = task9PlatformFactsSchema.parse({
+    contractMatrix: {
+      status: "PASS",
+      definitionFingerprint: TASK9_CONTRACT_DEFINITION_FINGERPRINT,
+      testFileCount: 8,
+      testCount: 87,
+      passedTestCount: os === "WINDOWS" ? 87 : 86,
+      skippedTestCount: os === "WINDOWS" ? 0 : 1,
+      windowsPathAlias: os === "WINDOWS" ? "PASS" : "NOT_APPLICABLE",
+      forcedTerminationRecovery: "PASS",
+      secondDeviceProjection: "PASS",
+    },
     process: {
       terminalFinality: "FINAL",
       processTreeState: "EMPTY",
@@ -45,7 +58,7 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
     },
   });
   return task9PlatformReceiptSchema.parse({
-    schemaVersion: "hpi-task9-platform-receipt.v1",
+    schemaVersion: "hpi-task9-platform-receipt.v2",
     kind: "hunter-pi/task9-platform-receipt",
     status: "PASS",
     platform: { os, architecture: "x64", nodeMajor: 24 },
@@ -56,7 +69,7 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
       fingerprint,
     },
     verifier: {
-      version: "task9-platform-verifier.v1",
+      version: "task9-platform-verifier.v2",
       pathspec: TASK9_VERIFIER_PATHSPEC,
       fingerprint,
       commandFingerprint: fingerprint,
@@ -72,8 +85,9 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
 }
 
 describe("Task 9 platform Evidence", () => {
-  it("accepts the exact finality, lease, replay, and privacy matrix", () => {
+  it("accepts the exact contract, finality, lease, replay, and privacy matrix", () => {
     expect(receipt("WINDOWS").status).toBe("PASS");
+    expect(TASK9_CONTRACT_TEST_FILES).toHaveLength(8);
   });
 
   it("rejects a partial or reordered check matrix", () => {
@@ -99,6 +113,30 @@ describe("Task 9 platform Evidence", () => {
     ).toThrow(/expected true|PASS/u);
   });
 
+  it("rejects a partial, skipped, or platform-mismatched daily-use contract matrix", () => {
+    const windows = receipt("WINDOWS");
+    expect(() =>
+      task9PlatformReceiptSchema.parse({
+        ...windows,
+        facts: {
+          ...windows.facts,
+          contractMatrix: { ...windows.facts.contractMatrix, passedTestCount: 86 },
+        },
+      }),
+    ).toThrow(/contract|test|Windows/iu);
+
+    const ubuntu = receipt("UBUNTU");
+    expect(() =>
+      task9PlatformReceiptSchema.parse({
+        ...ubuntu,
+        facts: {
+          ...ubuntu.facts,
+          contractMatrix: { ...ubuntu.facts.contractMatrix, windowsPathAlias: "PASS" },
+        },
+      }),
+    ).toThrow(/contract|alias|Ubuntu/iu);
+  });
+
   it("rejects private-path or credential-shaped serialized Evidence", () => {
     const valid = receipt("WINDOWS");
     expect(() =>
@@ -113,7 +151,7 @@ describe("Task 9 platform Evidence", () => {
     const result = compareTask9PlatformEvidence(receipt("WINDOWS"), receipt("UBUNTU"));
 
     expect(result).toMatchObject({
-      schemaVersion: "hpi-task9-platform-consistency.v1",
+      schemaVersion: "hpi-task9-platform-consistency.v2",
       kind: "hunter-pi/task9-platform-consistency",
       status: "PASS",
       sourceCommit: "a".repeat(40),

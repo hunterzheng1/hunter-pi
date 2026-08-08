@@ -7,6 +7,9 @@ const workflow = await readFile(
   resolve(import.meta.dirname, "..", ".github", "workflows", "ci.yml"),
   "utf8",
 );
+const manifest = JSON.parse(
+  await readFile(resolve(import.meta.dirname, "..", "package.json"), "utf8"),
+) as { readonly scripts?: Readonly<Record<string, string>> };
 
 describe("GitHub Actions CI efficiency policy", () => {
   it("gates the expensive containment matrix and serializes its host-sensitive jobs", () => {
@@ -78,6 +81,33 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(aggregateSection).toContain("Compare exact Task 9 platform identities");
     expect(aggregateSection).toContain("Upload Task 9 consistency receipt");
     expect(workflow).not.toMatch(/^\x20{2}task9-platform:/mu);
+  });
+
+  it("runs the Task 9 daily-use matrix once inside its Evidence probe", () => {
+    const qualityTestScript = manifest.scripts?.["test:ci"];
+    expect(qualityTestScript).toBeDefined();
+    expect(workflow).toContain("run: npm run test:ci");
+    for (const path of [
+      "test/atomic-write.test.ts",
+      "test/file-lease-manager.test.ts",
+      "test/task9-archive.test.ts",
+      "test/task9-recovery.test.ts",
+      "test/task9-checkpoint.test.ts",
+      "test/task9-cancellation.test.ts",
+      "test/task9-attempt-finality-store.test.ts",
+      "test/task9-attempt-finality-adapter.test.ts",
+    ]) {
+      expect(qualityTestScript).toContain(`--exclude ${path}`);
+    }
+    expect(qualityTestScript).toContain("--exclude test/managed-process-platform.test.ts");
+    expect(qualityTestScript).not.toContain("task9-platform-evidence.test.ts");
+
+    const qualitySection =
+      /\x20{2}quality:\r?\n([\s\S]*?)\r?\n\x20{2}pi-evidence-consistency:/u.exec(workflow)?.[1];
+    const buildIndex = qualitySection?.indexOf("run: npm run build") ?? -1;
+    const task9ProbeIndex = qualitySection?.indexOf("npm run probe:task9:compiled") ?? -1;
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(task9ProbeIndex).toBeGreaterThan(buildIndex);
   });
 
   it("preserves and retries only structured Task 7 test-execution failures once", () => {

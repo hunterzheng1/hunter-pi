@@ -20,6 +20,8 @@ import { fingerprintSchema, timestampSchema } from "@hunter-pi/domain";
 import { DurableStoreError, isErrnoException, storeErrorFrom } from "./errors.js";
 import { canonicalJson, sha256Fingerprint } from "./serialization.js";
 
+export { DurableStoreError } from "./errors.js";
+
 export const atomicWriteBoundaries = [
   "BEFORE_TEMP_WRITE",
   "AFTER_TEMP_WRITE",
@@ -194,6 +196,7 @@ type ProcessLivenessState = "ALIVE" | "NOT_FOUND" | "UNKNOWN";
 
 const mutationLockAttemptLimit = 200;
 const mutationLockRetryDelayMs = 5;
+const mutationLockElapsedLimitMs = 5_000;
 const mutationLockMetadataDirectoryName = ".pending-hpi-mutation-lock-metadata";
 
 function mutationLockMetadataRoot(lockPath: string): string {
@@ -380,6 +383,14 @@ function isAlreadyPresent(error: unknown): boolean {
   return isErrnoException(error) && error.code === "EEXIST";
 }
 
+function isTransientWindowsFileUse(error: unknown): boolean {
+  return (
+    process.platform === "win32" &&
+    isErrnoException(error) &&
+    (error.code === "EBUSY" || error.code === "EPERM")
+  );
+}
+
 function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.inode !== 0n && left.device === right.device && left.inode === right.inode;
 }
@@ -487,23 +498,35 @@ async function readOwnerSnapshot(lockPath: string): Promise<OwnerSnapshotResult>
   try {
     initialStats = await lstat(lockPath, { bigint: true });
   } catch (error) {
-    if (isMissing(error)) return { state: "ABSENT" };
+    if (isMissing(error) || isTransientWindowsFileUse(error)) return { state: "ABSENT" };
     throw error;
   }
   if (!initialStats.isFile() || initialStats.isSymbolicLink() || initialStats.ino === 0n) {
     return { state: "INVALID" };
   }
   const firstIdentity = { device: initialStats.dev, inode: initialStats.ino };
+  let content: string;
+  try {
+    content = await readFile(lockPath, "utf8");
+  } catch (error) {
+    if (isMissing(error) || isTransientWindowsFileUse(error)) return { state: "ABSENT" };
+    return { state: "INVALID" };
+  }
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(await readFile(lockPath, "utf8"));
-  } catch (error) {
-    if (isMissing(error)) return { state: "ABSENT" };
+    parsedJson = JSON.parse(content);
+  } catch {
     return { state: "INVALID" };
   }
   const parsed = durableMutationLockOwnerSchema.safeParse(parsedJson);
   if (!parsed.success) return { state: "INVALID" };
-  const secondIdentity = await readFileIdentity(lockPath);
+  let secondIdentity: FileIdentity | undefined;
+  try {
+    secondIdentity = await readFileIdentity(lockPath);
+  } catch (error) {
+    if (isTransientWindowsFileUse(error)) return { state: "ABSENT" };
+    throw error;
+  }
   if (secondIdentity === undefined || !sameFileIdentity(firstIdentity, secondIdentity)) {
     return { state: "ABSENT" };
   }
@@ -636,7 +659,7 @@ async function readReconciliationClaimSnapshot(
   try {
     initial = await lstat(path, { bigint: true });
   } catch (error) {
-    if (isMissing(error)) return undefined;
+    if (isMissing(error) || isTransientWindowsFileUse(error)) return undefined;
     throw error;
   }
   if (!initial.isFile() || initial.isSymbolicLink() || initial.ino === 0n) {
@@ -645,20 +668,34 @@ async function readReconciliationClaimSnapshot(
       "A durable mutation-lock reconciliation claim is not an exact physical file.",
     );
   }
-  let parsed: DurableMutationLockReconciliationClaim;
+  let content: string;
   try {
-    parsed = durableMutationLockReconciliationClaimSchema.parse(
-      JSON.parse(await readFile(path, "utf8")),
-    );
+    content = await readFile(path, "utf8");
   } catch (error) {
-    if (isMissing(error)) return undefined;
+    if (isMissing(error) || isTransientWindowsFileUse(error)) return undefined;
     throw new DurableStoreError(
       "STORE_BUSY",
       "A durable mutation-lock reconciliation claim is unreadable.",
       error,
     );
   }
-  const identity = await readFileIdentity(path);
+  let parsed: DurableMutationLockReconciliationClaim;
+  try {
+    parsed = durableMutationLockReconciliationClaimSchema.parse(JSON.parse(content));
+  } catch (error) {
+    throw new DurableStoreError(
+      "STORE_BUSY",
+      "A durable mutation-lock reconciliation claim is unreadable.",
+      error,
+    );
+  }
+  let identity: FileIdentity | undefined;
+  try {
+    identity = await readFileIdentity(path);
+  } catch (error) {
+    if (isTransientWindowsFileUse(error)) return undefined;
+    throw error;
+  }
   const initialIdentity = { device: initial.dev, inode: initial.ino };
   if (identity === undefined || !sameFileIdentity(initialIdentity, identity)) return undefined;
   return {
@@ -883,8 +920,13 @@ export async function withDurableMutationLock<T>(
   const candidate = await createOwnerCandidate(metadataRoot);
   let acquired = false;
   let ownedClaim: OwnedReconciliationClaim | undefined;
+  const deadline = Date.now() + mutationLockElapsedLimitMs;
   try {
-    for (let attempt = 0; attempt < mutationLockAttemptLimit; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < mutationLockAttemptLimit && Date.now() < deadline;
+      attempt += 1
+    ) {
       try {
         await link(candidate.sourcePath, absoluteLockPath);
         if (

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -70,6 +70,13 @@ export const TASK9_TEMPORARY_CLEANUP_POLICY = {
   maxRetries: 10,
   retryDelayMs: 250,
 } as const;
+
+export async function createTask9TemporaryRoot(
+  prefix: string,
+  baseDirectory = tmpdir(),
+): Promise<string> {
+  return realpath(await mkdtemp(join(baseDirectory, prefix)));
+}
 
 type Task9FinalityCheckpoint =
   | "SETUP"
@@ -337,7 +344,7 @@ export async function runTask9ContractMatrix(
   repositoryRoot: string,
   platform: "WINDOWS" | "UBUNTU",
 ) {
-  const reportRoot = await mkdtemp(join(tmpdir(), "hpi-task9-contract-"));
+  const reportRoot = await createTask9TemporaryRoot("hpi-task9-contract-");
   let matrixFailed = false;
   try {
     const vitestEntry = resolve(repositoryRoot, "node_modules/vitest/vitest.mjs");
@@ -464,7 +471,7 @@ export async function runTask9ContractMatrix(
 }
 
 export async function runTask9FinalityFixture() {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "hpi-task9-platform-"));
+  const fixtureRoot = await createTask9TemporaryRoot("hpi-task9-platform-");
   let finalityCheckpoint: Task9FinalityCheckpoint = "SETUP";
   let finalityFailed = false;
   try {

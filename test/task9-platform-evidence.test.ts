@@ -1,8 +1,14 @@
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { compareTask9PlatformEvidence } from "../tools/compare-task9-platform-evidence.js";
 import {
   TASK9_TEMPORARY_CLEANUP_POLICY,
+  createTask9TemporaryRoot,
+  runTask9FinalityFixture,
   task9ContractFailureDiagnostic,
   task9FinalityDiagnostic,
 } from "../tools/task9-platform-probe.js";
@@ -91,6 +97,50 @@ function receipt(os: "WINDOWS" | "UBUNTU") {
 }
 
 describe("Task 9 platform Evidence", () => {
+  it("canonicalizes an aliased temporary root before physical store setup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hpi-task9-temp-alias-test-"));
+    const physicalParent = join(root, "physical-parent");
+    const aliasedParent = join(root, "aliased-parent");
+    const originalTemporaryEnvironment = {
+      TEMP: process.env["TEMP"],
+      TMP: process.env["TMP"],
+      TMPDIR: process.env["TMPDIR"],
+    };
+    try {
+      await mkdir(physicalParent);
+      await symlink(
+        physicalParent,
+        aliasedParent,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      const temporaryRoot = await createTask9TemporaryRoot("probe-", aliasedParent);
+
+      expect(temporaryRoot).toBe(await realpath(temporaryRoot));
+      expect(dirname(temporaryRoot)).toBe(await realpath(physicalParent));
+
+      process.env["TEMP"] = aliasedParent;
+      process.env["TMP"] = aliasedParent;
+      process.env["TMPDIR"] = aliasedParent;
+      const finality = await runTask9FinalityFixture();
+      expect(finality).toMatchObject({
+        process: { terminalFinality: "FINAL" },
+        writerLease: { state: "RELEASED" },
+        durableReplay: {
+          processReceiptMatches: true,
+          evidenceReceiptMatches: true,
+          attemptFinalityMatches: true,
+        },
+      });
+    } finally {
+      for (const [key, value] of Object.entries(originalTemporaryEnvironment)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reduces failed contract reports to bounded path-free CI diagnostics", () => {
     const diagnostic = task9ContractFailureDiagnostic({
       numTotalTests: 90,

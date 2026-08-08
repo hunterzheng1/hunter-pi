@@ -41,7 +41,7 @@ second-device read-only projection, quoted-JSON privacy rejection, interrupted i
 durable recovery, cancellation, Checkpoint, and Attempt Finality cases.
 The direct finality fixture adds process-final, Writer Lease release, Attempt Finality, durable
 reopen, and privacy checks, for six fact-bound checks in the receipt. The non-duplicated CI test set
-also passes locally (46 files / 395 tests), full `npm run verify` passes (55 files / 495 tests plus
+also passes locally (46 files / 399 tests), full `npm run verify` passes (55 files / 498 tests plus
 strict compile, build, format, external package install, single-artifact smoke, clean locked install,
 and Pi probe), the focused lock/lease/Archive regression passes (3 files / 61 tests), and the
 concurrent reconciler case passed 15 consecutive Windows stress iterations.
@@ -57,10 +57,18 @@ The replacement keeps a finite 30-second test timeout for process-heavy hosted f
 only fixed test-file identity, assertion index, status, and duration when a matrix fails. Its hosted
 run [`31251194976`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31251194976) preserved a
 second Ubuntu PASS; Windows passed the now-complete 90-test matrix but returned a
-`FINALITY_EXECUTION` failure before aggregation. The next replacement applies bounded retry cleanup
-to both temporary matrix and finality roots and emits a path-free finality checkpoint if any
-business or cleanup boundary fails. Remote CI for that replacement source remains `PENDING`. Exact
-merged-head main CI
+`FINALITY_EXECUTION` failure before aggregation. The next replacement applied bounded retry cleanup
+to both temporary matrix and finality roots and emitted a path-free finality checkpoint. Its hosted
+run [`31252555921`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31252555921) preserved a
+third Ubuntu PASS; Windows again completed the quality, package, clean-install, Doctor, Pi, and
+90-test contract gates before failing at finality `SETUP`. The second and third failure receipts
+have the same `sha256:c0fae118...` error identity. Recomputing that identity from the fixed error
+shape proves the failure was `LeaseError/LEASE_STORE_CORRUPT: leaseRoot must not use a path alias`:
+the hosted Windows temporary root used an 8.3 alias, while the safety-correct File Lease store
+requires a canonical physical path. The next replacement resolves both Task 9 temporary roots to
+their physical paths before any store setup, exercises the complete finality fixture through a
+directory alias, and gives every scripted npm subprocess a finite ten-minute elapsed limit. Remote
+CI for that replacement source remains `PENDING`. Exact merged-head main CI
 [`31244419248`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31244419248) passes the prior
 rate-limit/CI hardening baseline but does not prove this Task 9 v2 source. Earlier replacement and
 merged-head runs remain recorded as

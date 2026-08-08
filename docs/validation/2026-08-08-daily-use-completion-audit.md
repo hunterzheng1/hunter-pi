@@ -25,9 +25,10 @@ real implementations. The following daily-use gates remain open:
   and Ubuntu receipts still need to bind this exact source;
 - mutation-lock recovery now uses signed process liveness rather than PID ownership, elects one
   reconciler at a canonical physical path, and recovers after forced termination at all three
-  claim/receipt/removal boundaries. Windows-local Evidence passes; the first two PR attempts passed
-  Ubuntu on their predecessor sources, while final-source Windows/Ubuntu receipts, exact aggregate
-  comparison, and real OS power loss remain unproven;
+  claim/receipt/removal boundaries. Windows-local Evidence passes; the first three PR attempts
+  passed Ubuntu on their predecessor sources. The last two Windows failures have the same exact
+  temporary-path-alias identity, now covered by a full finality-fixture regression; final-source
+  Windows/Ubuntu receipts, exact aggregate comparison, and real OS power loss remain unproven;
 - import/export/delete replay and clean-profile second-device projection now use immutable intents,
   exact archive/operation identities, v3 policy reconciliation, quoted-JSON credential rejection,
   and interrupted-import resume. Intent and final receipt publication recover from process death at

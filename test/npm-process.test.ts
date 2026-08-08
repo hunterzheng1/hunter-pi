@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createNpmDiagnosticRoots,
   createIsolatedNpmEnvironment,
+  npmProcessElapsedLimitMs,
   runNpm,
   shouldRetryNpmFailure,
   summarizeNpmFailure,
@@ -14,6 +15,10 @@ import {
 } from "../scripts/npm-process.mjs";
 
 describe("isolated npm process support", () => {
+  it("applies a finite default elapsed limit to every npm subprocess", () => {
+    expect(npmProcessElapsedLimitMs).toBe(10 * 60_000);
+  });
+
   it("maps process-owned paths to stable diagnostic labels", () => {
     const roots = createNpmDiagnosticRoots(
       {
@@ -212,6 +217,34 @@ describe("isolated npm process support", () => {
       );
     } finally {
       stderr.mockRestore();
+      if (originalNpmEntryPoint === undefined) delete process.env["npm_execpath"];
+      else process.env["npm_execpath"] = originalNpmEntryPoint;
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("terminates an npm subprocess at its injected elapsed limit without exposing output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-npm-timeout-test-"));
+    const fakeNpmEntryPoint = join(root, "fake-npm.mjs");
+    const originalNpmEntryPoint = process.env["npm_execpath"];
+
+    try {
+      await writeFile(
+        fakeNpmEntryPoint,
+        [
+          'process.stdout.write("private prompt C:\\\\Users\\\\fixture\\\\token\\n");',
+          "setTimeout(() => process.exit(0), 500);",
+        ].join("\n"),
+        "utf8",
+      );
+      process.env["npm_execpath"] = fakeNpmEntryPoint;
+
+      const startedAt = Date.now();
+      expect(() => runNpm(["ls"], root, join(root, "npm"), {}, { timeoutMs: 100 })).toThrow(
+        "npm CLI timed out after 100 ms.",
+      );
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
       if (originalNpmEntryPoint === undefined) delete process.env["npm_execpath"];
       else process.env["npm_execpath"] = originalNpmEntryPoint;
       await rm(root, { force: true, recursive: true });

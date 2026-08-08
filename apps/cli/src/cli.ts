@@ -6,9 +6,13 @@ import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import {
+  FilePiPackageBindingStore,
+  PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
+  PiPackageManifestResolver,
   Task6PiEngineHost,
   HPI_CORE_EXTENSION_VERSION,
   HpiLaunchBlockedError,
+  HpiPluginOperationError,
   PiJsonEngineHost,
   QualifiedPiProcessBlockedError,
   acknowledgeProviderDisclosure,
@@ -16,16 +20,21 @@ import {
   createDefaultHpiConfiguration,
   createInteractiveTuiConfigurationFingerprint,
   createPiLaunchPlan,
+  createLocalPiPluginSource,
   createQualifiedPiJsonProcess,
   createQuickSessionHeader,
   createQuickSessionProcessObservation,
   disableHpiPlugin,
+  fingerprintNpmRegistryIntegrity,
   hpiConfigurationSchema,
+  hpiPluginOperationError,
   inspectHpiPlugins,
   inspectBundledCoreExtension,
   launchPi,
   loadHpiConfiguration,
   prepareHpiRuntimeDirectories,
+  prepareQualifiedPiPluginActivation,
+  qualifyPiPackageInspection,
   providerDisclosureRequired,
   readPiProviderAuthMetadata,
   resolvePiProviderDestination,
@@ -37,12 +46,24 @@ import {
   type HpiDoctorReport,
   type HpiPaths,
   type PiLaunchPlan,
+  type PiPluginActivationCompatibilityContext,
   type PiProviderDestination,
   type PiProviderAuthMetadata,
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { createFileLeaseManager } from "@hunter-pi/execution";
+import {
+  FilePluginManager,
+  PluginJournalCorruptError,
+  pluginInventorySchema,
+  pluginRecordSchema,
+  pluginSourceSchema,
+  withPluginLifecycleTransaction,
+  type PluginInventory,
+  type PluginRecord,
+  type PluginSource,
+} from "@hunter-pi/plugin-manager";
 import {
   RealManagedChangeBlockedError,
   realManagedChangeRequestSchema,
@@ -344,6 +365,111 @@ function sha256(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
+function createPluginCompatibilityContext(
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+  version: HpiVersionInfo,
+): PiPluginActivationCompatibilityContext {
+  const sourceIdentity = /^[a-f0-9]{40}$/u.test(version.sourceCommit)
+    ? version.sourceCommit.slice(0, 20)
+    : "workspace";
+  return {
+    qualificationStateRoot: join(paths.pluginRegistryDirectory, "qualification"),
+    distributionReleaseId: `release_hunter-pi-${version.productVersion}-${sourceIdentity}`,
+    engineReleaseId: `engine-release_pi-${version.engine.version}`,
+    engineReleaseFingerprint: sha256(
+      JSON.stringify({
+        packageName: version.engine.packageName,
+        version: version.engine.version,
+      }),
+    ),
+    platformFingerprint: sha256(
+      JSON.stringify({
+        architecture: process.arch,
+        node: process.versions.node,
+        platform: dependencies.platform,
+      }),
+    ),
+    compatibilityVerifierFingerprint: PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
+  };
+}
+
+function pluginManagerCompatibilityOptions(context: PiPluginActivationCompatibilityContext) {
+  return {
+    distributionReleaseId: context.distributionReleaseId,
+    engineReleaseId: context.engineReleaseId,
+    engineReleaseFingerprint: context.engineReleaseFingerprint,
+    platformFingerprint: context.platformFingerprint,
+    compatibilityVerifierFingerprint: context.compatibilityVerifierFingerprint,
+  };
+}
+
+export interface PluginRegistryPresentation {
+  readonly records: readonly unknown[];
+  readonly inventory: PluginInventory | undefined;
+}
+
+export function createPluginRegistryPresentation(
+  recordsInput: readonly PluginRecord[],
+  inventoryInput?: PluginInventory,
+): PluginRegistryPresentation {
+  const records = recordsInput.map((record) => pluginRecordSchema.parse(record));
+  const legacyPluginIds = new Set<string>(
+    records
+      .filter((record) => record.schemaVersion === "hpi-plugin-record.v1")
+      .map((record) => record.pluginId),
+  );
+  const presentationRecords = records.map((record) =>
+    record.schemaVersion === "hpi-plugin-record.v2"
+      ? record
+      : {
+          schemaVersion: record.schemaVersion,
+          pluginId: record.pluginId,
+          state: record.state,
+          installedAt: record.installedAt,
+          lastOperationId: record.lastOperationId,
+          manifest: {
+            schemaVersion: record.manifest.schemaVersion,
+            pluginId: record.manifest.pluginId,
+            version: record.manifest.version,
+            packageFingerprint: record.manifest.packageFingerprint,
+            sourceKind: record.manifest.source.kind,
+            legacyMetadata: "REDACTED",
+          },
+          assurance: {
+            compatibility: record.assurance.compatibility,
+            trust: record.assurance.trust,
+            isolation: record.assurance.isolation,
+            assessedAt: record.assurance.assessedAt,
+          },
+        },
+  );
+  if (inventoryInput === undefined) {
+    return { records: presentationRecords, inventory: undefined };
+  }
+  const inventory = pluginInventorySchema.parse(inventoryInput);
+  const redactLegacyDescriptions = <
+    T extends { readonly pluginId: string; readonly description: string },
+  >(
+    resources: readonly T[],
+  ): readonly T[] =>
+    resources.map((resource) =>
+      legacyPluginIds.has(resource.pluginId)
+        ? { ...resource, description: "REDACTED_LEGACY_METADATA" }
+        : resource,
+    );
+  return {
+    records: presentationRecords,
+    inventory: pluginInventorySchema.parse({
+      ...inventory,
+      declaredTools: redactLegacyDescriptions(inventory.declaredTools),
+      declaredHooks: redactLegacyDescriptions(inventory.declaredHooks),
+      effectiveTools: redactLegacyDescriptions(inventory.effectiveTools),
+      effectiveHooks: redactLegacyDescriptions(inventory.effectiveHooks),
+    }),
+  };
+}
+
 function optionValue(arguments_: readonly string[], name: string): string | undefined {
   const index = arguments_.indexOf(name);
   return index < 0 ? undefined : arguments_[index + 1];
@@ -449,6 +575,25 @@ function assertChangeOptions(arguments_: readonly string[]): void {
   if (!jsonSeen || seen.size !== 2) throw new HpiCliUsageError();
 }
 
+function assertPluginOptions(options: readonly string[], valueOptions: ReadonlySet<string>): void {
+  const booleanOptions = new Set(["--acknowledge-provenance", "--allow-process-authority"]);
+  const seen = new Set<string>();
+  for (let index = 0; index < options.length;) {
+    const option = options[index];
+    if (option === undefined || seen.has(option)) throw new HpiCliUsageError();
+    seen.add(option);
+    if (booleanOptions.has(option)) {
+      index += 1;
+      continue;
+    }
+    const value = options[index + 1];
+    if (value === undefined || value.startsWith("-") || !valueOptions.has(option)) {
+      throw new HpiCliUsageError();
+    }
+    index += 2;
+  }
+}
+
 function validateCliArguments(arguments_: readonly string[]): void {
   const command = arguments_[0];
   if (command === "--help" || command === "-h") {
@@ -531,9 +676,33 @@ function validateCliArguments(arguments_: readonly string[]): void {
   }
   if (
     (command === "smoke" && arguments_.length === 2 && arguments_[1] === "tui") ||
-    (command === "plugin" && arguments_.length === 2 && arguments_[1] === "doctor") ||
-    (command === "plugin" && arguments_.length === 3 && arguments_[1] === "disable")
+    (command === "plugin" &&
+      arguments_.length === 2 &&
+      ["doctor", "list"].includes(arguments_[1] ?? "")) ||
+    (command === "plugin" &&
+      arguments_.length === 3 &&
+      ["disable", "remove"].includes(arguments_[1] ?? ""))
   ) {
+    return;
+  }
+  if (command === "plugin" && arguments_[1] === "install") {
+    const sourceKind = arguments_[2];
+    const sourceValue = arguments_[3];
+    if (sourceValue === undefined || !["local", "npm", "git"].includes(sourceKind ?? "")) {
+      throw new HpiCliUsageError();
+    }
+    const valueOptions =
+      sourceKind === "local"
+        ? new Set(["--label"])
+        : sourceKind === "npm"
+          ? new Set(["--integrity", "--registry"])
+          : new Set(["--commit", "--tree-fingerprint"]);
+    assertPluginOptions(arguments_.slice(4), valueOptions);
+    return;
+  }
+  if (command === "plugin" && arguments_[1] === "import-pi") {
+    if (arguments_[2] === undefined) throw new HpiCliUsageError();
+    assertPluginOptions(arguments_.slice(3), new Set(["--package", "--integrity"]));
     return;
   }
   throw new HpiCliUsageError();
@@ -1203,7 +1372,7 @@ async function firstRunCommand(dependencies: HpiCliDependencies, paths: HpiPaths
   );
   line(
     dependencies.io,
-    "Step 6/7 Plugins — Core-only; user plugin activation is blocked in this developer preview.",
+    "Step 6/7 Plugins — exact Pi Packages are metadata-qualified; executable extensions remain quarantined unless separately verified.",
   );
 
   line(
@@ -1223,17 +1392,59 @@ async function pluginCommand(
   arguments_: readonly string[],
   dependencies: HpiCliDependencies,
   paths: HpiPaths,
+  lifecycleTransactionHeld = false,
 ): Promise<number> {
   const configuration = await loadHpiConfiguration(paths);
   if (configuration === null) {
     errorLine(dependencies.io, "PluginStatus=BLOCKED NextAction=Run `hpi setup` first.");
     return 2;
   }
+  await prepareHpiRuntimeDirectories(paths);
   const action = arguments_[1];
+  if (
+    !lifecycleTransactionHeld &&
+    (action === "install" || action === "import-pi" || action === "disable" || action === "remove")
+  ) {
+    return withPluginLifecycleTransaction(paths.pluginRegistryDirectory, () =>
+      pluginCommand(arguments_, dependencies, paths, true),
+    );
+  }
+  const readOnlyManager = () =>
+    new FilePluginManager({
+      stateRoot: paths.pluginRegistryDirectory,
+      resolve: () => Promise.reject(new Error("read-only Plugin registry cannot resolve sources")),
+    });
+  if (action === "list") {
+    const manager = readOnlyManager();
+    const records = await manager.list();
+    const presentation = createPluginRegistryPresentation(records, await manager.inventory());
+    line(
+      dependencies.io,
+      JSON.stringify({
+        records: presentation.records,
+        inventory: presentation.inventory,
+        startup: await manager.startup(),
+      }),
+    );
+    return 0;
+  }
   if (action === "doctor") {
     const inspections = await inspectHpiPlugins(configuration);
-    line(dependencies.io, JSON.stringify({ plugins: inspections }));
-    return inspections.some((plugin) => plugin.entrypointStatus === "BLOCKED") ? 2 : 0;
+    const manager = readOnlyManager();
+    const startup = await manager.startup();
+    const records = startup.mode === "SAFE_MODE" ? [] : await manager.list();
+    line(
+      dependencies.io,
+      JSON.stringify({
+        legacyPlugins: inspections,
+        records: createPluginRegistryPresentation(records).records,
+        startup,
+      }),
+    );
+    return inspections.some((plugin) => plugin.entrypointStatus === "BLOCKED") ||
+      startup.mode === "SAFE_MODE"
+      ? 2
+      : 0;
   }
   if (action === "disable") {
     const pluginId = arguments_[2];
@@ -1241,15 +1452,220 @@ async function pluginCommand(
       errorLine(dependencies.io, "PluginStatus=BLOCKED NextAction=Specify a plugin id.");
       return 2;
     }
+    const manager = readOnlyManager();
+    const registered = (await manager.list()).find((record) => record.pluginId === pluginId);
+    if (registered !== undefined) {
+      await manager.disable({
+        schemaVersion: "hpi-plugin-disable.v1",
+        operationId: `op_plugin-disable-${randomUUID()}`,
+        operationFingerprint: sha256(`plugin-disable\0${pluginId}`),
+        pluginId: registered.pluginId,
+        observedAt: dependencies.now(),
+      });
+      line(dependencies.io, `PluginStatus=DISABLED Plugin=${pluginId} FilesDeleted=NO`);
+      return 0;
+    }
     await saveHpiConfiguration(paths, disableHpiPlugin(configuration, pluginId));
     line(dependencies.io, `PluginStatus=DISABLED Plugin=${pluginId} FilesDeleted=NO`);
     return 0;
   }
+  if (action === "remove") {
+    const pluginId = arguments_[2];
+    if (pluginId === undefined) {
+      errorLine(dependencies.io, "PluginStatus=BLOCKED NextAction=Specify a plugin id.");
+      return 2;
+    }
+    const manager = readOnlyManager();
+    const receipt = await manager.remove({
+      schemaVersion: "hpi-plugin-remove.v1",
+      operationId: `op_plugin-remove-${randomUUID()}`,
+      operationFingerprint: sha256(`plugin-remove\0${pluginId}`),
+      pluginId,
+      observedAt: dependencies.now(),
+    });
+    const removed = await new FilePiPackageBindingStore({
+      stateRoot: paths.pluginBindingDirectory,
+      managedPackageRoot: paths.pluginPackageDirectory,
+    }).removeManagedSnapshots(pluginId);
+    line(
+      dependencies.io,
+      JSON.stringify({
+        receipt,
+        filesDeleted: removed.bindingsDeleted > 0 || removed.snapshotsDeleted > 0,
+        managedBindingsDeleted: removed.bindingsDeleted,
+        managedSnapshotsDeleted: removed.snapshotsDeleted,
+        journalHistoryRetained: true,
+      }),
+    );
+    return 0;
+  }
+  if (action === "install" || action === "import-pi") {
+    const acknowledged = arguments_.includes("--acknowledge-provenance");
+    const processAuthorityAllowed = arguments_.includes("--allow-process-authority");
+    if (!acknowledged || !processAuthorityAllowed) {
+      errorLine(
+        dependencies.io,
+        "PluginStatus=BLOCKED NextAction=Review provenance and pass --acknowledge-provenance --allow-process-authority.",
+      );
+      return 2;
+    }
+    const sourceKind = action === "import-pi" ? "pi" : arguments_[2];
+    const sourceValue = action === "import-pi" ? arguments_[2] : arguments_[3];
+    if (sourceKind === undefined || sourceValue === undefined) throw new HpiCliUsageError();
+    let source: PluginSource;
+    let localPackages: ReadonlyMap<string, string> = new Map();
+    let importedPiPackages: ReadonlyMap<string, string> = new Map();
+    if (sourceKind === "local") {
+      const label = optionValue(arguments_, "--label");
+      if (label === undefined) throw new HpiCliUsageError();
+      source = await createLocalPiPluginSource({ label, packageRoot: sourceValue });
+      localPackages = new Map([[label, sourceValue]]);
+    } else if (sourceKind === "npm") {
+      const separator = sourceValue.lastIndexOf("@");
+      const registryIntegrity = optionValue(arguments_, "--integrity");
+      if (separator <= 0 || registryIntegrity === undefined) throw new HpiCliUsageError();
+      source = pluginSourceSchema.parse({
+        kind: "NPM",
+        registry: optionValue(arguments_, "--registry") ?? "https://registry.npmjs.org",
+        packageName: sourceValue.slice(0, separator),
+        version: sourceValue.slice(separator + 1),
+        integrity: fingerprintNpmRegistryIntegrity(registryIntegrity),
+      });
+    } else if (sourceKind === "git") {
+      const commit = optionValue(arguments_, "--commit");
+      const treeFingerprint = optionValue(arguments_, "--tree-fingerprint");
+      if (commit === undefined || treeFingerprint === undefined) throw new HpiCliUsageError();
+      source = pluginSourceSchema.parse({
+        kind: "GIT",
+        remote: sourceValue,
+        commit,
+        treeFingerprint,
+      });
+    } else if (sourceKind === "pi") {
+      const packageSpec = optionValue(arguments_, "--package");
+      const integrity = optionValue(arguments_, "--integrity");
+      const separator = packageSpec?.lastIndexOf("@") ?? -1;
+      if (packageSpec === undefined || integrity === undefined || separator <= 0) {
+        throw new HpiCliUsageError();
+      }
+      const packageName = packageSpec.slice(0, separator);
+      const version = packageSpec.slice(separator + 1);
+      source = pluginSourceSchema.parse({ kind: "PI", packageName, version, integrity });
+      importedPiPackages = new Map([[`${packageName}@${version}`, sourceValue]]);
+    } else {
+      throw new HpiCliUsageError();
+    }
+
+    const resolver = new PiPackageManifestResolver({
+      stateRoot: paths.pluginPackageDirectory,
+      localPackages,
+      importedPiPackages,
+    });
+    const inspection = await resolver.inspect(source);
+    const observedAt = dependencies.now();
+    const bindingStore = new FilePiPackageBindingStore({
+      stateRoot: paths.pluginBindingDirectory,
+      managedPackageRoot: paths.pluginPackageDirectory,
+    });
+    const bindingOutcome = await bindingStore.put(inspection.runtimeBinding, observedAt);
+    let registryCommitted = false;
+    try {
+      const qualification = await qualifyPiPackageInspection({
+        inspection,
+        stateRoot: join(paths.pluginRegistryDirectory, "qualification"),
+        observedAt,
+      });
+      const version = await (dependencies.getVersionInfo ?? getHpiVersionInfo)();
+      const compatibilityContext = createPluginCompatibilityContext(dependencies, paths, version);
+      const manager = new FilePluginManager({
+        stateRoot: paths.pluginRegistryDirectory,
+        resolve: (candidate) => resolver.resolve(candidate),
+        ...pluginManagerCompatibilityOptions(compatibilityContext),
+        verifyCompatibility: (candidate) =>
+          JSON.stringify(candidate) === JSON.stringify(inspection.manifest)
+            ? {
+                outcome: qualification.compatibility,
+                verifierFingerprint: qualification.verifierFingerprint,
+                evidenceIds: [qualification.evidenceId],
+              }
+            : {
+                outcome: "UNVERIFIED",
+                verifierFingerprint: qualification.verifierFingerprint,
+                evidenceIds: [],
+              },
+      });
+      const operationId = `op_plugin-${action}-${randomUUID()}`;
+      const request = {
+        operationId,
+        operationFingerprint: sha256(
+          JSON.stringify({ action, source, qualification: qualification.receiptFingerprint }),
+        ),
+        source,
+        trust: "USER_APPROVED" as const,
+        provenanceAcknowledged: true,
+        requestedIsolation: "PROCESS_AUTHORITY" as const,
+        compatibility: qualification.compatibility,
+        evidenceIds: [qualification.evidenceId],
+        observedAt,
+      };
+      const receipt =
+        action === "import-pi"
+          ? await manager.importFromPi({ schemaVersion: "hpi-plugin-import-pi.v1", ...request })
+          : await manager.install({ schemaVersion: "hpi-plugin-install.v1", ...request });
+      registryCommitted = true;
+      line(
+        dependencies.io,
+        JSON.stringify({
+          status: qualification.compatibility === "VERIFIED" ? "ENABLED" : "QUARANTINED",
+          manifest: inspection.manifest,
+          qualification,
+          receipt,
+        }),
+      );
+      return 0;
+    } catch (error) {
+      if (!registryCommitted && bindingOutcome === "CREATED") {
+        try {
+          await bindingStore.removeManagedSnapshots(inspection.manifest.pluginId);
+        } catch (cleanupError) {
+          throw hpiPluginOperationError(
+            "BINDING_TAMPERED",
+            new AggregateError([error, cleanupError]),
+          );
+        }
+      }
+      throw error;
+    }
+  }
   errorLine(
     dependencies.io,
-    "Unknown plugin command. Use `hpi plugin doctor` or `hpi plugin disable <id>`. ",
+    "Unknown plugin command. Use `hpi plugin list|doctor|install|import-pi|disable|remove`. ",
   );
   return 2;
+}
+
+function normalizePluginCommandError(error: unknown): HpiPluginOperationError {
+  if (error instanceof HpiPluginOperationError) return error;
+  if (error instanceof PluginJournalCorruptError) {
+    return hpiPluginOperationError("JOURNAL_INCOMPATIBLE", error);
+  }
+  const message = error instanceof Error ? error.message : "";
+  if (/journal|immutable chain|sequence|entry fingerprint/iu.test(message)) {
+    return hpiPluginOperationError("JOURNAL_INCOMPATIBLE", error);
+  }
+  if (/integrity|\bSRI\b/iu.test(message)) {
+    return hpiPluginOperationError("SRI_MISMATCH", error);
+  }
+  if (/limit|ENOSPC|no space|quota/iu.test(message)) {
+    return hpiPluginOperationError("RESOURCE_LIMIT", error);
+  }
+  if (/binding|snapshot|fingerprint changed|symbolic link|path alias|single-link/iu.test(message)) {
+    return hpiPluginOperationError("BINDING_TAMPERED", error);
+  }
+  if (/source|manifest|invalid|expected/iu.test(message)) {
+    return hpiPluginOperationError("SOURCE_INVALID", error);
+  }
+  return hpiPluginOperationError("INSTALL_FAILED", error);
 }
 
 async function quickSessionCommand(
@@ -1261,9 +1677,38 @@ async function quickSessionCommand(
   if (configuration === null) {
     return firstRunCommand(dependencies, paths);
   }
-  const safeMode = arguments_.includes("--safe-mode");
-  await assertCoreExtensionIntegrity(dependencies);
+  const requestedSafeMode = arguments_.includes("--safe-mode");
+  const version = await assertCoreExtensionIntegrity(dependencies);
   await prepareRuntimeDirectories(paths);
+  const compatibilityContext = createPluginCompatibilityContext(dependencies, paths, version);
+  const pluginManager = new FilePluginManager({
+    stateRoot: paths.pluginRegistryDirectory,
+    resolve: () => Promise.reject(new Error("read-only Plugin registry cannot resolve sources")),
+  });
+  const pluginStartup = await pluginManager.startup();
+  const legacyPluginRequiresSafeMode = configuration.plugins.some((plugin) => plugin.enabled);
+  let safeMode =
+    requestedSafeMode || pluginStartup.mode === "SAFE_MODE" || legacyPluginRequiresSafeMode;
+  let activationRevalidationFailed = false;
+  let pluginRecords = safeMode ? [] : await pluginManager.list();
+  let pluginActivation: Awaited<ReturnType<typeof prepareQualifiedPiPluginActivation>> | undefined;
+  if (!safeMode) {
+    try {
+      pluginActivation = await prepareQualifiedPiPluginActivation({
+        records: pluginRecords,
+        inventory: await pluginManager.inventory(),
+        bindingStore: new FilePiPackageBindingStore({
+          stateRoot: paths.pluginBindingDirectory,
+          managedPackageRoot: paths.pluginPackageDirectory,
+        }),
+        compatibilityContext,
+      });
+    } catch {
+      safeMode = true;
+      activationRevalidationFailed = true;
+      pluginRecords = [];
+    }
+  }
   const continueSession = arguments_.includes("--continue") || arguments_.includes("-c");
   const resumeSession = arguments_.includes("--resume") || arguments_.includes("-r");
   await assertHpiSessionTreeSafe(paths);
@@ -1274,7 +1719,27 @@ async function quickSessionCommand(
   );
   const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
   const repository = await dependencies.inspectRepository(dependencies.cwd);
-  const header = createQuickSessionHeader({ configuration, repository, safeMode });
+  const qualifiedPlugins = pluginRecords.flatMap((record) =>
+    record.state === "ENABLED" &&
+    record.assurance.compatibility === "VERIFIED" &&
+    record.assurance.trust !== "QUARANTINED" &&
+    record.assurance.isolation !== "NOT_PROVEN"
+      ? [
+          {
+            pluginId: record.pluginId,
+            compatibility: record.assurance.compatibility,
+            trust: record.assurance.trust,
+            isolation: record.assurance.isolation,
+          },
+        ]
+      : [],
+  );
+  const header = createQuickSessionHeader({
+    configuration,
+    repository,
+    safeMode,
+    qualifiedPlugins,
+  });
   const plan = createPiLaunchPlan({
     paths,
     configuration,
@@ -1287,12 +1752,23 @@ async function quickSessionCommand(
     resumeSession,
     sessionTreeInspected: true,
     resolvedProviderDestination,
+    ...(pluginActivation === undefined ? {} : { pluginActivation }),
     ...(dependencies.piCliPath === undefined ? {} : { piCliPath: dependencies.piCliPath }),
     ...(dependencies.coreExtensionPath === undefined
       ? {}
       : { coreExtensionPath: dependencies.coreExtensionPath }),
   });
   line(dependencies.io, header);
+  if (safeMode && !requestedSafeMode) {
+    line(
+      dependencies.io,
+      `PluginStartup=SAFE_MODE Reasons=${
+        activationRevalidationFailed
+          ? "ACTIVATION_REVALIDATION_FAILED"
+          : pluginStartup.reasons.join(",") || "LEGACY_UNQUALIFIED_PLUGIN"
+      }`,
+    );
+  }
   line(
     dependencies.io,
     "Quick Session only: Agent return, terminal idle, or process exit is not verification.",
@@ -1406,7 +1882,23 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi smoke tui");
   line(io, "       hpi change --repo <directory> --plan <file> --json --allow-provider-request");
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
-  line(io, "       hpi plugin doctor | plugin disable <id>");
+  line(io, "       hpi plugin list | plugin doctor | plugin disable <id> | plugin remove <id>");
+  line(
+    io,
+    "       hpi plugin install local <directory> --label <name> --acknowledge-provenance --allow-process-authority",
+  );
+  line(
+    io,
+    "       hpi plugin install npm <name@version> --integrity <registry-SRI> [--registry <https-url>] --acknowledge-provenance --allow-process-authority",
+  );
+  line(
+    io,
+    "       hpi plugin install git <https-url> --commit <sha> --tree-fingerprint <sha256> --acknowledge-provenance --allow-process-authority",
+  );
+  line(
+    io,
+    "       hpi plugin import-pi <directory> --package <name@version> --integrity <sha256> --acknowledge-provenance --allow-process-authority",
+  );
   line(io, "       hpi pilot compile --input <file> --json");
   line(io, "       hpi pilot target --repo <directory> --target-id <id> --json");
   line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --json");
@@ -1549,7 +2041,12 @@ export async function runHpiCli(
       return await realChangeCommand(arguments_.slice(1), dependencies, paths);
     }
     if (command === "plugin") {
-      return await pluginCommand(arguments_, dependencies, paths);
+      try {
+        return await pluginCommand(arguments_, dependencies, paths);
+      } catch (error) {
+        if (error instanceof HpiCliUsageError) throw error;
+        throw normalizePluginCommandError(error);
+      }
     }
     if (command === "smoke" && arguments_[1] === "tui") {
       return await tuiSmokeCommand(dependencies, paths);
@@ -1568,6 +2065,13 @@ export async function runHpiCli(
       errorLine(
         dependencies.io,
         `LaunchStatus=BLOCKED Code=${error.code} NextAction=${error.message}`,
+      );
+      return 2;
+    }
+    if (error instanceof HpiPluginOperationError) {
+      errorLine(
+        dependencies.io,
+        `PluginStatus=BLOCKED Code=${error.code} NextAction=${error.nextAction}`,
       );
       return 2;
     }

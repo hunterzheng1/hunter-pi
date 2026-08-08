@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,7 +23,10 @@ import {
   completePilotPlanInput,
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
-import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
+import {
+  createTemporaryTestDirectory,
+  removeTemporaryTestDirectory,
+} from "./support/temporary-test-directory.js";
 
 const createdRoots: string[] = [];
 const coreFixtureSource = "export default () => {};\n";
@@ -31,17 +34,7 @@ const coreFixtureIntegrity = `sha256:${createHash("sha256").update(coreFixtureSo
 const productShellFixtureIntegrity = `sha256:${"c".repeat(64)}`;
 
 afterEach(async () => {
-  const { rm } = await import("node:fs/promises");
-  await Promise.all(
-    createdRoots.splice(0).map((root) =>
-      rm(root, {
-        force: true,
-        maxRetries: 5,
-        recursive: true,
-        retryDelay: 100,
-      }),
-    ),
-  );
+  await Promise.all(createdRoots.splice(0).map(removeTemporaryTestDirectory));
 });
 
 interface CapturedIo extends HpiCliIo {
@@ -996,6 +989,226 @@ describe("hpi command", () => {
     expect(await runHpiCli(["plugin", "disable", "local/throwing"], dependencies)).toBe(0);
     expect((await loadHpiConfiguration(paths))?.plugins[0]?.enabled).toBe(false);
     expect(await readFile(pluginPath, "utf8")).toContain("do not execute me");
+  });
+
+  it("reports a fixed recoverable code for an incompatible Plugin journal", async () => {
+    const { dependencies, io } = await createDependencies();
+    await writeReadyConfiguration(dependencies);
+    const paths = resolveHpiPaths({
+      env: dependencies.environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    const journalRoot = join(paths.pluginRegistryDirectory, "journal");
+    await mkdir(journalRoot, { recursive: true });
+    await writeFile(join(journalRoot, `${"0".repeat(64)}.json`), "{}\n", "utf8");
+
+    expect(await runHpiCli(["plugin", "list"], dependencies)).toBe(2);
+    expect(io.stderr.at(-1)).toContain("Code=JOURNAL_INCOMPATIBLE");
+    expect(io.stderr.at(-1)).not.toContain(journalRoot);
+  });
+
+  it("installs, lists, activates, disables, and removes an exact local Pi resource package", async () => {
+    let capturedPlan: PiLaunchPlan | undefined;
+    const { dependencies, io, root } = await createDependencies({
+      authConfigured: true,
+      launch: (plan) => {
+        capturedPlan = plan;
+        return Promise.resolve(0);
+      },
+    });
+    await writeReadyConfiguration(dependencies);
+    const packageRoot = join(root, "qualified-skill-package");
+    await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
+      await mkdir(packageRoot);
+      await writeFile(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "qualified-skill-package",
+          version: "1.0.0",
+          license: "MIT",
+          pi: { skills: ["./SKILL.md"] },
+        }),
+        "utf8",
+      );
+      await writeFile(join(packageRoot, "SKILL.md"), "# Qualified skill\n", "utf8");
+    });
+
+    expect(
+      await runHpiCli(
+        [
+          "plugin",
+          "install",
+          "local",
+          packageRoot,
+          "--acknowledge-provenance",
+          "--allow-process-authority",
+        ],
+        dependencies,
+      ),
+    ).toBe(2);
+    expect(
+      await runHpiCli(
+        [
+          "plugin",
+          "install",
+          "npm",
+          "qualified-skill-package@1.0.0",
+          "--integrity",
+          "not-an-sri",
+          "--acknowledge-provenance",
+          "--allow-process-authority",
+        ],
+        dependencies,
+      ),
+    ).toBe(2);
+    expect(io.stderr.at(-1)).toContain("Code=SOURCE_INVALID");
+    expect(io.stderr.at(-1)).not.toContain("not-an-sri");
+
+    expect(
+      await runHpiCli(
+        [
+          "plugin",
+          "install",
+          "local",
+          packageRoot,
+          "--label",
+          "qualified-skill",
+          "--acknowledge-provenance",
+          "--allow-process-authority",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    const installOutput = JSON.parse(io.stdout.at(-1) ?? "{}") as {
+      readonly manifest?: { readonly pluginId?: string };
+    };
+    expect(io.stdout.at(-1)).not.toContain(packageRoot);
+    const pluginId = installOutput.manifest?.pluginId;
+    expect(pluginId).toMatch(/^plugin_/u);
+
+    expect(await runHpiCli(["plugin", "list"], dependencies)).toBe(0);
+    expect(io.stdout.at(-1)).toContain('"state":"ENABLED"');
+    const listed = JSON.parse(io.stdout.at(-1) ?? "{}") as {
+      readonly records?: readonly {
+        readonly assurance?: {
+          readonly compatibilityReceipt?: {
+            readonly distributionReleaseId?: string;
+            readonly engineReleaseId?: string;
+            readonly platformFingerprint?: string;
+          };
+        };
+      }[];
+    };
+    const compatibilityReceipt = listed.records?.[0]?.assurance?.compatibilityReceipt;
+    expect(compatibilityReceipt?.distributionReleaseId).toBe(
+      "release_hunter-pi-0.1.0-dev.0-workspace",
+    );
+    expect(compatibilityReceipt?.engineReleaseId).toBe("engine-release_pi-0.83.0");
+    expect(compatibilityReceipt?.platformFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    const firstQuickExit = await runHpiCli([], dependencies);
+    expect(firstQuickExit, io.stderr.join("\n")).toBe(0);
+    const firstArguments = capturedPlan?.arguments ?? [];
+    const skillFlag = firstArguments.indexOf("--skill");
+    const snapshotSkill = firstArguments[skillFlag + 1];
+    expect(skillFlag).toBeGreaterThanOrEqual(0);
+    expect(snapshotSkill).toBeDefined();
+    expect(snapshotSkill).not.toBe(join(packageRoot, "SKILL.md"));
+
+    await import("node:fs/promises").then(({ writeFile }) =>
+      writeFile(join(packageRoot, "SKILL.md"), "# Tampered after qualification\n", "utf8"),
+    );
+    capturedPlan = undefined;
+    expect(await runHpiCli([], dependencies)).toBe(0);
+    expect((capturedPlan as PiLaunchPlan | undefined)?.arguments).toEqual(
+      expect.arrayContaining(["--skill", snapshotSkill]),
+    );
+    expect((capturedPlan as PiLaunchPlan | undefined)?.environment["HUNTER_PI_SAFE_MODE"]).toBe(
+      "0",
+    );
+
+    if (snapshotSkill === undefined) throw new Error("qualified snapshot skill is missing");
+    await import("node:fs/promises").then(async ({ chmod, writeFile }) => {
+      await chmod(snapshotSkill, 0o600);
+      await writeFile(snapshotSkill, "# Managed snapshot tampered\n", "utf8");
+    });
+    capturedPlan = undefined;
+    expect(await runHpiCli([], dependencies)).toBe(0);
+    const fallbackEnvironment = (capturedPlan as PiLaunchPlan | undefined)?.environment as
+      { readonly HUNTER_PI_SAFE_MODE?: string } | undefined;
+    expect(fallbackEnvironment?.HUNTER_PI_SAFE_MODE).toBe("1");
+    expect(io.stdout.join("\n")).toContain(
+      "PluginStartup=SAFE_MODE Reasons=ACTIVATION_REVALIDATION_FAILED",
+    );
+
+    expect(await runHpiCli(["plugin", "disable", pluginId ?? "missing"], dependencies)).toBe(0);
+    capturedPlan = undefined;
+    expect(await runHpiCli([], dependencies)).toBe(0);
+    expect((capturedPlan as PiLaunchPlan | undefined)?.arguments).not.toContain(
+      join(packageRoot, "SKILL.md"),
+    );
+
+    await writeFile(snapshotSkill, "# Qualified skill\n", "utf8");
+    const removeExit = await runHpiCli(["plugin", "remove", pluginId ?? "missing"], dependencies);
+    expect(removeExit, io.stderr.join("\n")).toBe(0);
+    expect(io.stdout.at(-1)).toContain('"managedSnapshotsDeleted":1');
+    await expect(access(snapshotSkill)).rejects.toThrow();
+    expect(await runHpiCli(["plugin", "list"], dependencies)).toBe(0);
+    expect(io.stdout.at(-1)).toContain('"records":[]');
+  });
+
+  it("automatically starts Safe Mode for an unqualified executable Pi package without evaluating it", async () => {
+    let capturedPlan: PiLaunchPlan | undefined;
+    const { dependencies, io, root } = await createDependencies({
+      authConfigured: false,
+      launch: (plan) => {
+        capturedPlan = plan;
+        return Promise.resolve(0);
+      },
+    });
+    await writeReadyConfiguration(dependencies);
+    const packageRoot = join(root, "unqualified-extension-package");
+    const marker = join(root, "unqualified-extension-ran.txt");
+    await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
+      await mkdir(packageRoot);
+      await writeFile(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "unqualified-extension-package",
+          version: "1.0.0",
+          license: "MIT",
+          pi: { extensions: ["./index.js"] },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(packageRoot, "index.js"),
+        `await import("node:fs/promises").then(({ writeFile }) => writeFile(${JSON.stringify(marker)}, "evaluated"));\nexport default () => {};\n`,
+        "utf8",
+      );
+    });
+
+    expect(
+      await runHpiCli(
+        [
+          "plugin",
+          "install",
+          "local",
+          packageRoot,
+          "--label",
+          "unqualified-extension",
+          "--acknowledge-provenance",
+          "--allow-process-authority",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(io.stdout.at(-1)).toContain('"status":"QUARANTINED"');
+
+    expect(await runHpiCli([], dependencies)).toBe(0);
+    expect(capturedPlan?.environment["HUNTER_PI_SAFE_MODE"]).toBe("1");
+    expect(capturedPlan?.arguments).not.toContain(join(packageRoot, "index.js"));
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(io.stdout.join("\n")).toContain("PluginStartup=SAFE_MODE");
   });
 
   it("records a TUI smoke only after explicit human confirmation, never from exit alone", async () => {

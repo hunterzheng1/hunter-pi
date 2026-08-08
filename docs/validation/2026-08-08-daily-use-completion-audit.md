@@ -15,36 +15,32 @@ receipts support and keeps every prior failure and `NOT_PROVEN` result append-on
 
 ## Task 9 — Checkpoint, recovery, and Archive
 
-Status: `PARTIAL`.
+Status: `COMPLETE` within provider-neutral automatic-fixture and hosted v2 Evidence bounds.
 
-The durable event, Checkpoint, Archive, export, import, and exact-target deletion modules are
-real implementations. The following daily-use gates remain open:
+The completed scope proves:
 
-- the platform Finality adapter now binds exact process-final and Writer Lease release receipts
-  into an immutable Attempt Finality Receipt and replays it after reopen; the final hosted Windows
-  and Ubuntu receipts still need to bind this exact source;
-- mutation-lock recovery now uses signed process liveness rather than PID ownership, elects one
-  reconciler at a canonical physical path, and recovers after forced termination at all three
-  claim/receipt/removal boundaries. Windows-local Evidence passes; the first three PR attempts
-  passed Ubuntu on their predecessor sources. The last two Windows failures have the same exact
-  temporary-path-alias identity, now covered by a full finality-fixture regression. A fourth hosted
-  attempt failed only because the first regression polluted Ubuntu's global Unix-socket temporary
-  path; the replacement injects the fixture parent without changing OS process state. Final-source
-  Windows/Ubuntu receipts, exact aggregate comparison, and real OS power loss remain unproven;
-- import/export/delete replay and clean-profile second-device projection now use immutable intents,
-  exact archive/operation identities, v3 policy reconciliation, quoted-JSON credential rejection,
-  and interrupted-import resume. Intent and final receipt publication recover from process death at
-  every atomic boundary. Exact valid remnants are retained rather than deleted through a raceable
-  pathname, while foreign remnants fail closed. A physically separate operator-device pilot remains
-  unproven.
+- exact process-final and Writer Lease release receipts are bound into one immutable Attempt
+  Finality Receipt and replay identically after reopen;
+- mutation-lock recovery uses signed process liveness, elects one reconciler at a canonical
+  physical path, and survives forced termination at all claim/receipt/removal boundaries;
+- import/export/delete replay and clean-profile second-device projection use immutable intents,
+  exact archive/operation identities, v3 policy reconciliation, structured credential rejection,
+  interrupted-import resume, and fail-closed foreign-remnant handling;
+- exact PR run [`31254320490`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31254320490)
+  and merged-head main run
+  [`31255040766`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31255040766) pass Windows,
+  Ubuntu, Task 9 cross-platform Evidence, Task 7 containment, and Task 7 Evidence aggregation.
 
-The Windows-local v2 receipt binds 90/90 fixed daily-use assertions and six direct finality/privacy
-checks. It is provider-neutral local Evidence, not a hosted cross-platform or real-repository claim.
+The merged-head receipts bind source `7d8039358a0e3ac6cf2ead8cee7eba25c47f8f0b`, the fixed 90-test
+contract matrix (Windows 90 pass; Ubuntu 89 pass plus the one Windows-only alias assertion), six
+direct finality/privacy checks per platform, and one passing cross-platform comparator. Every earlier
+failed hosted run remains append-only in the detailed Task 9 validation record.
 
 The Archive boundary now independently rescans retained Evidence summary and capture text. A
 caller cannot bypass credential/private-text rejection merely by setting `contentClass=LOG`,
-`credentialMaterial=false`, and forged redaction metadata. This closes one zero-tolerance
-privacy path only; it does not close the remaining platform recovery gates.
+`credentialMaterial=false`, and forged redaction metadata. Real OS power loss, an arbitrary user
+repository, a physically separate operator device, and Provider recovery remain `NOT_PROVEN` and
+are not inferred from the automatic fixtures.
 
 Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 [`portable-device.ts`](../../packages/evidence/src/portable-device.ts),
@@ -54,17 +50,49 @@ Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 
 ## Task 10 — standard Pi Packages
 
-Status: `PARTIAL`; user Plugin activation remains blocked.
+Status: `IMPLEMENTATION COMPLETE / HOSTED EVIDENCE PENDING` within the exact resource-only package
+boundary; arbitrary executable Plugin compatibility and OS containment remain `NOT_PROVEN`.
 
-The current module proves metadata parsing, an append-only lifecycle journal, and policy-shaped
-Compatibility/Trust/Isolation values in fixtures. It does not yet prove standard Pi package
-installation, effective post-load resource graphs, two representative external packages, or OS
-containment. The completion audit also found that query/fragment credentials and `file:`
-references can pass some manifest reference fields. Until those paths are closed and exact
-release/Engine/platform/configuration/verifier identities are durable, no arbitrary package may
-be called compatible, trusted, or isolated.
+The replacement implementation now proves within its current local/contract boundary:
 
-Relevant implementation: [`contracts.ts`](../../packages/plugin-manager/src/contracts.ts) and
+- real public PackageManager metadata resolution for exact LOCAL and explicitly selected Pi-import
+  fixtures, plus exact NPM-SRI and Git-commit/tree adapter contracts; a bounded public npm install
+  also passed through the installed single-artifact CLI on the current Windows development machine,
+  including quarantine and managed removal, but real public Git and lifecycle attack-package
+  installation remain `NOT_RUN` in platform Evidence. One post-hardening rerun first exposed a
+  transient compile-cache enumeration race; its failure is retained in the Task 10 plan, the
+  regression is fixed, and the exact local observation subsequently passed;
+- no extension evaluation during metadata resolution, qualification, inventory, startup, or Safe
+  Mode, including two locked external Pi examples and five frozen malicious fixture classes;
+- portable v2 Manifests and qualification receipts separated from exact device-local runtime path
+  bindings, with private/credential-shaped metadata rejected and v1 journal parsing frozen to its
+  historical contract;
+- append-only install/disable/remove replay, reserved Hunter/Pi built-in collision rejection, and
+  serialized cross-process lifecycle mutations, plus automatic Safe Mode for quarantine,
+  corruption, collision, missing/tampered bindings, or changed package resources;
+- exact startup activation for metadata-qualified resource-only skills/prompts/themes from a
+  Hunter-owned, content-addressed, read-only snapshot; installation has finite time/output/tree/free
+  space budgets, private empty npm/Git credential configuration, single-artifact worker routing,
+  and failed generations are removed.
+
+Executable extensions remain `UNVERIFIED` and quarantined in the standard path. Ordinary extension
+code would retain `PROCESS_AUTHORITY`; no permission profile is presented as an OS sandbox, and a
+same-authority attacker changing a snapshot after final revalidation is not claimed contained.
+Registry removal deletes the validated Hunter-owned runtime snapshot/binding while preserving
+append-only journal/qualification history; LOCAL and selected PI source directories are untouched.
+Package-tree hashing excludes `.git` and `node_modules`, so this audit does not infer extension
+dependency-closure qualification from the resource-only result.
+
+The 18-test Task 10 contract matrix, platform probe, and exact Windows/Ubuntu comparator are checked
+in. A clean Windows local probe on commit `b46e67acd81812db6d8cb1dad52c9639f8a022df` passed with
+source identity equal to that commit, 18/18 contract tests, all nine checks, and privacy `PASS`;
+the platform receipt correctly keeps public npm `NOT_RUN` because the separate installed-artifact
+observation is not promoted to hosted Evidence. Clean-commit hosted Windows/Ubuntu receipts remain
+`PENDING` until CI runs. Relevant implementation:
+[`pi-package-resolver.ts`](../../packages/pi-host/src/pi-package-resolver.ts),
+[`plugin-activation.ts`](../../packages/pi-host/src/plugin-activation.ts),
+[`plugin-qualification.ts`](../../packages/pi-host/src/plugin-qualification.ts),
+[`contracts.ts`](../../packages/plugin-manager/src/contracts.ts), and
 [`manager.ts`](../../packages/plugin-manager/src/manager.ts).
 
 ## Task 11 — portable release and updates
@@ -113,8 +141,8 @@ credentials, the Hunter Pi repository, or disposable fixtures.
 
 1. Close Task 9 process/lease finality, crash recovery, immutable receipt, and platform Evidence
    gates.
-2. Close Task 10 reference privacy and exact Compatibility/Trust/Isolation identity gates before
-   enabling any user package.
+2. Run and compare the exact Task 10 Windows/Ubuntu receipts before treating its resource-only
+   package path as closed; keep executable extensions quarantined.
 3. Implement and verify the Task 11 Windows activation, migration, rollback, exact portable
    artifact, signing/promotion, and machine Evidence path.
 4. Bind Task 12 evaluation to immutable non-fixture Archives and exact Provider authorization.

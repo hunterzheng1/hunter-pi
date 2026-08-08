@@ -175,6 +175,15 @@ describe("Hunter Pi launch planning", () => {
       safeMode: false,
     });
     expect(extensionArguments(plan.arguments)).toEqual([fixture.coreExtensionPath]);
+    expect(plan.arguments).toEqual(
+      expect.arrayContaining([
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
+      ]),
+    );
 
     const header = createQuickSessionHeader({
       configuration: fixture.configuration,

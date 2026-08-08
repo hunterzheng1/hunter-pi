@@ -22,6 +22,21 @@ function containsCredentialBearingUrl(value: string): boolean {
   }
 }
 
+function containsNonPortableUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol !== "https:" ||
+      parsed.username.length > 0 ||
+      parsed.password.length > 0 ||
+      parsed.search.length > 0 ||
+      parsed.hash.length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 function containsUnsafePath(value: string): boolean {
   try {
     const decoded = decodeURIComponent(value);
@@ -36,7 +51,9 @@ function containsUnsafePath(value: string): boolean {
   }
 }
 
-const publicReferenceSchema = nonEmptyTextSchema.refine(
+// v1 journal input is an immutable historical contract. Keep these two schemas
+// byte-for-byte compatible with the contract that shipped before Manifest v2.
+const publicReferenceV1Schema = nonEmptyTextSchema.refine(
   (value) =>
     !containsUnsafePath(value) &&
     !/(?:^|[\s"'])[A-Za-z]:[\\/]|(?:^|[\s"'])\/(?:Users|home|private|tmp)\//u.test(value) &&
@@ -44,12 +61,31 @@ const publicReferenceSchema = nonEmptyTextSchema.refine(
     !containsCredentialBearingUrl(value),
   "private paths and credential material are not portable Plugin references",
 );
-const publicUrlSchema = z.url().refine((value) => {
+const publicUrlV1Schema = z.url().refine((value) => {
   const parsed = new URL(value);
   return (
     parsed.protocol === "https:" && parsed.username.length === 0 && parsed.password.length === 0
   );
 }, "credential-bearing URLs and non-HTTPS URLs are not portable Plugin references");
+
+const publicReferenceSchema = nonEmptyTextSchema.refine(
+  (value) =>
+    !containsUnsafePath(value) &&
+    !/(?:^|[\s"'])[A-Za-z]:[\\/]|(?:^|[\s"'])\/(?:Users|home|private|tmp)\//u.test(value) &&
+    !/(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]/iu.test(value) &&
+    !containsNonPortableUrl(value),
+  "private paths and credential material are not portable Plugin references",
+);
+const publicUrlSchema = z.url().refine((value) => {
+  const parsed = new URL(value);
+  return (
+    parsed.protocol === "https:" &&
+    parsed.username.length === 0 &&
+    parsed.password.length === 0 &&
+    parsed.search.length === 0 &&
+    parsed.hash.length === 0
+  );
+}, "credential-bearing, qualified, and non-HTTPS URLs are not portable Plugin references");
 const exactVersionSchema = z
   .string()
   .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u);
@@ -57,33 +93,41 @@ const resourceNameSchema = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u, "resource names must be stable path-safe identifiers");
 
-export const pluginSourceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("LOCAL"),
-    label: publicReferenceSchema,
-    pathFingerprint: fingerprintSchema,
-    contentFingerprint: fingerprintSchema,
-  }),
-  z.strictObject({
-    kind: z.literal("NPM"),
-    registry: publicUrlSchema,
-    packageName: z.string().regex(/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u),
-    version: exactVersionSchema,
-    integrity: fingerprintSchema,
-  }),
-  z.strictObject({
-    kind: z.literal("GIT"),
-    remote: publicUrlSchema,
-    commit: z.string().regex(/^[0-9a-f]{40}$/u),
-    treeFingerprint: fingerprintSchema,
-  }),
-  z.strictObject({
-    kind: z.literal("PI"),
-    packageName: z.string().regex(/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u),
-    version: exactVersionSchema,
-    integrity: fingerprintSchema,
-  }),
-]);
+function pluginSourceContract(
+  referenceSchema: typeof publicReferenceSchema,
+  urlSchema: typeof publicUrlSchema,
+) {
+  return z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("LOCAL"),
+      label: referenceSchema,
+      pathFingerprint: fingerprintSchema,
+      contentFingerprint: fingerprintSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("NPM"),
+      registry: urlSchema,
+      packageName: z.string().regex(/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u),
+      version: exactVersionSchema,
+      integrity: fingerprintSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("GIT"),
+      remote: urlSchema,
+      commit: z.string().regex(/^[0-9a-f]{40}$/u),
+      treeFingerprint: fingerprintSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("PI"),
+      packageName: z.string().regex(/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u),
+      version: exactVersionSchema,
+      integrity: fingerprintSchema,
+    }),
+  ]);
+}
+
+const pluginSourceV1Schema = pluginSourceContract(publicReferenceV1Schema, publicUrlV1Schema);
+export const pluginSourceSchema = pluginSourceContract(publicReferenceSchema, publicUrlSchema);
 export type PluginSource = z.infer<typeof pluginSourceSchema>;
 
 export const pluginResourceSchema = z.strictObject({
@@ -92,11 +136,56 @@ export const pluginResourceSchema = z.strictObject({
 });
 export type PluginResource = z.infer<typeof pluginResourceSchema>;
 
+const portablePluginResourceSchema = z.strictObject({
+  name: resourceNameSchema,
+  description: publicReferenceSchema,
+});
+
 export const pluginResourceInventorySchema = z.strictObject({
   tools: z.array(pluginResourceSchema),
   hooks: z.array(pluginResourceSchema),
 });
 export type PluginResourceInventory = z.infer<typeof pluginResourceInventorySchema>;
+
+const portableRelativeResourcePathSchema = z
+  .string()
+  .min(1)
+  .max(2_048)
+  .refine(
+    (value) =>
+      value === "." ||
+      (!value.includes("\\") &&
+        !value.startsWith("/") &&
+        !value.endsWith("/") &&
+        value
+          .split("/")
+          .every((segment) => segment.length > 0 && segment !== "." && segment !== "..")),
+    "Pi Package resources require normalized contained relative paths",
+  );
+
+export const pluginPiResourceSchema = z.strictObject({
+  relativePath: portableRelativeResourcePathSchema,
+  contentFingerprint: fingerprintSchema,
+  enabled: z.boolean(),
+});
+export type PluginPiResource = z.infer<typeof pluginPiResourceSchema>;
+
+export const pluginResourceInventoryV2Schema = z.strictObject({
+  tools: z.array(portablePluginResourceSchema),
+  hooks: z.array(portablePluginResourceSchema),
+  extensions: z.array(pluginPiResourceSchema),
+  skills: z.array(pluginPiResourceSchema),
+  prompts: z.array(pluginPiResourceSchema),
+  themes: z.array(pluginPiResourceSchema),
+});
+export type PluginResourceInventoryV2 = z.infer<typeof pluginResourceInventoryV2Schema>;
+
+const pluginProvenanceV1Schema = z.strictObject({
+  upstreamName: publicReferenceV1Schema,
+  sourceReference: publicReferenceV1Schema,
+  sourceFingerprint: fingerprintSchema,
+  licenseReference: publicReferenceV1Schema,
+});
 
 export const pluginProvenanceSchema = z.strictObject({
   upstreamName: publicReferenceSchema,
@@ -105,16 +194,32 @@ export const pluginProvenanceSchema = z.strictObject({
   licenseReference: publicReferenceSchema,
 });
 
-export const pluginManifestSchema = z.strictObject({
+export const pluginManifestV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-plugin-manifest.v1"),
+  pluginId: pluginIdSchema,
+  version: exactVersionSchema,
+  source: pluginSourceV1Schema,
+  packageFingerprint: fingerprintSchema,
+  license: nonEmptyTextSchema,
+  provenance: pluginProvenanceV1Schema,
+  resources: pluginResourceInventorySchema,
+});
+export const pluginManifestV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-plugin-manifest.v2"),
   pluginId: pluginIdSchema,
   version: exactVersionSchema,
   source: pluginSourceSchema,
   packageFingerprint: fingerprintSchema,
-  license: nonEmptyTextSchema,
+  license: publicReferenceSchema,
   provenance: pluginProvenanceSchema,
-  resources: pluginResourceInventorySchema,
+  resources: pluginResourceInventoryV2Schema,
+  executableSurface: z.enum(["NONE", "DECLARED_NOT_EXECUTED", "UNKNOWN_NOT_EXECUTED"]),
 });
+export type PluginManifestV2 = z.infer<typeof pluginManifestV2Schema>;
+export const pluginManifestSchema = z.discriminatedUnion("schemaVersion", [
+  pluginManifestV1Schema,
+  pluginManifestV2Schema,
+]);
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 
 export const pluginCompatibilityVerificationSchema = z.strictObject({
@@ -193,31 +298,57 @@ export const pluginOperationReceiptSchema = z.strictObject({
 });
 export type PluginOperationReceipt = z.infer<typeof pluginOperationReceiptSchema>;
 
-export const pluginRecordSchema = z.strictObject({
+export const pluginRecordV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-plugin-record.v1"),
   pluginId: pluginIdSchema,
-  manifest: pluginManifestSchema,
+  manifest: pluginManifestV1Schema,
   state: z.enum(["ENABLED", "DISABLED", "QUARANTINED"]),
   assurance: pluginAssuranceReceiptSchema,
   installedAt: timestampSchema,
   lastOperationId: operationIdSchema,
 });
+export const pluginRecordV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-plugin-record.v2"),
+  pluginId: pluginIdSchema,
+  manifest: pluginManifestV2Schema,
+  state: z.enum(["ENABLED", "DISABLED", "QUARANTINED"]),
+  assurance: pluginAssuranceReceiptSchema,
+  installedAt: timestampSchema,
+  lastOperationId: operationIdSchema,
+});
+export const pluginRecordSchema = z.discriminatedUnion("schemaVersion", [
+  pluginRecordV1Schema,
+  pluginRecordV2Schema,
+]);
 export type PluginRecord = z.infer<typeof pluginRecordSchema>;
 
-export const pluginJournalEntrySchema = z.strictObject({
-  schemaVersion: z.literal("hpi-plugin-journal.v1"),
+const pluginJournalEntryFields = {
   sequence: z.number().int().positive(),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   requestFingerprint: fingerprintSchema,
   action: z.enum(["INSTALL", "IMPORT_FROM_PI", "DISABLE", "REMOVE"]),
   pluginId: pluginIdSchema,
-  record: pluginRecordSchema.optional(),
   receipt: pluginOperationReceiptSchema,
   createdAt: timestampSchema,
   previousEntryFingerprint: fingerprintSchema.nullable(),
   entryFingerprint: fingerprintSchema,
+};
+
+export const pluginJournalEntryV1Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-plugin-journal.v1"),
+  ...pluginJournalEntryFields,
+  record: pluginRecordV1Schema.optional(),
 });
+export const pluginJournalEntryV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-plugin-journal.v2"),
+  ...pluginJournalEntryFields,
+  record: pluginRecordV2Schema.optional(),
+});
+export const pluginJournalEntrySchema = z.discriminatedUnion("schemaVersion", [
+  pluginJournalEntryV1Schema,
+  pluginJournalEntryV2Schema,
+]);
 export type PluginJournalEntry = z.infer<typeof pluginJournalEntrySchema>;
 
 const inventoryResourceSchema = z.strictObject({
@@ -226,22 +357,44 @@ const inventoryResourceSchema = z.strictObject({
   description: nonEmptyTextSchema,
 });
 
-export const pluginInventorySchema = z.strictObject({
+const inventoryConflictSchema = z.strictObject({
+  pluginId: pluginIdSchema,
+  resourceKind: z.enum(["TOOL", "HOOK"]),
+  resourceName: resourceNameSchema,
+  reason: nonEmptyTextSchema,
+});
+
+export const pluginInventoryV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-plugin-inventory.v1"),
   safeMode: z.boolean(),
   declaredTools: z.array(inventoryResourceSchema),
   declaredHooks: z.array(inventoryResourceSchema),
   effectiveTools: z.array(inventoryResourceSchema),
   effectiveHooks: z.array(inventoryResourceSchema),
-  conflicts: z.array(
-    z.strictObject({
-      pluginId: pluginIdSchema,
-      resourceKind: z.enum(["TOOL", "HOOK"]),
-      resourceName: resourceNameSchema,
-      reason: nonEmptyTextSchema,
-    }),
-  ),
+  conflicts: z.array(inventoryConflictSchema),
 });
+const inventoryPiResourceSchema = pluginPiResourceSchema.extend({ pluginId: pluginIdSchema });
+export const pluginInventoryV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-plugin-inventory.v2"),
+  safeMode: z.boolean(),
+  declaredTools: z.array(inventoryResourceSchema),
+  declaredHooks: z.array(inventoryResourceSchema),
+  effectiveTools: z.array(inventoryResourceSchema),
+  effectiveHooks: z.array(inventoryResourceSchema),
+  declaredExtensions: z.array(inventoryPiResourceSchema),
+  declaredSkills: z.array(inventoryPiResourceSchema),
+  declaredPrompts: z.array(inventoryPiResourceSchema),
+  declaredThemes: z.array(inventoryPiResourceSchema),
+  effectiveExtensions: z.array(inventoryPiResourceSchema),
+  effectiveSkills: z.array(inventoryPiResourceSchema),
+  effectivePrompts: z.array(inventoryPiResourceSchema),
+  effectiveThemes: z.array(inventoryPiResourceSchema),
+  conflicts: z.array(inventoryConflictSchema),
+});
+export const pluginInventorySchema = z.discriminatedUnion("schemaVersion", [
+  pluginInventoryV1Schema,
+  pluginInventoryV2Schema,
+]);
 export type PluginInventory = z.infer<typeof pluginInventorySchema>;
 
 export const pluginStartupDecisionSchema = z.strictObject({

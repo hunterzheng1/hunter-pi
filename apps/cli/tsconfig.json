@@ -15,6 +15,7 @@
     { "path": "../../packages/execution" },
     { "path": "../../packages/managed-change" },
     { "path": "../../packages/pi-host" },
-    { "path": "../../packages/pilot" }
+    { "path": "../../packages/pilot" },
+    { "path": "../../packages/plugin-manager" }
   ]
 }

@@ -12,6 +12,11 @@ inspection into a high-frequency API poller.
 - Locked installs use npm's offline-preferred mode and disable audit/fund
   network work. Compiled checks reuse the build already produced by the same
   job instead of rebuilding before each smoke.
+- Task 9 and Task 10 contract matrices are excluded from the generic unit-test
+  invocation and run exactly once inside their source-bound platform probes.
+  Task 10 reuses the existing Windows/Ubuntu `quality` jobs and the existing
+  aggregate Evidence job; it does not add another checkout or `npm ci` job.
+  Its small receipts use 14-day artifact retention.
 - Workflow concurrency cancels stale runs for the same ref. A cancelled run is
   retained as history; it is not relabelled as a pass.
 

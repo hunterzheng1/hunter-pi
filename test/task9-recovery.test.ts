@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  attemptFinalityReceiptSchema,
   attemptIdSchema,
   checkpointSchema,
   checkpointIdSchema,
@@ -105,6 +106,38 @@ function identitiesFor(
   };
 }
 
+function finalityFor(checkpoint: Awaited<ReturnType<typeof createRecoveryScenario>>["checkpoint"]) {
+  const identityBody = checkpoint.checkpointId.slice("checkpoint_".length);
+  return attemptFinalityReceiptSchema.parse({
+    schemaVersion: "1.0.0",
+    attemptFinalityReceiptId: `finality_${identityBody}`,
+    runId: checkpoint.runId,
+    attemptId: checkpoint.attemptId,
+    checkpointId: checkpoint.checkpointId,
+    workspaceId: checkpoint.workspaceId,
+    workspaceFingerprint: checkpoint.workspaceFingerprint,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+    processFinalities: checkpoint.processReferences.map((processReference) => ({
+      processReference,
+      finalReceiptFingerprint: fixtureFingerprint,
+      processTreeState: "EMPTY",
+      outputState: "CLOSED",
+      leaseState: "RELEASED",
+      terminalFinality: "FINAL",
+    })),
+    releasedWriterLeaseIds: checkpoint.heldWriterLeaseIds,
+    terminalFinality: "FINAL",
+    evidenceIds: [`evidence_${identityBody}-finality`],
+    observedAt: "2026-08-03T00:00:01.000Z",
+  });
+}
+
+function finalityReconcilerFor(
+  checkpoint: Awaited<ReturnType<typeof createRecoveryScenario>>["checkpoint"],
+) {
+  return { reconcileAttemptFinality: vi.fn().mockResolvedValue(finalityFor(checkpoint)) };
+}
+
 describe("Task 9 RecoveryCoordinator", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -127,6 +160,7 @@ describe("Task 9 RecoveryCoordinator", () => {
       observedAt: fixtureTimestamp,
     });
     const reconciler = {
+      ...finalityReconcilerFor(checkpoint),
       revalidateDistributionRelease: vi
         .fn()
         .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
@@ -179,6 +213,119 @@ describe("Task 9 RecoveryCoordinator", () => {
     });
   });
 
+  it.each(["process", "lease"] as const)(
+    "keeps recovery NOT_PROVEN when the finality Receipt omits a checkpoint %s identity",
+    async (mismatch) => {
+      const suffix = `task9-finality-${mismatch}`;
+      const { kernel, checkpoint } = await createRecoveryScenario(suffix);
+      const identities = identitiesFor(checkpoint);
+      const operationReceipt = operationReconciliationReceiptSchema.parse({
+        schemaVersion: "1.0.0",
+        reconciliationReceiptId: `reconcile_${suffix}`,
+        operationId: `op_${suffix}`,
+        fingerprint: fixtureFingerprint,
+        previousOutcome: "UNKNOWN",
+        outcome: "NOOP",
+        observedEffects: ["operation-state-reconciled"],
+        observedAt: fixtureTimestamp,
+      });
+      const exactFinality = finalityFor(checkpoint);
+      const captureEvidence = vi.fn();
+      const result = await new RecoveryCoordinator({
+        kernel,
+        reconciler: {
+          revalidateDistributionRelease: vi
+            .fn()
+            .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
+          revalidateWorkspace: vi
+            .fn()
+            .mockResolvedValue({ status: "PASS" as const, identity: identities.workspace }),
+          reconcileOperations: vi.fn().mockResolvedValue({
+            activeOperationReceiptIds: checkpoint.activeOperationReceiptIds,
+            unknownOperationIds: checkpoint.unknownOperationIds,
+            receipts: [operationReceipt],
+          }),
+          reconcileAttemptFinality: vi.fn().mockResolvedValue({
+            ...exactFinality,
+            ...(mismatch === "process" ? { processFinalities: [] } : {}),
+            ...(mismatch === "lease" ? { releasedWriterLeaseIds: [] } : {}),
+          }),
+          reconcileEngine: vi
+            .fn()
+            .mockResolvedValue({ status: "PASS" as const, identity: identities.engine }),
+        },
+        captureEvidence: { capture: captureEvidence },
+        now: () => fixtureTimestamp,
+      }).recover(checkpoint.checkpointId, {
+        attemptId: attemptIdSchema.parse(`att_${suffix}-recovered`),
+        operationId: operationIdSchema.parse(`op_recovery-${suffix}`),
+        operationFingerprint: fixtureFingerprint,
+        elapsedMs: 100,
+        consumedResources: { externalOperations: 1 },
+        startedAt: "2026-08-03T00:00:01.000Z",
+      });
+
+      expect(result).toMatchObject({
+        status: "NOT_PROVEN",
+        reasons: ["ATTEMPT_FINALITY_NOT_RECONCILED"],
+      });
+      expect(captureEvidence).not.toHaveBeenCalled();
+      await expect(kernel.project(checkpoint.runId)).resolves.toMatchObject({
+        attempts: [{}],
+        attemptFinalityReceipts: [],
+      });
+    },
+  );
+
+  it("keeps recovery NOT_PROVEN when finality reconciliation is unavailable", async () => {
+    const { kernel, checkpoint } = await createRecoveryScenario("task9-finality-unavailable");
+    const identities = identitiesFor(checkpoint);
+    const operationReceipt = operationReconciliationReceiptSchema.parse({
+      schemaVersion: "1.0.0",
+      reconciliationReceiptId: "reconcile_task9-finality-unavailable",
+      operationId: "op_task9-finality-unavailable",
+      fingerprint: fixtureFingerprint,
+      previousOutcome: "UNKNOWN",
+      outcome: "NOOP",
+      observedEffects: ["operation-state-reconciled"],
+      observedAt: fixtureTimestamp,
+    });
+    const result = await new RecoveryCoordinator({
+      kernel,
+      reconciler: {
+        revalidateDistributionRelease: vi
+          .fn()
+          .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
+        revalidateWorkspace: vi
+          .fn()
+          .mockResolvedValue({ status: "PASS" as const, identity: identities.workspace }),
+        reconcileOperations: vi.fn().mockResolvedValue({
+          activeOperationReceiptIds: checkpoint.activeOperationReceiptIds,
+          unknownOperationIds: checkpoint.unknownOperationIds,
+          receipts: [operationReceipt],
+        }),
+        reconcileAttemptFinality: vi.fn().mockRejectedValue(new Error("finality unavailable")),
+        reconcileEngine: vi
+          .fn()
+          .mockResolvedValue({ status: "PASS" as const, identity: identities.engine }),
+      },
+      captureEvidence: { capture: vi.fn() },
+      now: () => fixtureTimestamp,
+    }).recover(checkpoint.checkpointId, {
+      attemptId: attemptIdSchema.parse("att_task9-finality-unavailable-recovered"),
+      operationId: operationIdSchema.parse("op_recovery-task9-finality-unavailable"),
+      operationFingerprint: fixtureFingerprint,
+      elapsedMs: 100,
+      consumedResources: { externalOperations: 1 },
+      startedAt: "2026-08-03T00:00:01.000Z",
+    });
+
+    expect(result).toMatchObject({
+      status: "NOT_PROVEN",
+      reasons: ["ATTEMPT_FINALITY_NOT_RECONCILED"],
+    });
+  });
+
   it("keeps recovery NOT_PROVEN when a PASS adapter reports the wrong release identity", async () => {
     const { kernel, checkpoint } = await createRecoveryScenario("task9-identity");
     const identities = identitiesFor(checkpoint);
@@ -195,6 +342,7 @@ describe("Task 9 RecoveryCoordinator", () => {
     const result = await new RecoveryCoordinator({
       kernel,
       reconciler: {
+        ...finalityReconcilerFor(checkpoint),
         revalidateDistributionRelease: vi.fn().mockResolvedValue({
           status: "PASS" as const,
           identity: {
@@ -245,6 +393,7 @@ describe("Task 9 RecoveryCoordinator", () => {
       observedAt: fixtureTimestamp,
     });
     const reconciler = {
+      ...finalityReconcilerFor(checkpoint),
       revalidateDistributionRelease: vi
         .fn()
         .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
@@ -292,6 +441,7 @@ describe("Task 9 RecoveryCoordinator", () => {
       attempts: [{}, {}],
     });
     expect((await kernel.project(checkpoint.runId)).attempts).toHaveLength(2);
+    expect((await kernel.project(checkpoint.runId)).attemptFinalityReceipts).toHaveLength(1);
   });
 
   it("keeps recovery NOT_PROVEN when workspace or active operations are unresolved", async () => {
@@ -301,6 +451,7 @@ describe("Task 9 RecoveryCoordinator", () => {
     const result = await new RecoveryCoordinator({
       kernel,
       reconciler: {
+        ...finalityReconcilerFor(checkpoint),
         revalidateDistributionRelease: vi
           .fn()
           .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
@@ -353,6 +504,7 @@ describe("Task 9 RecoveryCoordinator", () => {
     const result = await new RecoveryCoordinator({
       kernel,
       reconciler: {
+        ...finalityReconcilerFor(checkpoint),
         revalidateDistributionRelease: vi
           .fn()
           .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
@@ -402,6 +554,11 @@ describe("Task 9 RecoveryCoordinator", () => {
         evidenceIds: [evidenceIdSchema.parse("evidence_task9-other")],
       },
     });
+    await kernel.dispatch({
+      schemaVersion: "1.0.0",
+      type: "RECORD_ATTEMPT_FINALITY",
+      receipt: finalityFor(checkpoint),
+    });
 
     await expect(
       kernel.dispatch({
@@ -432,6 +589,7 @@ describe("Task 9 RecoveryCoordinator", () => {
     const resultPromise = new RecoveryCoordinator({
       kernel,
       reconciler: {
+        ...finalityReconcilerFor(checkpoint),
         revalidateDistributionRelease: vi
           .fn()
           .mockResolvedValue({ status: "PASS" as const, identity: identities.distribution }),
@@ -519,9 +677,16 @@ describe("Task 9 RecoveryCoordinator", () => {
     }
 
     const reopenedKernel = new DurableWorkflowKernel(new FileWorkflowEventStore({ stateRoot }));
+    const durableCheckpoint = (await reopenedKernel.project(fixture.run.runId)).checkpoints.find(
+      (candidate) => candidate.checkpointId === checkpointDecision.checkpointId,
+    );
+    if (durableCheckpoint === undefined) {
+      throw new Error("missing durable recovery Checkpoint after reopen");
+    }
     const result = await new RecoveryCoordinator({
       kernel: reopenedKernel,
       reconciler: {
+        ...finalityReconcilerFor(durableCheckpoint),
         revalidateDistributionRelease: vi.fn().mockResolvedValue({
           status: "PASS" as const,
           identity: {
@@ -575,5 +740,6 @@ describe("Task 9 RecoveryCoordinator", () => {
     expect(recoveredProjection.attempts.at(-1)?.attemptId).toBe(
       "att_task9-durable-recovery-recovered",
     );
+    expect(recoveredProjection.attemptFinalityReceipts).toEqual([finalityFor(durableCheckpoint)]);
   });
 });

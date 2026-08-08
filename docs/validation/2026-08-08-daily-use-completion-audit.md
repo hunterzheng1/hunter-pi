@@ -20,19 +20,23 @@ Status: `PARTIAL`.
 The durable event, Checkpoint, Archive, export, import, and exact-target deletion modules are
 real implementations. The following daily-use gates remain open:
 
-- recovery does not yet require an exact Task 7 process-finality receipt and released writer
-  lease before it creates a new Attempt;
-- cancellation can become terminal after Agent return without proving process-tree and output
-  finality;
+- the canonical Kernel and RecoveryCoordinator now require an immutable Attempt Finality
+  Receipt with exact Checkpoint process/Writer Lease sets, but a real platform recovery adapter
+  has not yet bound Task 7 final receipts and lease releases into it;
 - recovery replay, stale mutation-lock reconciliation, forced-kill crash windows, and a
   platform-bound Task 9 Evidence comparator are not yet proven;
 - import/export/delete receipt replay and the second-device read-only projection need stronger
   immutable reconciliation semantics.
 
+The hardening source also rejects cancellation after only `AGENT_RETURNED` or `PROCESS_EXITED`,
+retains finality Evidence in Archive completeness checks, and preserves the finality Receipt
+across durable reopen. These are provider-neutral local contract results, not a platform recovery
+claim.
+
 The Archive boundary now independently rescans retained Evidence summary and capture text. A
 caller cannot bypass credential/private-text rejection merely by setting `contentClass=LOG`,
 `credentialMaterial=false`, and forged redaction metadata. This closes one zero-tolerance
-privacy path only; it does not close the remaining recovery/finality gates.
+privacy path only; it does not close the remaining platform recovery gates.
 
 Relevant implementation: [`archive.ts`](../../packages/evidence/src/archive.ts),
 [`recovery.ts`](../../packages/workflow-kernel/src/recovery.ts), and

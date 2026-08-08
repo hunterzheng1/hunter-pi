@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  attemptFinalityReceiptIdSchema,
   attemptIdSchema,
+  checkpointIdSchema,
+  checkpointSchema,
   observationIdSchema,
   planRevisionSchema,
   runSchema,
@@ -77,6 +80,68 @@ async function createTerminalProjection(
         evidenceIds: [],
       },
     });
+    const finalityEvidence = createPortableEvidenceEnvelope({
+      schemaVersion: "1.0.0",
+      evidenceId: "evidence_archive-cancelled-finality",
+      kind: "observation",
+      scope: { runId: run.runId, attemptId: "att_archive-original" },
+      createdAt: fixtureTimestamp,
+      sourceFingerprint: fixtureFingerprint,
+      summary: "The cancelled Archive fixture has exact Attempt finality.",
+      contentClass: "SUMMARY",
+      content: "No managed process or Writer Lease remained after cancellation.",
+    });
+    const beforeCheckpoint = await kernel.project(run.runId);
+    const checkpoint = checkpointSchema.parse({
+      schemaVersion: "1.0.0",
+      checkpointId: checkpointIdSchema.parse("checkpoint_archive-cancelled"),
+      runId: run.runId,
+      attemptId: "att_archive-original",
+      planRevisionId: planRevision.planRevisionId,
+      distributionReleaseId: "release_archive-cancelled",
+      workspaceId: planRevision.workspaceId,
+      repositoryFingerprint: fixtureFingerprint,
+      workspaceFingerprint: planRevision.workspaceFingerprint,
+      sourceFingerprint: planRevision.sourceFingerprint,
+      eventCursor: beforeCheckpoint.eventCursor,
+      createdAt: fixtureTimestamp,
+      engine: {
+        engineReleaseId: "engine-release_archive-cancelled",
+        engineReleaseFingerprint: fixtureFingerprint,
+        resumeCapability: "UNSUPPORTED",
+      },
+      activeOperationReceiptIds: [],
+      unknownOperationIds: [],
+      heldWriterLeaseIds: [],
+      processReferences: [],
+      remainingResourceBudgets: planRevision.loopPolicy.resourceBudgets,
+    });
+    await kernel.dispatch({
+      schemaVersion: "1.0.0",
+      type: "RECORD_CHECKPOINT",
+      checkpoint,
+    });
+    await kernel.dispatch({
+      schemaVersion: "1.0.0",
+      type: "RECORD_ATTEMPT_FINALITY",
+      receipt: {
+        schemaVersion: "1.0.0",
+        attemptFinalityReceiptId: attemptFinalityReceiptIdSchema.parse(
+          "finality_archive-cancelled",
+        ),
+        runId: run.runId,
+        attemptId: attemptIdSchema.parse("att_archive-original"),
+        checkpointId: checkpoint.checkpointId,
+        workspaceId: planRevision.workspaceId,
+        workspaceFingerprint: planRevision.workspaceFingerprint,
+        sourceFingerprint: planRevision.sourceFingerprint,
+        processFinalities: [],
+        releasedWriterLeaseIds: [],
+        terminalFinality: "FINAL",
+        evidenceIds: [finalityEvidence.evidenceId],
+        observedAt: fixtureTimestamp,
+      },
+    });
     await kernel.dispatch({
       schemaVersion: "1.0.0",
       type: "CANCEL_RUN",
@@ -87,7 +152,7 @@ async function createTerminalProjection(
     return {
       projection: await kernel.project(run.runId),
       events: await eventStore.read(run.runId),
-      evidence: [],
+      evidence: [finalityEvidence],
     };
   }
   const verification = verificationReceiptSchema.parse({

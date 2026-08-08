@@ -10,6 +10,10 @@ const identitySchema = (prefix: string) =>
 export const attemptIdSchema = identitySchema("att").brand<"AttemptId">();
 export type AttemptId = z.infer<typeof attemptIdSchema>;
 
+export const attemptFinalityReceiptIdSchema =
+  identitySchema("finality").brand<"AttemptFinalityReceiptId">();
+export type AttemptFinalityReceiptId = z.infer<typeof attemptFinalityReceiptIdSchema>;
+
 export const archiveIdSchema = identitySchema("archive").brand<"ArchiveId">();
 export type ArchiveId = z.infer<typeof archiveIdSchema>;
 

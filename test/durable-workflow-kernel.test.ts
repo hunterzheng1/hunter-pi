@@ -165,6 +165,7 @@ describe("DurableWorkflowKernel", () => {
         "DISTRIBUTION_RELEASE_NOT_REVALIDATED",
         "WORKSPACE_NOT_REVALIDATED",
         "ENGINE_STATE_NOT_RECONCILED",
+        "ATTEMPT_FINALITY_NOT_RECONCILED",
       ],
     });
   });

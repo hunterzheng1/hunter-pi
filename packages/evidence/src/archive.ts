@@ -447,6 +447,7 @@ function assertArchiveProjection(
   const referencedEvidenceIds = new Set([
     ...projection.attempts.flatMap((attempt) => attempt.failureEvidenceIds ?? []),
     ...projection.observations.flatMap((observation) => observation.evidenceIds),
+    ...projection.attemptFinalityReceipts.flatMap((receipt) => receipt.evidenceIds),
     ...projection.verificationReceipts.flatMap((receipt) => receipt.evidenceIds),
     ...projection.humanReceipts.flatMap((receipt) => receipt.evidenceIds),
     ...projection.reviewReceipts.flatMap((receipt) => [

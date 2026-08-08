@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  attemptFinalityReceiptSchema,
   attemptIdSchema,
   checkpointIdSchema,
   evidenceIdSchema,
@@ -12,6 +13,7 @@ import {
   runIdSchema,
   timestampSchema,
   type Checkpoint,
+  type AttemptFinalityReceipt,
   type CheckpointId,
   type EvidenceId,
   type Fingerprint,
@@ -85,6 +87,7 @@ export interface RecoveryReconciler {
   revalidateDistributionRelease(checkpoint: Checkpoint): Promise<RecoveryCheck>;
   revalidateWorkspace(checkpoint: Checkpoint): Promise<RecoveryCheck>;
   reconcileOperations(checkpoint: Checkpoint): Promise<RecoveryOperationResult>;
+  reconcileAttemptFinality(checkpoint: Checkpoint): Promise<AttemptFinalityReceipt>;
   reconcileEngine(checkpoint: Checkpoint): Promise<RecoveryCheck>;
 }
 
@@ -136,6 +139,7 @@ function reasonsFor(
   operations: RecoveryOperationResult,
   expectedOperationIds: readonly OperationId[],
   expectedOperationReceiptIds: readonly OperationReceiptId[],
+  attemptFinality: AttemptFinalityReceipt | undefined,
   engine: RecoveryCheck,
   checkpoint: Checkpoint,
 ): RecoveryReason[] {
@@ -173,6 +177,17 @@ function reasonsFor(
     actual.status === "PASS" &&
     actual.identity !== undefined &&
     canonicalIdentity(actual.identity) === canonicalIdentity(expected);
+  const identitySetMatches = (
+    actual: readonly unknown[],
+    expected: readonly unknown[],
+  ): boolean => {
+    const actualSet = new Set(actual.map(canonicalIdentity));
+    const expectedSet = new Set(expected.map(canonicalIdentity));
+    return (
+      actualSet.size === expectedSet.size &&
+      [...actualSet].every((identity) => expectedSet.has(identity))
+    );
+  };
   if (!identityMatches(distributionRelease, expectedDistributionIdentity)) {
     reasons.add("DISTRIBUTION_RELEASE_NOT_REVALIDATED");
   }
@@ -196,6 +211,22 @@ function reasonsFor(
     [...expectedReceipts].some((receiptId) => !observedReceipts.has(receiptId))
   ) {
     reasons.add("ACTIVE_OPERATIONS_NOT_RECONCILED");
+  }
+  if (
+    attemptFinality?.runId !== checkpoint.runId ||
+    attemptFinality.attemptId !== checkpoint.attemptId ||
+    attemptFinality.checkpointId !== checkpoint.checkpointId ||
+    attemptFinality.workspaceId !== checkpoint.workspaceId ||
+    attemptFinality.workspaceFingerprint !== checkpoint.workspaceFingerprint ||
+    attemptFinality.sourceFingerprint !== checkpoint.sourceFingerprint ||
+    !identitySetMatches(
+      attemptFinality.processFinalities.map(({ processReference }) => processReference),
+      checkpoint.processReferences,
+    ) ||
+    !identitySetMatches(attemptFinality.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) ||
+    Date.parse(attemptFinality.observedAt) < Date.parse(checkpoint.createdAt)
+  ) {
+    reasons.add("ATTEMPT_FINALITY_NOT_RECONCILED");
   }
   return [...reasons];
 }
@@ -226,35 +257,44 @@ export class RecoveryCoordinator {
 
     const checkpoint = initial.checkpoint;
     const unresolvedCheck: RecoveryCheck = { status: "NOT_PROVEN" };
-    const [distributionRelease, workspace, operationResult, engine] = await Promise.all([
-      this.#reconciler
-        .revalidateDistributionRelease(checkpoint)
-        .then((check) => recoveryCheckSchema.parse(check))
-        .catch(() => unresolvedCheck),
-      this.#reconciler
-        .revalidateWorkspace(checkpoint)
-        .then((check) => recoveryCheckSchema.parse(check))
-        .catch(() => unresolvedCheck),
-      this.#reconciler
-        .reconcileOperations(checkpoint)
-        .then((result) => ({
-          result: recoveryOperationResultSchema.parse(result),
-          unavailable: false,
-        }))
-        .catch(() => ({
-          result: recoveryOperationResultSchema.parse({
-            activeOperationReceiptIds: [],
-            unknownOperationIds: [],
-            receipts: [],
-          }),
-          unavailable: true,
-        })),
-      this.#reconciler
-        .reconcileEngine(checkpoint)
-        .then((check) => recoveryCheckSchema.parse(check))
-        .catch(() => unresolvedCheck),
-    ]);
+    const [distributionRelease, workspace, operationResult, finalityResult, engine] =
+      await Promise.all([
+        this.#reconciler
+          .revalidateDistributionRelease(checkpoint)
+          .then((check) => recoveryCheckSchema.parse(check))
+          .catch(() => unresolvedCheck),
+        this.#reconciler
+          .revalidateWorkspace(checkpoint)
+          .then((check) => recoveryCheckSchema.parse(check))
+          .catch(() => unresolvedCheck),
+        this.#reconciler
+          .reconcileOperations(checkpoint)
+          .then((result) => ({
+            result: recoveryOperationResultSchema.parse(result),
+            unavailable: false,
+          }))
+          .catch(() => ({
+            result: recoveryOperationResultSchema.parse({
+              activeOperationReceiptIds: [],
+              unknownOperationIds: [],
+              receipts: [],
+            }),
+            unavailable: true,
+          })),
+        this.#reconciler
+          .reconcileAttemptFinality(checkpoint)
+          .then((receipt) => ({
+            receipt: attemptFinalityReceiptSchema.parse(receipt),
+            unavailable: false,
+          }))
+          .catch(() => ({ receipt: undefined, unavailable: true })),
+        this.#reconciler
+          .reconcileEngine(checkpoint)
+          .then((check) => recoveryCheckSchema.parse(check))
+          .catch(() => unresolvedCheck),
+      ]);
     const operations = operationResult.result;
+    const attemptFinality = finalityResult.receipt;
     const reasons = [
       ...reasonsFor(
         distributionRelease,
@@ -262,10 +302,12 @@ export class RecoveryCoordinator {
         operations,
         checkpoint.unknownOperationIds,
         checkpoint.activeOperationReceiptIds,
+        attemptFinality,
         engine,
         checkpoint,
       ),
       ...(operationResult.unavailable ? ["ACTIVE_OPERATIONS_NOT_RECONCILED" as const] : []),
+      ...(finalityResult.unavailable ? ["ATTEMPT_FINALITY_NOT_RECONCILED" as const] : []),
     ].filter((reason, index, all) => all.indexOf(reason) === index);
     if (reasons.length > 0) {
       return recoveryDecisionSchema.parse({
@@ -275,6 +317,9 @@ export class RecoveryCoordinator {
         projection: initial.projection,
         reasons,
       });
+    }
+    if (attemptFinality === undefined) {
+      throw new Error("Attempt finality reconciliation passed without a Receipt");
     }
 
     const distributionIdentity = recoveryIdentitySchema.parse(distributionRelease.identity);
@@ -289,6 +334,8 @@ export class RecoveryCoordinator {
       activeOperationReceiptIds: operations.activeOperationReceiptIds,
       unknownOperationIds: operations.unknownOperationIds,
       operations: operations.receipts,
+      attemptFinality: "PASS",
+      attemptFinalityReceipt: attemptFinality,
       engine: "PASS",
       engineIdentity,
     });
@@ -333,6 +380,16 @@ export class RecoveryCoordinator {
       });
     }
 
+    const existingFinality = initial.projection.attemptFinalityReceipts.find(
+      (receipt) => receipt.attemptId === previousAttempt.attemptId,
+    );
+    if (
+      existingFinality !== undefined &&
+      JSON.stringify(existingFinality) !== JSON.stringify(attemptFinality)
+    ) {
+      throw new Error("Attempt Finality Receipt changed during recovery replay");
+    }
+
     const evidence = await this.#captureEvidence.capture({
       schemaVersion: "hpi-recovery-evidence.v1",
       runId: checkpoint.runId,
@@ -367,6 +424,13 @@ export class RecoveryCoordinator {
           summary: "Recovery reconciliation observed the owned process tree as final.",
           evidenceIds: [evidenceId],
         },
+      });
+    }
+    if (existingFinality === undefined) {
+      await this.#kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "RECORD_ATTEMPT_FINALITY",
+        receipt: attemptFinality,
       });
     }
 

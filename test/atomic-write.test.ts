@@ -159,7 +159,9 @@ async function readClaimRecoveryReceipts(lockPath: string): Promise<readonly str
     const filenames = (await readdir(directory))
       .filter((filename) => filename.endsWith(".json"))
       .sort();
-    return Promise.all(filenames.map((filename) => readFile(join(directory, filename), "utf8")));
+    return await Promise.all(
+      filenames.map((filename) => readFile(join(directory, filename), "utf8")),
+    );
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
     throw error;
@@ -280,24 +282,29 @@ describe("durable mutation-lock recovery", () => {
     const lockPath = join(root, ".mutation-lock");
     const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
     await waitForFixtureOutput(owner, '"event":"LOCKED"');
-    const deadOwnerRecord = JSON.parse(await readFile(lockPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const deadOwnerRecord = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
     await owner.completion;
     await rm(lockPath);
-    await writeFile(lockPath, `${JSON.stringify({ ...deadOwnerRecord, ownerPid: process.pid })}\n`, {
-      flag: "wx",
-      mode: 0o600,
-    });
-
-    await expect(withDurableMutationLock(lockPath, () => Promise.resolve("recovered"))).resolves.toBe(
-      "recovered",
+    await writeFile(
+      lockPath,
+      `${JSON.stringify({ ...deadOwnerRecord, ownerPid: process.pid })}\n`,
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
     );
+
+    await expect(
+      withDurableMutationLock(lockPath, () => Promise.resolve("recovered")),
+    ).resolves.toBe("recovered");
     expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
   });
 
-  it("recovers when the elected stale-owner reconciler is force-killed after publishing its claim", async () => {
+  it.each([
+    "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+    "AFTER_RECONCILIATION_RECEIPT_PUBLISH",
+    "AFTER_STALE_OWNER_REMOVE",
+  ])("recovers when the elected stale-owner reconciler is force-killed at %s", async (boundary) => {
     const root = await createRoot();
     const lockPath = join(root, ".mutation-lock");
     const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
@@ -305,7 +312,7 @@ describe("durable mutation-lock recovery", () => {
     await owner.completion;
 
     const interrupted = startLockFixture(lockPath, "HOLD_FOR_MS", 20, {
-      HPI_TEST_RECONCILIATION_PAUSE: "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+      HPI_TEST_RECONCILIATION_PAUSE: boundary,
     });
     await waitForFixtureOutput(interrupted, '"event":"RECONCILIATION_PAUSED"');
     await forceKill(interrupted);
@@ -397,6 +404,30 @@ describe("durable mutation-lock recovery", () => {
     expect(await readFile(receiptPath, "utf8")).toBe(firstReceipt);
     expect((await stat(receiptPath)).mtimeMs).toBe(firstStats.mtimeMs);
     expect(await readReconciliationReceipts(lockPath)).toEqual([firstReceipt]);
+  });
+
+  it("rejects tampering with reconciler facts even when the dead-owner identity is unchanged", async () => {
+    const root = await createRoot();
+    const lockPath = join(root, ".mutation-lock");
+    const owner = startLockFixture(lockPath, "EXIT_WHILE_HELD");
+    await waitForFixtureOutput(owner, '"event":"LOCKED"');
+    const deadOwnerRecord = await readFile(lockPath, "utf8");
+    await owner.completion;
+    await withDurableMutationLock(lockPath, () => Promise.resolve());
+    const receiptDirectory = join(root, ".pending-hpi-mutation-lock-metadata", "receipts");
+    const [receiptFilename] = await readdir(receiptDirectory);
+    if (receiptFilename === undefined) throw new Error("expected a reconciliation receipt");
+    const receiptPath = join(receiptDirectory, receiptFilename);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as Record<string, unknown>;
+    await writeFile(
+      receiptPath,
+      `${JSON.stringify({ ...receipt, reconcilerPid: Number(receipt["reconcilerPid"]) + 1 })}\n`,
+    );
+    await writeFile(lockPath, deadOwnerRecord, { flag: "wx", mode: 0o600 });
+
+    await expect(withDurableMutationLock(lockPath, () => Promise.resolve())).rejects.toMatchObject({
+      code: "STORE_CORRUPT",
+    });
   });
 
   it("keeps owner and reconciliation records free of paths and credentials", async () => {

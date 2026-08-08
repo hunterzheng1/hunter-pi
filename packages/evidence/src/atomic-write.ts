@@ -1,6 +1,16 @@
-import { randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
-import { dirname, join, parse, resolve } from "node:path";
+import {
+  createPublicKey,
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  sign,
+  verify,
+} from "node:crypto";
+import { rmSync } from "node:fs";
+import { link, lstat, mkdir, open, readFile, realpath, rm } from "node:fs/promises";
+import { createConnection, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
@@ -19,43 +29,134 @@ export const atomicWriteBoundaries = [
 export type AtomicWriteBoundary = (typeof atomicWriteBoundaries)[number];
 export type AtomicWriteFaultInjector = (boundary: AtomicWriteBoundary) => Promise<void> | void;
 
+export const durableMutationLockBoundaries = [
+  "AFTER_RECONCILIATION_CLAIM_PUBLISH",
+  "AFTER_RECONCILIATION_RECEIPT_PUBLISH",
+  "AFTER_STALE_OWNER_REMOVE",
+] as const;
+export type DurableMutationLockBoundary = (typeof durableMutationLockBoundaries)[number];
+export type DurableMutationLockFaultInjector = (
+  boundary: DurableMutationLockBoundary,
+) => Promise<void> | void;
+export interface DurableMutationLockOptions {
+  readonly faultInjector?: DurableMutationLockFaultInjector;
+}
+
 const lockIdentitySchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+const livenessPublicKeySchema = z.string().regex(/^[A-Za-z0-9_-]{40,256}$/u);
 const durableMutationLockOwnerSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-durable-mutation-lock-owner.v1"),
+  schemaVersion: z.literal("hpi-durable-mutation-lock-owner.v2"),
   lockId: lockIdentitySchema,
   ownerPid: z.number().int().positive(),
+  ownerLivenessId: lockIdentitySchema,
+  ownerPublicKey: livenessPublicKeySchema,
   acquiredAt: timestampSchema,
 });
 type DurableMutationLockOwner = z.infer<typeof durableMutationLockOwnerSchema>;
 
 const durableMutationLockReconciliationClaimSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-durable-mutation-lock-reconciliation-claim.v1"),
+  schemaVersion: z.literal("hpi-durable-mutation-lock-reconciliation-claim.v2"),
   claimId: lockIdentitySchema,
   staleLockId: lockIdentitySchema,
   staleOwnerPid: z.number().int().positive(),
+  staleOwnerLivenessFingerprint: fingerprintSchema,
   ownerRecordFingerprint: fingerprintSchema,
   reconcilerPid: z.number().int().positive(),
+  reconcilerLivenessId: lockIdentitySchema,
+  reconcilerPublicKey: livenessPublicKeySchema,
   observedAt: timestampSchema,
 });
 type DurableMutationLockReconciliationClaim = z.infer<
   typeof durableMutationLockReconciliationClaimSchema
 >;
 
-export const durableMutationLockReconciliationReceiptSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-durable-mutation-lock-reconciliation-receipt.v1"),
-  receiptId: fingerprintSchema,
-  staleLockId: lockIdentitySchema,
-  staleOwnerPid: z.number().int().positive(),
-  ownerRecordFingerprint: fingerprintSchema,
-  reconcilerPid: z.number().int().positive(),
-  observedAt: timestampSchema,
-  outcome: z.literal("OWNER_PID_NOT_FOUND"),
-});
+export const durableMutationLockReconciliationReceiptSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-durable-mutation-lock-reconciliation-receipt.v2"),
+    receiptId: fingerprintSchema,
+    receiptFingerprint: fingerprintSchema,
+    staleLockId: lockIdentitySchema,
+    staleOwnerPid: z.number().int().positive(),
+    staleOwnerLivenessFingerprint: fingerprintSchema,
+    ownerRecordFingerprint: fingerprintSchema,
+    reconcilerPid: z.number().int().positive(),
+    observedAt: timestampSchema,
+    outcome: z.literal("OWNER_PROCESS_NOT_FOUND"),
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.receiptFingerprint !== reconciliationReceiptFingerprint(receipt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["receiptFingerprint"],
+        message: "Mutation-lock reconciliation receipt fingerprint does not match its facts",
+      });
+    }
+  });
 export type DurableMutationLockReconciliationReceipt = z.infer<
   typeof durableMutationLockReconciliationReceiptSchema
 >;
+
+export const durableMutationLockClaimRecoveryReceiptSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-durable-mutation-lock-claim-recovery-receipt.v1"),
+    receiptId: fingerprintSchema,
+    claimId: lockIdentitySchema,
+    staleLockId: lockIdentitySchema,
+    staleReconcilerPid: z.number().int().positive(),
+    staleReconcilerLivenessFingerprint: fingerprintSchema,
+    claimRecordFingerprint: fingerprintSchema,
+    observedAt: timestampSchema,
+    outcome: z.literal("RECONCILER_PROCESS_NOT_FOUND"),
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.receiptId !== claimRecoveryReceiptFingerprint(receipt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["receiptId"],
+        message: "Mutation-lock claim recovery receipt identity does not match its facts",
+      });
+    }
+  });
+export type DurableMutationLockClaimRecoveryReceipt = z.infer<
+  typeof durableMutationLockClaimRecoveryReceiptSchema
+>;
+
+function reconciliationReceiptFingerprint(
+  receipt: Omit<DurableMutationLockReconciliationReceipt, "receiptFingerprint">,
+) {
+  return sha256Fingerprint(
+    canonicalJson({
+      schemaVersion: receipt.schemaVersion,
+      receiptId: receipt.receiptId,
+      staleLockId: receipt.staleLockId,
+      staleOwnerPid: receipt.staleOwnerPid,
+      staleOwnerLivenessFingerprint: receipt.staleOwnerLivenessFingerprint,
+      ownerRecordFingerprint: receipt.ownerRecordFingerprint,
+      reconcilerPid: receipt.reconcilerPid,
+      observedAt: receipt.observedAt,
+      outcome: receipt.outcome,
+    }),
+  );
+}
+
+function claimRecoveryReceiptFingerprint(
+  receipt: Omit<DurableMutationLockClaimRecoveryReceipt, "receiptId">,
+) {
+  return sha256Fingerprint(
+    canonicalJson({
+      schemaVersion: receipt.schemaVersion,
+      claimId: receipt.claimId,
+      staleLockId: receipt.staleLockId,
+      staleReconcilerPid: receipt.staleReconcilerPid,
+      staleReconcilerLivenessFingerprint: receipt.staleReconcilerLivenessFingerprint,
+      claimRecordFingerprint: receipt.claimRecordFingerprint,
+      observedAt: receipt.observedAt,
+      outcome: receipt.outcome,
+    }),
+  );
+}
 
 interface FileIdentity {
   readonly device: bigint;
@@ -68,6 +169,12 @@ interface OwnerSnapshot {
   readonly fingerprint: ReturnType<typeof sha256Fingerprint>;
 }
 
+interface ReconciliationClaimSnapshot {
+  readonly identity: FileIdentity;
+  readonly claim: DurableMutationLockReconciliationClaim;
+  readonly fingerprint: ReturnType<typeof sha256Fingerprint>;
+}
+
 type OwnerSnapshotResult =
   | { readonly state: "ABSENT" }
   | { readonly state: "INVALID" }
@@ -77,6 +184,13 @@ interface OwnedReconciliationClaim {
   readonly claim: DurableMutationLockReconciliationClaim;
   readonly sourcePath: string;
 }
+
+interface ProcessLivenessAuthority {
+  readonly livenessId: string;
+  readonly publicKey: string;
+}
+
+type ProcessLivenessState = "ALIVE" | "NOT_FOUND" | "UNKNOWN";
 
 const mutationLockAttemptLimit = 200;
 const mutationLockRetryDelayMs = 5;
@@ -106,6 +220,156 @@ function reconciliationReceiptPath(
   const directory = join(mutationLockMetadataRoot(lockPath), "receipts");
   const filename = `${staleLockId}.json`;
   return { directory, filename, path: join(directory, filename) };
+}
+
+function claimRecoveryReceiptPath(
+  lockPath: string,
+  claimId: string,
+): { readonly directory: string; readonly filename: string; readonly path: string } {
+  const directory = join(mutationLockMetadataRoot(lockPath), "claim-receipts");
+  const filename = `${claimId}.json`;
+  return { directory, filename, path: join(directory, filename) };
+}
+
+function livenessEndpoint(livenessId: string): string {
+  const parsed = lockIdentitySchema.parse(livenessId);
+  return process.platform === "win32"
+    ? `\\\\.\\pipe\\hunter-pi-lock-${parsed}`
+    : join(tmpdir(), `hunter-pi-lock-${parsed}.sock`);
+}
+
+function livenessFingerprint(livenessId: string, publicKey: string) {
+  return sha256Fingerprint(canonicalJson({ livenessId, publicKey }));
+}
+
+let processLivenessAuthorityPromise: Promise<ProcessLivenessAuthority> | undefined;
+
+async function createProcessLivenessAuthority(): Promise<ProcessLivenessAuthority> {
+  const livenessId = randomUUID();
+  const endpoint = livenessEndpoint(livenessId);
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const encodedPublicKey = publicKey.export({ format: "der", type: "spki" }).toString("base64url");
+  livenessPublicKeySchema.parse(encodedPublicKey);
+  if (process.platform !== "win32") await rm(endpoint, { force: true });
+  const server = createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.setTimeout(2_000, () => socket.destroy());
+    let input = "";
+    socket.on("data", (chunk: string) => {
+      input += chunk;
+      if (input.length > 256) {
+        socket.destroy();
+        return;
+      }
+      const newline = input.indexOf("\n");
+      if (newline < 0) return;
+      const challenge = input.slice(0, newline);
+      if (!/^[A-Za-z0-9_-]{43}$/u.test(challenge)) {
+        socket.destroy();
+        return;
+      }
+      const signature = sign(null, Buffer.from(challenge, "base64url"), privateKey).toString(
+        "base64url",
+      );
+      socket.end(`${signature}\n`);
+    });
+    socket.on("error", () => undefined);
+  });
+  await new Promise<void>((resolvePromise, reject) => {
+    const onError = (error: Error) => {
+      reject(error);
+    };
+    server.once("error", onError);
+    server.listen(endpoint, () => {
+      server.off("error", onError);
+      resolvePromise();
+    });
+  });
+  server.on("error", () => undefined);
+  server.unref();
+  if (process.platform !== "win32") {
+    process.once("exit", () => {
+      try {
+        rmSync(endpoint, { force: true });
+      } catch {
+        // Process exit cleanup is best-effort; exact recovery removes stale endpoints.
+      }
+    });
+  }
+  return { livenessId, publicKey: encodedPublicKey };
+}
+
+function processLivenessAuthority(): Promise<ProcessLivenessAuthority> {
+  processLivenessAuthorityPromise ??= createProcessLivenessAuthority();
+  return processLivenessAuthorityPromise;
+}
+
+async function probeProcessLiveness(input: {
+  readonly livenessId: string;
+  readonly publicKey: string;
+}): Promise<ProcessLivenessState> {
+  let endpoint: string;
+  let verifier: ReturnType<typeof createPublicKey>;
+  try {
+    endpoint = livenessEndpoint(input.livenessId);
+    verifier = createPublicKey({
+      format: "der",
+      key: Buffer.from(livenessPublicKeySchema.parse(input.publicKey), "base64url"),
+      type: "spki",
+    });
+  } catch {
+    return "UNKNOWN";
+  }
+  const challenge = randomBytes(32).toString("base64url");
+  const state = await new Promise<ProcessLivenessState>((resolvePromise) => {
+    const socket = createConnection(endpoint);
+    let settled = false;
+    let output = "";
+    const settle = (value: ProcessLivenessState) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolvePromise(value);
+    };
+    const timer = setTimeout(() => {
+      settle("UNKNOWN");
+    }, 2_000);
+    timer.unref();
+    socket.setEncoding("utf8");
+    socket.once("connect", () => {
+      socket.write(`${challenge}\n`);
+    });
+    socket.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.length > 512) {
+        settle("UNKNOWN");
+        return;
+      }
+      const newline = output.indexOf("\n");
+      if (newline < 0) return;
+      try {
+        const signature = Buffer.from(output.slice(0, newline), "base64url");
+        settle(
+          verify(null, Buffer.from(challenge, "base64url"), verifier, signature)
+            ? "ALIVE"
+            : "UNKNOWN",
+        );
+      } catch {
+        settle("UNKNOWN");
+      }
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      settle(error.code === "ENOENT" || error.code === "ECONNREFUSED" ? "NOT_FOUND" : "UNKNOWN");
+    });
+    socket.once("end", () => {
+      if (!settled) settle("UNKNOWN");
+    });
+  });
+  if (state === "NOT_FOUND" && process.platform !== "win32") {
+    await rm(endpoint, { force: true }).catch(() => undefined);
+  }
+  return state;
 }
 
 function isMissing(error: unknown): boolean {
@@ -143,15 +407,25 @@ async function removeIfSameFile(referencePath: string, targetPath: string): Prom
   ) {
     return false;
   }
-  await rm(targetPath);
-  return true;
+  try {
+    await rm(targetPath);
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
 }
 
 async function removeIfIdentity(identity: FileIdentity, targetPath: string): Promise<boolean> {
   const targetIdentity = await readFileIdentity(targetPath);
   if (targetIdentity === undefined || !sameFileIdentity(identity, targetIdentity)) return false;
-  await rm(targetPath);
-  return true;
+  try {
+    await rm(targetPath);
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -184,11 +458,14 @@ async function writeCompletePrivateFile(path: string, content: string): Promise<
 async function createOwnerCandidate(metadataRoot: string): Promise<{
   readonly sourcePath: string;
 }> {
+  const authority = await processLivenessAuthority();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const owner = durableMutationLockOwnerSchema.parse({
-      schemaVersion: "hpi-durable-mutation-lock-owner.v1",
+      schemaVersion: "hpi-durable-mutation-lock-owner.v2",
       lockId: randomUUID(),
       ownerPid: process.pid,
+      ownerLivenessId: authority.livenessId,
+      ownerPublicKey: authority.publicKey,
       acquiredAt: new Date().toISOString(),
     });
     const sourcePath = ownerSourcePath(metadataRoot, owner.lockId);
@@ -240,26 +517,24 @@ async function readOwnerSnapshot(lockPath: string): Promise<OwnerSnapshotResult>
   };
 }
 
-function probeOwnerPid(ownerPid: number): "ALIVE" | "NOT_FOUND" | "UNKNOWN" {
-  try {
-    process.kill(ownerPid, 0);
-    return "ALIVE";
-  } catch (error) {
-    return isErrnoException(error) && error.code === "ESRCH" ? "NOT_FOUND" : "UNKNOWN";
-  }
-}
-
 async function createReconciliationClaim(
   metadataRoot: string,
   snapshot: OwnerSnapshot,
 ): Promise<OwnedReconciliationClaim> {
+  const authority = await processLivenessAuthority();
   const claim = durableMutationLockReconciliationClaimSchema.parse({
-    schemaVersion: "hpi-durable-mutation-lock-reconciliation-claim.v1",
+    schemaVersion: "hpi-durable-mutation-lock-reconciliation-claim.v2",
     claimId: randomUUID(),
     staleLockId: snapshot.owner.lockId,
     staleOwnerPid: snapshot.owner.ownerPid,
+    staleOwnerLivenessFingerprint: livenessFingerprint(
+      snapshot.owner.ownerLivenessId,
+      snapshot.owner.ownerPublicKey,
+    ),
     ownerRecordFingerprint: snapshot.fingerprint,
     reconcilerPid: process.pid,
+    reconcilerLivenessId: authority.livenessId,
+    reconcilerPublicKey: authority.publicKey,
     observedAt: new Date().toISOString(),
   });
   const sourcePath = claimSourcePath(metadataRoot, claim.claimId);
@@ -269,19 +544,29 @@ async function createReconciliationClaim(
 
 function receiptIdentity(claim: DurableMutationLockReconciliationClaim) {
   return {
-    schemaVersion: "hpi-durable-mutation-lock-reconciliation-receipt.v1",
+    schemaVersion: "hpi-durable-mutation-lock-reconciliation-receipt.v2",
     staleLockId: claim.staleLockId,
     staleOwnerPid: claim.staleOwnerPid,
+    staleOwnerLivenessFingerprint: claim.staleOwnerLivenessFingerprint,
     ownerRecordFingerprint: claim.ownerRecordFingerprint,
-    outcome: "OWNER_PID_NOT_FOUND",
+    outcome: "OWNER_PROCESS_NOT_FOUND",
   } as const;
 }
 
 async function readReconciliationReceipt(
   path: string,
 ): Promise<DurableMutationLockReconciliationReceipt> {
-  const identity = await readFileIdentity(path);
-  if (identity === undefined) {
+  let stats: Awaited<ReturnType<typeof lstat>>;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    throw new DurableStoreError(
+      "STORE_CORRUPT",
+      "A durable mutation-lock reconciliation receipt is missing or invalid.",
+      error,
+    );
+  }
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
     throw new DurableStoreError(
       "STORE_CORRUPT",
       "A durable mutation-lock reconciliation receipt is missing or invalid.",
@@ -305,11 +590,15 @@ async function persistReconciliationReceipt(
   claim: DurableMutationLockReconciliationClaim,
 ): Promise<DurableMutationLockReconciliationReceipt> {
   const identity = receiptIdentity(claim);
-  const receipt = durableMutationLockReconciliationReceiptSchema.parse({
+  const facts = {
     ...identity,
     receiptId: sha256Fingerprint(canonicalJson(identity)),
     reconcilerPid: claim.reconcilerPid,
     observedAt: claim.observedAt,
+  } as const;
+  const receipt = durableMutationLockReconciliationReceiptSchema.parse({
+    ...facts,
+    receiptFingerprint: reconciliationReceiptFingerprint(facts),
   });
   const target = reconciliationReceiptPath(lockPath, claim.staleLockId);
   try {
@@ -329,6 +618,7 @@ async function persistReconciliationReceipt(
     prior.receiptId !== receipt.receiptId ||
     prior.staleLockId !== receipt.staleLockId ||
     prior.staleOwnerPid !== receipt.staleOwnerPid ||
+    prior.staleOwnerLivenessFingerprint !== receipt.staleOwnerLivenessFingerprint ||
     prior.ownerRecordFingerprint !== receipt.ownerRecordFingerprint
   ) {
     throw new DurableStoreError(
@@ -337,6 +627,132 @@ async function persistReconciliationReceipt(
     );
   }
   return prior;
+}
+
+async function readReconciliationClaimSnapshot(
+  path: string,
+): Promise<ReconciliationClaimSnapshot | undefined> {
+  let initial: Awaited<ReturnType<typeof lstat>>;
+  try {
+    initial = await lstat(path, { bigint: true });
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw error;
+  }
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.ino === 0n) {
+    throw new DurableStoreError(
+      "STORE_BUSY",
+      "A durable mutation-lock reconciliation claim is not an exact physical file.",
+    );
+  }
+  let parsed: DurableMutationLockReconciliationClaim;
+  try {
+    parsed = durableMutationLockReconciliationClaimSchema.parse(
+      JSON.parse(await readFile(path, "utf8")),
+    );
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw new DurableStoreError(
+      "STORE_BUSY",
+      "A durable mutation-lock reconciliation claim is unreadable.",
+      error,
+    );
+  }
+  const identity = await readFileIdentity(path);
+  const initialIdentity = { device: initial.dev, inode: initial.ino };
+  if (identity === undefined || !sameFileIdentity(initialIdentity, identity)) return undefined;
+  return {
+    identity,
+    claim: parsed,
+    fingerprint: sha256Fingerprint(canonicalJson(parsed)),
+  };
+}
+
+function claimRecoveryIdentity(snapshot: ReconciliationClaimSnapshot) {
+  return {
+    schemaVersion: "hpi-durable-mutation-lock-claim-recovery-receipt.v1",
+    claimId: snapshot.claim.claimId,
+    staleLockId: snapshot.claim.staleLockId,
+    staleReconcilerPid: snapshot.claim.reconcilerPid,
+    staleReconcilerLivenessFingerprint: livenessFingerprint(
+      snapshot.claim.reconcilerLivenessId,
+      snapshot.claim.reconcilerPublicKey,
+    ),
+    claimRecordFingerprint: snapshot.fingerprint,
+    observedAt: snapshot.claim.observedAt,
+    outcome: "RECONCILER_PROCESS_NOT_FOUND",
+  } as const;
+}
+
+async function readClaimRecoveryReceipt(
+  path: string,
+): Promise<DurableMutationLockClaimRecoveryReceipt> {
+  try {
+    const stats = await lstat(path);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A durable mutation-lock claim recovery receipt is not an immutable regular file.",
+      );
+    }
+    return durableMutationLockClaimRecoveryReceiptSchema.parse(
+      JSON.parse(await readFile(path, "utf8")),
+    );
+  } catch (error) {
+    throw new DurableStoreError(
+      "STORE_CORRUPT",
+      "A durable mutation-lock claim recovery receipt is unreadable.",
+      error,
+    );
+  }
+}
+
+async function persistClaimRecoveryReceipt(
+  lockPath: string,
+  snapshot: ReconciliationClaimSnapshot,
+): Promise<void> {
+  const identity = claimRecoveryIdentity(snapshot);
+  const receipt = durableMutationLockClaimRecoveryReceiptSchema.parse({
+    ...identity,
+    receiptId: claimRecoveryReceiptFingerprint(identity),
+  });
+  const target = claimRecoveryReceiptPath(lockPath, snapshot.claim.claimId);
+  try {
+    await writeImmutableAtomically({
+      directory: target.directory,
+      filename: target.filename,
+      content: `${canonicalJson(receipt)}\n`,
+    });
+    return;
+  } catch (error) {
+    if (!(error instanceof DurableStoreError && error.code === "IDENTITY_CONFLICT")) throw error;
+  }
+  const prior = await readClaimRecoveryReceipt(target.path);
+  if (canonicalJson(prior) !== canonicalJson(receipt)) {
+    throw new DurableStoreError(
+      "STORE_CORRUPT",
+      "A durable mutation-lock claim recovery receipt conflicts with the stale claim.",
+    );
+  }
+}
+
+async function tryRecoverStaleClaim(lockPath: string): Promise<boolean> {
+  const guardPath = reconciliationClaimPath(lockPath);
+  const snapshot = await readReconciliationClaimSnapshot(guardPath);
+  if (snapshot === undefined) return false;
+  const liveness = await probeProcessLiveness({
+    livenessId: snapshot.claim.reconcilerLivenessId,
+    publicKey: snapshot.claim.reconcilerPublicKey,
+  });
+  if (liveness !== "NOT_FOUND") return false;
+  await persistClaimRecoveryReceipt(lockPath, snapshot);
+  const removed = await removeIfIdentity(snapshot.identity, guardPath);
+  if (!removed) return false;
+  await removeIfIdentity(
+    snapshot.identity,
+    claimSourcePath(mutationLockMetadataRoot(lockPath), snapshot.claim.claimId),
+  );
+  return true;
 }
 
 async function releaseOwnedClaim(lockPath: string, owned: OwnedReconciliationClaim): Promise<void> {
@@ -355,9 +771,13 @@ async function releaseOwnedClaim(lockPath: string, owned: OwnedReconciliationCla
 async function tryReconcileStaleOwner(
   lockPath: string,
   metadataRoot: string,
+  options: DurableMutationLockOptions,
 ): Promise<OwnedReconciliationClaim | undefined> {
   const guardPath = reconciliationClaimPath(lockPath);
-  if (await pathExists(guardPath)) return undefined;
+  if (await pathExists(guardPath)) {
+    await tryRecoverStaleClaim(lockPath);
+    if (await pathExists(guardPath)) return undefined;
+  }
   const observed = await readOwnerSnapshot(lockPath);
   if (observed.state === "ABSENT") return undefined;
   if (observed.state === "INVALID") {
@@ -366,7 +786,14 @@ async function tryReconcileStaleOwner(
       "A durable mutation lock has no exact readable owner; recovery failed closed.",
     );
   }
-  if (probeOwnerPid(observed.snapshot.owner.ownerPid) !== "NOT_FOUND") return undefined;
+  if (
+    (await probeProcessLiveness({
+      livenessId: observed.snapshot.owner.ownerLivenessId,
+      publicKey: observed.snapshot.owner.ownerPublicKey,
+    })) !== "NOT_FOUND"
+  ) {
+    return undefined;
+  }
 
   const owned = await createReconciliationClaim(metadataRoot, observed.snapshot);
   let keepClaim = false;
@@ -377,17 +804,27 @@ async function tryReconcileStaleOwner(
       if (isAlreadyPresent(error)) return undefined;
       throw error;
     }
+    await options.faultInjector?.("AFTER_RECONCILIATION_CLAIM_PUBLISH");
     const current = await readOwnerSnapshot(lockPath);
+    const currentLiveness =
+      current.state === "VALID"
+        ? await probeProcessLiveness({
+            livenessId: current.snapshot.owner.ownerLivenessId,
+            publicKey: current.snapshot.owner.ownerPublicKey,
+          })
+        : "UNKNOWN";
     if (
       current.state !== "VALID" ||
       !sameFileIdentity(observed.snapshot.identity, current.snapshot.identity) ||
       current.snapshot.fingerprint !== observed.snapshot.fingerprint ||
-      probeOwnerPid(current.snapshot.owner.ownerPid) !== "NOT_FOUND"
+      currentLiveness !== "NOT_FOUND"
     ) {
       return undefined;
     }
     await persistReconciliationReceipt(lockPath, owned.claim);
+    await options.faultInjector?.("AFTER_RECONCILIATION_RECEIPT_PUBLISH");
     if (!(await removeIfIdentity(current.snapshot.identity, lockPath))) return undefined;
+    await options.faultInjector?.("AFTER_STALE_OWNER_REMOVE");
     await removeIfIdentity(
       current.snapshot.identity,
       ownerSourcePath(metadataRoot, current.snapshot.owner.lockId),
@@ -422,14 +859,24 @@ export async function assertSafeDirectoryPath(directory: string): Promise<void> 
   }
 }
 
+async function canonicalMutationLockPath(lockPath: string): Promise<string> {
+  const requested = resolve(lockPath);
+  const requestedParent = dirname(requested);
+  await assertSafeDirectoryPath(requestedParent);
+  await mkdir(requestedParent, { recursive: true });
+  const physicalParent = await realpath(requestedParent);
+  await assertSafeDirectoryPath(physicalParent);
+  const requestedName = basename(requested);
+  const physicalName = process.platform === "win32" ? requestedName.toLowerCase() : requestedName;
+  return join(physicalParent, physicalName);
+}
+
 export async function withDurableMutationLock<T>(
   lockPath: string,
   operation: () => Promise<T>,
+  options: DurableMutationLockOptions = {},
 ): Promise<T> {
-  const absoluteLockPath = resolve(lockPath);
-  const parent = dirname(absoluteLockPath);
-  await assertSafeDirectoryPath(parent);
-  await mkdir(parent, { recursive: true });
+  const absoluteLockPath = await canonicalMutationLockPath(lockPath);
   const metadataRoot = mutationLockMetadataRoot(absoluteLockPath);
   await assertSafeDirectoryPath(metadataRoot);
   await mkdir(metadataRoot, { recursive: true });
@@ -445,6 +892,7 @@ export async function withDurableMutationLock<T>(
           (await pathExists(reconciliationClaimPath(absoluteLockPath)))
         ) {
           await removeIfSameFile(candidate.sourcePath, absoluteLockPath);
+          await tryRecoverStaleClaim(absoluteLockPath);
         } else {
           acquired = true;
           if (ownedClaim !== undefined) {
@@ -455,7 +903,7 @@ export async function withDurableMutationLock<T>(
         }
       } catch (error) {
         if (!isAlreadyPresent(error)) throw error;
-        ownedClaim ??= await tryReconcileStaleOwner(absoluteLockPath, metadataRoot);
+        ownedClaim ??= await tryReconcileStaleOwner(absoluteLockPath, metadataRoot, options);
       }
       await delay(mutationLockRetryDelayMs);
     }

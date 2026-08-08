@@ -52,7 +52,9 @@ await lockWithFaultInjection(
       );
       process.stdin.resume();
       await new Promise<void>((resolvePromise) => {
-        process.stdin.once("data", () => resolvePromise());
+        process.stdin.once("data", () => {
+          resolvePromise();
+        });
       });
     },
   },

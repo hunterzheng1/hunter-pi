@@ -94,7 +94,17 @@ function splitTarPath(path: string): { readonly name: string; readonly prefix: s
   throw new Error("portable bundle path is too long for the ustar format");
 }
 
-function tarHeader(path: string, byteLength: number): Buffer {
+function paxPathRecord(path: string): Buffer {
+  let recordLength = Buffer.byteLength(`path=${path}\n`, "utf8") + 1;
+  let record = Buffer.from(`${String(recordLength)} path=${path}\n`, "utf8");
+  while (record.byteLength !== recordLength) {
+    recordLength = record.byteLength;
+    record = Buffer.from(`${String(recordLength)} path=${path}\n`, "utf8");
+  }
+  return record;
+}
+
+function tarHeader(path: string, byteLength: number, type = 0x30): Buffer {
   const header = Buffer.alloc(TAR_BLOCK_SIZE);
   const tarPath = splitTarPath(path);
   writeField(header, 0, 100, tarPath.name);
@@ -104,7 +114,7 @@ function tarHeader(path: string, byteLength: number): Buffer {
   octal(byteLength, 12).copy(header, 124);
   octal(0, 12).copy(header, 136);
   header.fill(0x20, 148, 156);
-  header[156] = 0x30;
+  header[156] = type;
   writeField(header, 257, 6, "ustar\0");
   writeField(header, 263, 2, "00");
   writeField(header, 345, 155, tarPath.prefix);
@@ -115,9 +125,22 @@ function tarHeader(path: string, byteLength: number): Buffer {
 
 function createTar(files: readonly PortableBundleFile[]): Buffer {
   const chunks: Buffer[] = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     const bytes = Buffer.from(file.bytes);
-    chunks.push(tarHeader(file.path, bytes.byteLength), bytes);
+    if (Buffer.byteLength(file.path, "utf8") > 255) {
+      const extendedPath = paxPathRecord(file.path);
+      chunks.push(
+        tarHeader(`PaxHeaders/${String(index)}`, extendedPath.byteLength, 0x78),
+        extendedPath,
+      );
+      const extendedRemainder = extendedPath.byteLength % TAR_BLOCK_SIZE;
+      if (extendedRemainder !== 0) {
+        chunks.push(Buffer.alloc(TAR_BLOCK_SIZE - extendedRemainder));
+      }
+      chunks.push(tarHeader(`PaxFiles/${String(index)}`, bytes.byteLength), bytes);
+    } else {
+      chunks.push(tarHeader(file.path, bytes.byteLength), bytes);
+    }
     const remainder = bytes.byteLength % TAR_BLOCK_SIZE;
     if (remainder !== 0) chunks.push(Buffer.alloc(TAR_BLOCK_SIZE - remainder));
   }
@@ -146,6 +169,39 @@ function isZeroBlock(value: Buffer, offset: number): boolean {
   return true;
 }
 
+function parsePaxPath(value: Buffer): string {
+  let offset = 0;
+  let path: string | undefined;
+  while (offset < value.byteLength) {
+    const space = value.indexOf(0x20, offset);
+    if (space <= offset) throw new Error("portable bundle PAX length is invalid");
+    const lengthText = value.subarray(offset, space).toString("ascii");
+    if (!/^\d+$/u.test(lengthText)) throw new Error("portable bundle PAX length is invalid");
+    const recordLength = Number.parseInt(lengthText, 10);
+    if (
+      !Number.isSafeInteger(recordLength) ||
+      recordLength <= space - offset + 2 ||
+      offset + recordLength > value.byteLength
+    ) {
+      throw new Error("portable bundle PAX record is invalid");
+    }
+    const record = value.subarray(offset, offset + recordLength);
+    if (record[record.byteLength - 1] !== 0x0a) {
+      throw new Error("portable bundle PAX record is not terminated");
+    }
+    const equals = record.indexOf(0x3d, space - offset + 1);
+    if (equals <= space - offset) throw new Error("portable bundle PAX keyword is invalid");
+    const keyword = record.subarray(space - offset + 1, equals).toString("ascii");
+    if (keyword !== "path" || path !== undefined) {
+      throw new Error("portable bundle PAX contains an unsupported record");
+    }
+    path = record.subarray(equals + 1, record.byteLength - 1).toString("utf8");
+    offset += recordLength;
+  }
+  if (path === undefined) throw new Error("portable bundle PAX path is missing");
+  return path;
+}
+
 function parseTar(value: Buffer): readonly PortableBundleFile[] {
   if (value.byteLength % TAR_BLOCK_SIZE !== 0) {
     throw new Error("portable bundle tar is not block aligned");
@@ -154,6 +210,8 @@ function parseTar(value: Buffer): readonly PortableBundleFile[] {
   const paths = new Set<string>();
   let offset = 0;
   let totalBytes = 0;
+  let entryCount = 0;
+  let pendingPath: string | undefined;
   let terminated = false;
   while (offset + TAR_BLOCK_SIZE <= value.byteLength) {
     if (isZeroBlock(value, offset)) {
@@ -163,11 +221,15 @@ function parseTar(value: Buffer): readonly PortableBundleFile[] {
       ) {
         throw new Error("portable bundle tar has an incomplete terminator");
       }
+      if (pendingPath !== undefined) throw new Error("portable bundle PAX path has no file");
       terminated = true;
       offset += TAR_BLOCK_SIZE * 2;
       break;
     }
-    if (files.length >= MAX_BUNDLE_ENTRIES) throw new Error("portable bundle entry limit exceeded");
+    entryCount += 1;
+    if (entryCount > MAX_BUNDLE_ENTRIES * 2) {
+      throw new Error("portable bundle entry limit exceeded");
+    }
     const header = value.subarray(offset, offset + TAR_BLOCK_SIZE);
     const expectedChecksum = readOctal(header, 148, 8);
     let actualChecksum = 0;
@@ -176,19 +238,29 @@ function parseTar(value: Buffer): readonly PortableBundleFile[] {
     }
     if (expectedChecksum !== actualChecksum) throw new Error("portable bundle tar checksum failed");
     const type = header[156];
-    if (type !== 0 && type !== 0x30) throw new Error("portable bundle contains a non-file entry");
-    const name = readField(header, 0, 100);
-    const prefix = readField(header, 345, 155);
-    const path = assertPortablePath(prefix.length === 0 ? name : `${prefix}/${name}`);
-    if (paths.has(path)) throw new Error("portable bundle contains a duplicate path");
-    paths.add(path);
     const byteLength = readOctal(header, 124, 12);
-    totalBytes += byteLength;
-    if (totalBytes > MAX_UNCOMPRESSED_BYTES) throw new Error("portable bundle byte limit exceeded");
     const dataOffset = offset + TAR_BLOCK_SIZE;
     const dataEnd = dataOffset + byteLength;
     if (dataEnd > value.byteLength) throw new Error("portable bundle file exceeds archive bounds");
-    files.push({ path, bytes: new Uint8Array(value.subarray(dataOffset, dataEnd)) });
+    const data = value.subarray(dataOffset, dataEnd);
+    if (type === 0x78) {
+      if (pendingPath !== undefined) throw new Error("portable bundle has consecutive PAX headers");
+      pendingPath = parsePaxPath(data);
+    } else {
+      if (type !== 0 && type !== 0x30) throw new Error("portable bundle contains a non-file entry");
+      const name = readField(header, 0, 100);
+      const prefix = readField(header, 345, 155);
+      const path = assertPortablePath(
+        pendingPath ?? (prefix.length === 0 ? name : `${prefix}/${name}`),
+      );
+      pendingPath = undefined;
+      if (paths.has(path)) throw new Error("portable bundle contains a duplicate path");
+      paths.add(path);
+      totalBytes += byteLength;
+      if (totalBytes > MAX_UNCOMPRESSED_BYTES)
+        throw new Error("portable bundle byte limit exceeded");
+      files.push({ path, bytes: new Uint8Array(data) });
+    }
     offset = dataOffset + Math.ceil(byteLength / TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE;
   }
   if (!terminated || offset !== value.byteLength) {

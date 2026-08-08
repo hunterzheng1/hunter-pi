@@ -272,7 +272,7 @@ describe("Task 11 Windows portable release adapter", () => {
   });
 
   it("round-trips a strict portable bundle and rejects archive path traversal", () => {
-    const longPath = `node_modules/${"nested/".repeat(20)}asset.txt`;
+    const longPath = `node_modules/${"nested/".repeat(45)}asset.txt`;
     const bytes = createPortableBundle({
       releaseId: "release_task11-portable-bundle",
       productVersion: "0.2.0",

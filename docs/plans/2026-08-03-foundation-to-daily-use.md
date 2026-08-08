@@ -295,6 +295,8 @@ Publishing requires explicit owner authorization after all candidate gates and a
 
 Implementation status on 2026-08-06: **LOCAL PASS / REVIEW-HARDENED PR AND MAIN CI PASS WITHIN UNSIGNED DEVELOPER-PREVIEW BOUNDS** — qualification runner, Evidence-bound checks, Stable/Preview/self-update gates, request-fingerprint replay, exact artifact digest/health/apply/rollback journal, fail-closed portable redaction for failure receipts, Windows x64 portable directory with embedded Node 24, external package smoke, clean install smoke, and Pi probe pass. Earlier PR CI run `31032218373` covers the pre-hardening source; hardened replacement PR CI `31042109585` and exact merged-head main CI `31044936543` pass all Windows/Ubuntu quality, containment, and Evidence jobs. The clean portable manifest binds source `31034a4`, uses `updateChannel=developer-preview`, and is unsigned. Publication, signing, state migration, and stable promotion remain `NOT_PROVEN`.
 
+Task 11 hosted-closure addendum (2026-08-09): PR #53 run [`31270421168`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31270421168) and exact merged-head main run [`31272146162`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31272146162) passed Windows/Ubuntu quality, the exact Windows x64 portable artifact, containment, and all Evidence aggregators. This closes Task 11 within its unsigned `developer-preview` boundary; publication, signing, Stable promotion, existing-user migration, real-repository safety, and Task 12 daily-use acceptance remain outside the proof.
+
 ## Task 12 — Windows daily-use pilot
 
 **Goal:** determine whether Hunter Pi is genuinely ready for regular personal use.

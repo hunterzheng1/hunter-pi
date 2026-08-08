@@ -34,11 +34,11 @@ The GitHub Actions quality job reuses its existing locked install and build, the
 
 ## Evidence boundary
 
-Local tests prove the provider-neutral updater contracts and the Windows adapter's deterministic fixture behavior. A clean local pack proves the artifact can start and report its active release, but it remains an unsigned developer preview. The exact source commit must still pass Windows and Ubuntu hosted CI, and the resulting artifact must be retained with its source and digest before any qualification claim.
+Local tests prove the provider-neutral updater contracts and the Windows adapter's deterministic fixture behavior. A clean local pack proves the artifact can start and report its active release, but it remains an unsigned developer preview. The exact source commit passed Windows and Ubuntu hosted CI in PR run [`31270421168`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31270421168) and exact merged-head main run [`31272146162`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31272146162), with the portable artifact and Evidence jobs successful. This closes Task 11 hosted Evidence within the declared unsigned developer-preview boundary.
 
 ## Stop conditions
 
 - Do not publish npm artifacts, an installer, signing metadata, or a Stable update channel without a separately authorized release gate.
 - Do not call a dirty checkout, an unsigned artifact, or a local-only result a qualified release.
 - Do not infer real-user repository safety, provider reliability/recovery, third-party plugin compatibility, or daily-use acceptance from updater tests or CI alone; those remain Task 12 evidence gates.
-- Remote Windows/Ubuntu CI for the exact release source remains mandatory and is not inferred from local tests.
+- Remote Windows/Ubuntu CI for the exact release source is now satisfied by the recorded PR and merged-head runs; future release candidates still require their own exact source Evidence.

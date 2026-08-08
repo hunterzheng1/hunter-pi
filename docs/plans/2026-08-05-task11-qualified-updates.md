@@ -30,7 +30,7 @@ npm run clean-install-smoke
 npm run pack:windows-portable
 ```
 
-The GitHub Actions quality job reuses its existing locked install and build, then runs the compiled Windows packer only on Windows and uploads the exact directory as a 14-day artifact. Ubuntu remains a required quality and Evidence platform; it does not claim to produce a Windows artifact.
+The GitHub Actions quality job reuses its existing locked install and build, then runs the compiled Windows packer only on Windows and uploads the exact directory as a 14-day artifact. The portable status path uses a lightweight active-pointer/artifact check when no recovery transaction is pending; activation, health, and rollback retain full bundle/tree verification. Ubuntu remains a required quality and Evidence platform; it does not claim to produce a Windows artifact.
 
 ## Evidence boundary
 

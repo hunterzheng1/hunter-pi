@@ -251,13 +251,13 @@ async function reconcileAtomicWriteRemnants<Output>(
   directory: string,
   schema: z.ZodType<Output>,
   finalFilename: (value: Output) => string,
-): Promise<void> {
+): Promise<Dirent[] | undefined> {
   let entries: Dirent[];
   try {
     await assertSafeDirectoryPath(directory);
     entries = await readdir(directory, { withFileTypes: true });
   } catch (error) {
-    if (isErrnoException(error) && error.code === "ENOENT") return;
+    if (isErrnoException(error) && error.code === "ENOENT") return undefined;
     throw error;
   }
   for (const entry of entries) {
@@ -300,6 +300,7 @@ async function reconcileAtomicWriteRemnants<Output>(
     }
     await unlink(pendingPath);
   }
+  return entries.filter((entry) => !entry.name.startsWith(".pending-"));
 }
 
 function createImportIntent(binding: PortableDeviceImportBinding): PortableDeviceImportIntent {
@@ -448,13 +449,12 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
   async #readReceipts(): Promise<PortableDeviceImportReceipt[]> {
     const directory = receiptDirectory(this.#stateRoot);
     try {
-      await assertSafeDirectoryPath(directory);
-      await reconcileAtomicWriteRemnants(
+      const entries = await reconcileAtomicWriteRemnants(
         directory,
         portableDeviceImportReceiptSchema,
         (receipt) => `${receipt.profileId}.json`,
       );
-      const entries = await readdir(directory, { withFileTypes: true });
+      if (entries === undefined) return [];
       const receipts: PortableDeviceImportReceipt[] = [];
       const operationIds = new Set<string>();
       for (const entry of entries) {
@@ -490,7 +490,6 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
       }
       return receipts;
     } catch (error) {
-      if (isErrnoException(error) && error.code === "ENOENT") return [];
       if (error instanceof z.ZodError || error instanceof SyntaxError) {
         throw new DurableStoreError(
           "STORE_CORRUPT",
@@ -505,13 +504,12 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
   async #readIntents(): Promise<PortableDeviceImportIntent[]> {
     const directory = intentDirectory(this.#stateRoot);
     try {
-      await assertSafeDirectoryPath(directory);
-      await reconcileAtomicWriteRemnants(
+      const entries = await reconcileAtomicWriteRemnants(
         directory,
         portableDeviceImportIntentSchema,
         (intent) => `${intent.binding.profileId}.json`,
       );
-      const entries = await readdir(directory, { withFileTypes: true });
+      if (entries === undefined) return [];
       const intents: PortableDeviceImportIntent[] = [];
       const operationIds = new Set<string>();
       for (const entry of entries) {
@@ -546,7 +544,6 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
       }
       return intents;
     } catch (error) {
-      if (isErrnoException(error) && error.code === "ENOENT") return [];
       if (error instanceof z.ZodError || error instanceof SyntaxError) {
         throw new DurableStoreError(
           "STORE_CORRUPT",

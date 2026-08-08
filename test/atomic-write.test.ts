@@ -315,12 +315,31 @@ describe("durable mutation-lock recovery", () => {
       HPI_TEST_RECONCILIATION_PAUSE: boundary,
     });
     await waitForFixtureOutput(interrupted, '"event":"RECONCILIATION_PAUSED"');
+    const metadataRoot = join(root, ".pending-hpi-mutation-lock-metadata");
+    const [claimFilename] = (await readdir(metadataRoot)).filter((filename) =>
+      filename.startsWith("active-claim-"),
+    );
+    expect(claimFilename).toBeDefined();
+    const claim = JSON.parse(
+      await readFile(join(metadataRoot, claimFilename ?? "missing-claim"), "utf8"),
+    ) as Record<string, unknown>;
+    await delay(10);
     await forceKill(interrupted);
 
     const successor = startLockFixture(lockPath, "HOLD_FOR_MS", 20);
     await waitForFixtureOutput(successor, '"event":"LOCKED"');
     await expect(successor.completion).resolves.toMatchObject({ code: 0, signal: null });
-    expect(await readClaimRecoveryReceipts(lockPath)).toHaveLength(1);
+    const claimRecoveryReceipts = await readClaimRecoveryReceipts(lockPath);
+    expect(claimRecoveryReceipts).toHaveLength(1);
+    const claimRecovery = JSON.parse(claimRecoveryReceipts[0] ?? "") as Record<string, unknown>;
+    expect(claimRecovery).toMatchObject({
+      schemaVersion: "hpi-durable-mutation-lock-claim-recovery-receipt.v2",
+      claimObservedAt: claim["observedAt"],
+      outcome: "RECONCILER_PROCESS_NOT_FOUND",
+    });
+    expect(Date.parse(String(claimRecovery["observedAt"]))).toBeGreaterThan(
+      Date.parse(String(claimRecovery["claimObservedAt"])),
+    );
     expect(await readReconciliationReceipts(lockPath)).toHaveLength(1);
   });
 

@@ -286,11 +286,39 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     await canonicalDirectory(this.#migrationRoot);
   }
 
-  async #readActive(): Promise<ActivePointer | undefined> {
+  async #readArtifact(
+    candidate: ReleaseCandidate,
+    directory: string,
+    expectedArtifactFingerprint?: string,
+  ): Promise<Uint8Array> {
+    const artifact = await readFile(join(directory, ".hpi-artifact"));
+    const artifactFingerprint = sha256Fingerprint(artifact);
+    if (
+      artifactFingerprint !== candidate.artifact.fingerprint ||
+      artifact.byteLength !== candidate.artifact.byteLength ||
+      (expectedArtifactFingerprint !== undefined &&
+        artifactFingerprint !== expectedArtifactFingerprint)
+    ) {
+      throw new Error("portable release artifact bytes failed integrity verification");
+    }
+    return artifact;
+  }
+
+  async #readActive(
+    options: { readonly verifyFiles?: boolean } = {},
+  ): Promise<ActivePointer | undefined> {
     const active = await readJsonIfPresent(this.#activePath, activePointerSchema);
     if (active === undefined) return undefined;
     const candidate = await this.#readCandidate(active.releaseId);
-    await this.#verifyRelease(candidate, active.artifactFingerprint);
+    if (options.verifyFiles === false) {
+      await this.#readArtifact(
+        candidate,
+        containedReleasePath(this.#versionsRoot, candidate.releaseId),
+        active.artifactFingerprint,
+      );
+    } else {
+      await this.#verifyRelease(candidate, active.artifactFingerprint);
+    }
     if (candidate.productVersion !== active.productVersion) {
       throw new Error("portable active pointer does not bind the candidate version");
     }
@@ -320,16 +348,7 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     directory: string,
     expectedArtifactFingerprint?: string,
   ): Promise<string> {
-    const artifact = await readFile(join(directory, ".hpi-artifact"));
-    const artifactFingerprint = sha256Fingerprint(artifact);
-    if (
-      artifactFingerprint !== candidate.artifact.fingerprint ||
-      artifact.byteLength !== candidate.artifact.byteLength ||
-      (expectedArtifactFingerprint !== undefined &&
-        artifactFingerprint !== expectedArtifactFingerprint)
-    ) {
-      throw new Error("portable release artifact bytes failed integrity verification");
-    }
+    const artifact = await this.#readArtifact(candidate, directory, expectedArtifactFingerprint);
     const bundle = decodePortableBundle(artifact);
     this.#verifyManifest(candidate, bundle.manifest);
     const observed = new Set<string>();
@@ -386,7 +405,7 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
 
   async current(): Promise<DistributionReleaseId | undefined> {
     await this.#ensureRoots();
-    return (await this.#readActive())?.releaseId;
+    return (await this.#readActive({ verifyFiles: false }))?.releaseId;
   }
 
   async stage(candidateInput: ReleaseCandidate, artifact: Uint8Array): Promise<StagedRelease> {
@@ -557,7 +576,9 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     return withDurableMutationLock(join(this.#stateRoot, ".portable-mutation-lock"), async () => {
       const intent = await readJsonIfPresent(this.#activationIntentPath, activationIntentSchema);
       const migration = await readJsonIfPresent(this.#migrationPath, migrationStateSchema);
-      const active = await this.#readActive();
+      const active = await this.#readActive({
+        verifyFiles: intent !== undefined || migration?.status === "PREPARED",
+      });
       if (intent !== undefined) {
         if (active?.releaseId === intent.candidate.releaseId) {
           if (

@@ -1,10 +1,14 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createNpmDiagnosticRoots,
   createIsolatedNpmEnvironment,
+  runNpm,
+  shouldRetryNpmFailure,
   summarizeNpmFailure,
   summarizeProcessFailure,
 } from "../scripts/npm-process.mjs";
@@ -107,6 +111,111 @@ describe("isolated npm process support", () => {
     );
     expect(summary).not.toContain("AppData");
     expect(summary).not.toContain("private-user");
+  });
+
+  it("retries one exact npm install transport interruption and nothing broader", () => {
+    const transportFailure = {
+      status: 4_294_963_219,
+      stderr: "npm error code ECONNRESET\nnpm error syscall read\nnpm error errno -4077",
+      stdout: "",
+    };
+
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts", "--no-audit", "--no-fund"],
+        transportFailure,
+        1,
+      ),
+    ).toBe(true);
+    expect(shouldRetryNpmFailure(["install", "--ignore-scripts"], transportFailure, 2)).toBe(false);
+    expect(shouldRetryNpmFailure(["install"], transportFailure, 1)).toBe(false);
+    expect(shouldRetryNpmFailure(["pack", "."], transportFailure, 1)).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        { status: 1, stderr: "npm error code E429", stdout: "" },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        { status: 1, stderr: "npm error code EACCES", stdout: "" },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code ECONNRESET\nnpm error code E429",
+          stdout: "",
+        },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code EACCES",
+          stdout: "npm error code ECONNRESET",
+        },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryNpmFailure(
+        ["install", "--ignore-scripts"],
+        {
+          status: 1,
+          stderr: "npm error code ECONNRESET",
+          stdout: "npm error code E429",
+        },
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves a redacted first failure and returns the single retry result", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-npm-retry-test-"));
+    const fakeNpmEntryPoint = join(root, "fake-npm.mjs");
+    const marker = join(root, "attempted");
+    const originalNpmEntryPoint = process.env["npm_execpath"];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    try {
+      await writeFile(
+        fakeNpmEntryPoint,
+        [
+          'import { existsSync, writeFileSync } from "node:fs";',
+          `const marker = ${JSON.stringify(marker)};`,
+          "if (!existsSync(marker)) {",
+          '  writeFileSync(marker, "first", "utf8");',
+          '  process.stderr.write("npm error code ECONNRESET\\nnpm error syscall read\\n");',
+          "  process.exit(1);",
+          "}",
+          'process.stdout.write("retry-succeeded\\n");',
+        ].join("\n"),
+        "utf8",
+      );
+      process.env["npm_execpath"] = fakeNpmEntryPoint;
+
+      expect(runNpm(["install", "--ignore-scripts"], root, join(root, "npm"))).toBe(
+        "retry-succeeded\n",
+      );
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(String(stderr.mock.calls[0]?.[0])).toMatch(
+        /^Preserved transient npm failure; retrying once\. npm CLI failed \(status 1, npmCode ECONNRESET, syscall read, outputBytes \d+, outputSha256 [a-f0-9]{64}\)\.\n$/u,
+      );
+    } finally {
+      stderr.mockRestore();
+      if (originalNpmEntryPoint === undefined) delete process.env["npm_execpath"];
+      else process.env["npm_execpath"] = originalNpmEntryPoint;
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("summarizes a package import failure without returning captured output", () => {

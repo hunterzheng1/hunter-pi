@@ -172,6 +172,34 @@ export const summarizeNpmFailure = (failure, context) => {
 };
 
 /**
+ * Allows one process-level retry only for the exact registry transport failure
+ * observed during an npm install. npm's own retry policy remains responsible
+ * for other transport conditions; rate-limit and package/assertion failures
+ * must continue to fail without an outer retry.
+ *
+ * @param {readonly string[]} arguments_ npm CLI arguments.
+ * @param {{ readonly status: number | null; readonly stderr: string; readonly stdout: string }} failure npm failure details.
+ * @param {number} attemptNumber one-based process attempt number.
+ * @returns {boolean} whether one final attempt is allowed.
+ */
+export const shouldRetryNpmFailure = (arguments_, failure, attemptNumber) => {
+  if (
+    attemptNumber !== 1 ||
+    arguments_[0] !== "install" ||
+    !arguments_.includes("--ignore-scripts")
+  ) {
+    return false;
+  }
+  const stderrCodes = [
+    ...failure.stderr.matchAll(/^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/gimu),
+  ].map((match) => match[1]);
+  const stdoutCodes = [
+    ...failure.stdout.matchAll(/^npm (?:error|ERR!) code ([A-Z0-9_-]{1,32})\s*$/gimu),
+  ].map((match) => match[1]);
+  return stdoutCodes.length === 0 && stderrCodes.length === 1 && stderrCodes[0] === "ECONNRESET";
+};
+
+/**
  * Runs the npm CLI that launched the current repository script.
  *
  * @param {readonly string[]} arguments_ npm CLI arguments.
@@ -195,31 +223,37 @@ export const runNpm = (arguments_, cwd, isolationRoot, knownRoots = {}) => {
   writeFileSync(join(isolationRoot, "global.npmrc"), "", "utf8");
   writeFileSync(join(isolationRoot, "user.npmrc"), "", "utf8");
 
-  const result = spawnSync(process.execPath, [npmEntryPoint, ...arguments_], {
-    cwd,
-    encoding: "utf8",
-    env: createIsolatedNpmEnvironment(process.env, isolationRoot),
-    maxBuffer: subprocessOutputLimitBytes,
-    shell: false,
-    windowsHide: true,
-  });
+  const environment = createIsolatedNpmEnvironment(process.env, isolationRoot);
+  const failureContext = { cwd, isolationRoot, knownRoots: diagnosticRoots };
+  for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1) {
+    const result = spawnSync(process.execPath, [npmEntryPoint, ...arguments_], {
+      cwd,
+      encoding: "utf8",
+      env: environment,
+      maxBuffer: subprocessOutputLimitBytes,
+      shell: false,
+      windowsHide: true,
+    });
 
-  if (result.error !== undefined) {
-    throw new Error("Unable to start the npm CLI.");
+    if (result.error !== undefined) {
+      throw new Error("Unable to start the npm CLI.");
+    }
+
+    if (result.status === 0) return result.stdout;
+
+    const failure = {
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    };
+    const summary = summarizeNpmFailure(failure, failureContext);
+    if (shouldRetryNpmFailure(arguments_, failure, attemptNumber)) {
+      process.stderr.write(`Preserved transient npm failure; retrying once. ${summary}\n`);
+      continue;
+    }
+
+    throw new Error(summary);
   }
 
-  if (result.status !== 0) {
-    throw new Error(
-      summarizeNpmFailure(
-        {
-          status: result.status,
-          stderr: result.stderr,
-          stdout: result.stdout,
-        },
-        { cwd, isolationRoot, knownRoots: diagnosticRoots },
-      ),
-    );
-  }
-
-  return result.stdout;
+  throw new Error("npm CLI exhausted its bounded retry unexpectedly.");
 };

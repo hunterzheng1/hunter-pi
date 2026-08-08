@@ -83,6 +83,8 @@ describe("portable Evidence capture and redaction", () => {
       `linux=${linuxRoot}/repo/file.txt`,
       `prompt=${privatePrompt}`,
       "endpoint=https://user:password@example.invalid/path?token=fixture-query-secret",
+      '{"access_token":"fixture-json-token"}',
+      '{"cookie":"sid=fixture-json-cookie"}',
     ].join("\n");
     const policy: PortableEvidencePolicy = {
       sensitiveValues: [fixtureSecret],
@@ -106,6 +108,8 @@ describe("portable Evidence capture and redaction", () => {
       "fixture-cookie-value",
       "user:password",
       "fixture-query-secret",
+      "fixture-json-token",
+      "fixture-json-cookie",
     ]) {
       expect(serialized).not.toContain(forbidden);
     }

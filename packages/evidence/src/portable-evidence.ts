@@ -127,13 +127,13 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
 
   replacePattern(
     result,
-    /\b(?:authorization|proxy-authorization)\s*:\s*[^\r\n]+/giu,
+    /(?:["'])?\b(?:authorization|proxy-authorization)\b(?:["'])?\s*:\s*[^\r\n]+/giu,
     "Authorization: [REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );
   replacePattern(
     result,
-    /\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+/giu,
+    /(?:["'])?\b(?:cookie|set-cookie)\b(?:["'])?\s*:\s*[^\r\n]+/giu,
     "Cookie: [REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );
@@ -163,7 +163,7 @@ function redactText(text: string, policy: PortableEvidencePolicy): RedactionResu
   );
   replacePattern(
     result,
-    /\b(?:access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu,
+    /(?:["'])?\b(?:access[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|token)\b(?:["'])?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu,
     "[REDACTED:CREDENTIAL]",
     "CREDENTIAL",
   );

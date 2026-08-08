@@ -73,6 +73,7 @@ describe("portable Evidence capture and redaction", () => {
     const linuxRoot = "/home/alice-example";
     const encodedSecret = Buffer.from(fixtureSecret, "utf8").toString("base64");
     const encodedPath = encodeURIComponent(`${windowsRoot}\\project`);
+    const escapedJsonSecret = "fixture-json-secret-after-escape";
     const content = [
       `Authorization: Bearer ${fixtureSecret}`,
       "Cookie: session=fixture-cookie-value",
@@ -85,6 +86,7 @@ describe("portable Evidence capture and redaction", () => {
       "endpoint=https://user:password@example.invalid/path?token=fixture-query-secret",
       '{"access_token":"fixture-json-token"}',
       '{"cookie":"sid=fixture-json-cookie"}',
+      JSON.stringify({ password: `before"${escapedJsonSecret}` }),
     ].join("\n");
     const policy: PortableEvidencePolicy = {
       sensitiveValues: [fixtureSecret],
@@ -110,6 +112,7 @@ describe("portable Evidence capture and redaction", () => {
       "fixture-query-secret",
       "fixture-json-token",
       "fixture-json-cookie",
+      escapedJsonSecret,
     ]) {
       expect(serialized).not.toContain(forbidden);
     }

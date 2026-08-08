@@ -21,6 +21,7 @@ import {
 import {
   archivePackageSchema,
   assertPortableArchive,
+  canonicalJson,
   createPortableEvidenceEnvelope,
   FilePortableDeviceImportReceiptStore,
   FileRunArchiveStore,
@@ -28,6 +29,7 @@ import {
   PortableDeviceImporter,
   portableDeviceImportBindingSchema,
   portableDeviceImportReceiptSchema,
+  sha256Fingerprint,
 } from "@hunter-pi/evidence";
 import {
   DurableWorkflowKernel,
@@ -1693,6 +1695,38 @@ describe("Task 9 Run Archive", () => {
       undefined,
       undefined,
     ]);
+
+    const missingFinalRoot = join(root, "missing-final-link");
+    const missingFinalDirectory = join(
+      missingFinalRoot,
+      ".operation-receipts",
+      "device-import-intents",
+    );
+    const missingFinalPending = join(
+      missingFinalDirectory,
+      ".pending-00000000-0000-4000-8000-000000000001",
+    );
+    const missingFinalOutsideLink = join(missingFinalRoot, "foreign-hardlink");
+    const intentFacts = { schemaVersion: "hpi-device-import-intent.v1" as const, binding };
+    const validIntent = {
+      ...intentFacts,
+      intentFingerprint: sha256Fingerprint(canonicalJson(intentFacts)),
+    };
+    await mkdir(missingFinalDirectory, { recursive: true });
+    await writeFile(missingFinalPending, `${canonicalJson(validIntent)}\n`, { flag: "wx" });
+    await link(missingFinalPending, missingFinalOutsideLink);
+    await expect(
+      new FilePortableDeviceImportReceiptStore({ stateRoot: missingFinalRoot }).recordOnce(
+        binding,
+        createReceipt,
+      ),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
+    await expect(
+      Promise.all([access(missingFinalPending), access(missingFinalOutsideLink)]),
+    ).resolves.toEqual([undefined, undefined]);
+    await expect(
+      access(join(missingFinalDirectory, `${binding.profileId}.json`)),
+    ).rejects.toThrow();
     expect(createReceipt).not.toHaveBeenCalled();
   });
 

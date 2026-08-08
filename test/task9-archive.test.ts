@@ -1197,7 +1197,7 @@ describe("Task 9 Run Archive", () => {
     expect(clonePolicy).toHaveBeenCalledOnce();
   });
 
-  it("fails an interrupted device import closed without rerunning policy, Doctor, or login", async () => {
+  it("resumes an interrupted device import from exact durable policy state without manual editing", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
       "hunter-pi-task9-device-interrupted-",
@@ -1208,15 +1208,31 @@ describe("Task 9 Run Archive", () => {
       "archive-device-interrupted",
     );
     const destinationRoot = join(root, "destination");
-    const clonePolicy = vi.fn(() =>
-      Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+    let policyPresent = false;
+    let doctorInvocation = 0;
+    const reconcilePolicy = vi.fn(() =>
+      Promise.resolve(
+        policyPresent
+          ? ({ status: "EXACT" as const, policyFingerprint: fixtureFingerprint } as const)
+          : ({ status: "ABSENT" as const, policyFingerprint: null } as const),
+      ),
     );
-    const doctor = vi.fn(() => Promise.reject(new Error("simulated Doctor interruption")));
+    const clonePolicy = vi.fn(() => {
+      if (policyPresent) throw new Error("policy clone must not be repeated");
+      policyPresent = true;
+      return Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint });
+    });
+    const doctor = vi.fn(() => {
+      doctorInvocation += 1;
+      return doctorInvocation === 1
+        ? Promise.reject(new Error("simulated Doctor interruption"))
+        : Promise.resolve("PASS" as const);
+    });
     const loginReadiness = vi.fn(() => Promise.resolve("PASS" as const));
     const importer = new PortableDeviceImporter({
       archiveStore: new FileRunArchiveStore({ stateRoot: destinationRoot }),
       receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: destinationRoot }),
-      clonePolicy: { clone: clonePolicy },
+      clonePolicy: { clone: clonePolicy, reconcile: reconcilePolicy },
       doctor: { run: doctor },
       loginReadiness: { check: loginReadiness },
     });
@@ -1238,12 +1254,17 @@ describe("Task 9 Run Archive", () => {
     expect(doctor).toHaveBeenCalledOnce();
     expect(loginReadiness).not.toHaveBeenCalled();
 
-    await expect(importer.import(request)).rejects.toThrow(
-      /incomplete|will not be repeated|external checks/u,
-    );
+    await expect(importer.import(request)).resolves.toMatchObject({
+      archiveOutcome: "NOOP",
+      outcome: "READY",
+      policyOutcome: "PASS",
+      doctorStatus: "PASS",
+      loginReadiness: "PASS",
+    });
     expect(clonePolicy).toHaveBeenCalledOnce();
-    expect(doctor).toHaveBeenCalledOnce();
-    expect(loginReadiness).not.toHaveBeenCalled();
+    expect(reconcilePolicy).toHaveBeenCalledTimes(2);
+    expect(doctor).toHaveBeenCalledTimes(2);
+    expect(loginReadiness).toHaveBeenCalledOnce();
   });
 
   it("rejects legacy or mismatched policy clone results", async () => {

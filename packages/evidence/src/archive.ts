@@ -37,6 +37,7 @@ import {
   writeImmutableAtomically,
 } from "./atomic-write.js";
 import { DurableStoreError, isErrnoException, storeErrorFrom } from "./errors.js";
+import { redactPortableText } from "./portable-evidence.js";
 import { canonicalJson, sha256Fingerprint } from "./serialization.js";
 import { LocalStorageController } from "./storage-policy.js";
 
@@ -361,6 +362,26 @@ export function assertPortableArchive(archive: ArchivePackage): void {
     );
   }
   for (const evidence of archive.evidence) {
+    for (const text of [evidence.summary, evidence.capture.capturedText]) {
+      if (text === undefined) continue;
+      const detected = redactPortableText(text).categories;
+      if (
+        detected.some((category) =>
+          [
+            "CREDENTIAL",
+            "SENSITIVE_QUERY",
+            "ENVIRONMENT_DUMP",
+            "PRIVATE_PATH",
+            "PRIVATE_PROMPT",
+          ].includes(category),
+        )
+      ) {
+        throw new DurableStoreError(
+          "INVALID_TARGET",
+          "A portable Archive cannot contain credential, private prompt, environment, or device-path text.",
+        );
+      }
+    }
     if (
       ["PRIVATE_PROMPT", "ENVIRONMENT_DUMP", "CREDENTIAL_MATERIAL"].includes(
         evidence.contentClass,

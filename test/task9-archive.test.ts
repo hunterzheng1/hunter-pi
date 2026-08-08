@@ -140,14 +140,18 @@ async function withLstatPathSwap<T>(
   targetPath: string,
   swap: () => Promise<void>,
   operation: () => Promise<T>,
+  swapOnMatch = 1,
 ): Promise<T> {
   const mutableFsPromises = fsPromises as unknown as { lstat: typeof fsPromises.lstat };
   const originalLstat = mutableFsPromises.lstat;
-  let swapped = false;
+  let matchingCalls = 0;
   mutableFsPromises.lstat = (async (...args: unknown[]) => {
     const originalResult = (await Reflect.apply(originalLstat, fsPromises, args)) as unknown;
-    if (!swapped && String(args[0]) === targetPath) {
-      swapped = true;
+    if (String(args[0]) === targetPath) {
+      matchingCalls += 1;
+    }
+    if (matchingCalls === swapOnMatch) {
+      matchingCalls += 1;
       await swap();
     }
     return originalResult;
@@ -1664,7 +1668,24 @@ describe("Task 9 Run Archive", () => {
             if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
             throw error;
           });
-          expect(entries.filter((entry) => entry.startsWith(".pending-"))).toEqual([]);
+          const pendingEntries = entries.filter((entry) => entry.startsWith(".pending-"));
+          for (const pendingEntry of pendingEntries) {
+            expect(pendingEntry).toMatch(
+              /^\.pending-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+            );
+            const pendingStats = await lstat(join(directory, pendingEntry), { bigint: true });
+            expect(pendingStats.isFile()).toBe(true);
+            expect(pendingStats.isSymbolicLink()).toBe(false);
+            expect([1n, 2n]).toContain(pendingStats.nlink);
+            if (pendingStats.nlink === 2n) {
+              const finalStats = await lstat(join(directory, profileFilename), { bigint: true });
+              expect({
+                dev: pendingStats.dev,
+                ino: pendingStats.ino,
+                nlink: pendingStats.nlink,
+              }).toEqual({ dev: finalStats.dev, ino: finalStats.ino, nlink: finalStats.nlink });
+            }
+          }
         }
       }
     }
@@ -1782,21 +1803,28 @@ describe("Task 9 Run Archive", () => {
     };
     const intentText = `${canonicalJson(validIntent)}\n`;
 
-    for (const swapTarget of ["FINAL", "PENDING"] as const) {
-      const stateRoot = join(root, swapTarget.toLowerCase());
+    const swapCases = [
+      { name: "FINAL", target: "FINAL", match: 1 },
+      { name: "PENDING", target: "FINAL", match: 1 },
+      { name: "PENDING_AFTER_CHECK", target: "PENDING", match: 3 },
+    ] as const;
+    for (const swapCase of swapCases) {
+      const stateRoot = join(root, swapCase.name.toLowerCase());
       const directory = join(stateRoot, ".operation-receipts", "device-import-intents");
       const pendingPath = join(
         directory,
-        swapTarget === "FINAL"
+        swapCase.name === "FINAL"
           ? ".pending-00000000-0000-4000-8000-000000000010"
-          : ".pending-00000000-0000-4000-8000-000000000011",
+          : swapCase.name === "PENDING"
+            ? ".pending-00000000-0000-4000-8000-000000000011"
+            : ".pending-00000000-0000-4000-8000-000000000012",
       );
       const finalPath = join(directory, `${binding.profileId}.json`);
       const foreignSource = join(stateRoot, "foreign-source");
       await mkdir(directory, { recursive: true });
       await writeFile(pendingPath, intentText, { flag: "wx" });
       await link(pendingPath, finalPath);
-      if (swapTarget === "PENDING") {
+      if (swapCase.name !== "FINAL") {
         await writeFile(foreignSource, "foreign-link-must-survive", { flag: "wx" });
       }
       const createReceipt = vi.fn(() => {
@@ -1806,10 +1834,10 @@ describe("Task 9 Run Archive", () => {
 
       await expect(
         withLstatPathSwap(
-          finalPath,
+          swapCase.target === "FINAL" ? finalPath : pendingPath,
           async () => {
             swapRan = true;
-            if (swapTarget === "FINAL") {
+            if (swapCase.name === "FINAL") {
               await rm(finalPath);
               await writeFile(finalPath, intentText, { flag: "wx" });
             } else {
@@ -1822,11 +1850,12 @@ describe("Task 9 Run Archive", () => {
               binding,
               createReceipt,
             ),
+          swapCase.match,
         ),
       ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
       expect(swapRan).toBe(true);
       expect(createReceipt).not.toHaveBeenCalled();
-      if (swapTarget === "PENDING") {
+      if (swapCase.name !== "FINAL") {
         const [pendingStats, foreignStats] = await Promise.all([
           lstat(pendingPath, { bigint: true }),
           lstat(foreignSource, { bigint: true }),

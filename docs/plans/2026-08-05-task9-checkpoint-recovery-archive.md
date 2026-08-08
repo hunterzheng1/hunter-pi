@@ -54,7 +54,8 @@ and retains their Evidence in Archive completeness checks. A clean-profile impor
 archive-bound `READ_ONLY` projection; its v3 device receipt records exact policy reconciliation and
 resumes an interrupted import without manual state editing. Intent and final-receipt publication
 also recover after real process termination at every atomic-write boundary while malformed or
-foreign hard-linked remnants fail closed. The importer rescans the complete canonical Archive text
+foreign hard-linked remnants fail closed. Valid crash remnants are retained as exact immutable
+link facts instead of being deleted through a raceable pathname. The importer rescans the complete canonical Archive text
 and rejects path- or credential-shaped content, including quoted JSON credential fields, even when
 metadata is forged.
 
@@ -65,7 +66,7 @@ winner, immutable receipts bind every recovery fact, and a successor recovers af
 termination at each of the three claim/receipt/removal boundaries. File-backed Writer Leases reuse
 this seam rather than maintaining a weaker second lock implementation. Claim-recovery v2 receipts
 separate the original claim time from the successor's truthful recovery observation time. The exact
-Windows-local v2 matrix passes 89/89 tests across eight files and binds forced-termination recovery, lease reopen,
+Windows-local v2 matrix passes 90/90 tests across eight files and binds forced-termination recovery, lease reopen,
 second-device projection, finality replay, and privacy. Hosted Windows/Ubuntu execution for the
 final source, real OS power loss, real repositories, and Provider recovery remain open; Task 9 stays
 `PARTIAL` until the hosted receipts and comparator pass.

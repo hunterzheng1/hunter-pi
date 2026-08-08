@@ -130,16 +130,27 @@ describe("portable Evidence capture and redaction", () => {
     const doubleEncodedSecret = "fixture-double-encoded-json-secret";
     const prefixedSecret = "fixture-prefixed-json-secret";
     const multilineSecret = "fixture-multiline-json-secret";
+    const objectStringSecret = "fixture-object-string-json-secret";
     const overEncodedSecret = "fixture-over-encoded-json-secret";
     const deeplyNestedSecret = "fixture-deep-json-secret";
     const doubleEncoded = JSON.stringify(JSON.stringify({ password: doubleEncodedSecret }));
     const prefixed = `prefix={"pass\\u0077ord":"${prefixedSecret}"} suffix`;
     const multiline = `prefix {\n  "pass\\u0077ord": "${multilineSecret}"\n} suffix`;
+    const objectString = JSON.stringify({
+      message: JSON.stringify({ password: objectStringSecret }),
+    });
     let overEncoded = JSON.stringify({ password: overEncodedSecret });
     for (let layer = 0; layer < 10; layer += 1) overEncoded = JSON.stringify(overEncoded);
     const deeplyNested =
       '{"nested":'.repeat(5_000) + `{"password":"${deeplyNestedSecret}"}` + "}".repeat(5_000);
-    const content = [doubleEncoded, prefixed, multiline, overEncoded, deeplyNested].join("\n");
+    const content = [
+      doubleEncoded,
+      prefixed,
+      multiline,
+      objectString,
+      overEncoded,
+      deeplyNested,
+    ].join("\n");
 
     expect(() =>
       createPortableEvidenceEnvelope({
@@ -157,6 +168,7 @@ describe("portable Evidence capture and redaction", () => {
       doubleEncodedSecret,
       prefixedSecret,
       multilineSecret,
+      objectStringSecret,
       overEncodedSecret,
       deeplyNestedSecret,
     ]) {

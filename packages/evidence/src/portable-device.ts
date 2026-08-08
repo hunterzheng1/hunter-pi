@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { lstat, readFile, readdir, unlink } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -274,11 +274,16 @@ function corruptRemnant(message: string): DurableStoreError {
   return new DurableStoreError("STORE_CORRUPT", message);
 }
 
+interface ReconciledAtomicWriteDirectory {
+  readonly entries: readonly Dirent[];
+  readonly linkedFinals: ReadonlyMap<string, PhysicalFileIdentity>;
+}
+
 async function reconcileAtomicWriteRemnants<Output>(
   directory: string,
   schema: z.ZodType<Output>,
   finalFilename: (value: Output) => string,
-): Promise<Dirent[] | undefined> {
+): Promise<ReconciledAtomicWriteDirectory | undefined> {
   let entries: Dirent[];
   try {
     await assertSafeDirectoryPath(directory);
@@ -287,6 +292,7 @@ async function reconcileAtomicWriteRemnants<Output>(
     if (isErrnoException(error) && error.code === "ENOENT") return undefined;
     throw error;
   }
+  const linkedFinals = new Map<string, PhysicalFileIdentity>();
   for (const entry of entries) {
     if (!entry.name.startsWith(".pending-")) continue;
     if (!atomicWritePendingNamePattern.test(entry.name)) {
@@ -315,7 +321,8 @@ async function reconcileAtomicWriteRemnants<Output>(
           "A published device import remnant changed identity while it was being read.",
         );
       }
-      const finalPath = join(directory, finalFilename(value));
+      const finalName = finalFilename(value);
+      const finalPath = join(directory, finalName);
       const finalStats = await lstat(finalPath, { bigint: true });
       if (!isExactRegularFile(finalStats, pendingStats, 2n)) {
         throw corruptRemnant(
@@ -334,22 +341,42 @@ async function reconcileAtomicWriteRemnants<Output>(
           "A published device import pathname changed after its identity was validated.",
         );
       }
-      await unlink(pendingPath);
-      const finalAfterUnlink = await lstat(finalPath, { bigint: true });
-      if (!isExactRegularFile(finalAfterUnlink, pendingStats, 1n)) {
+      const finalBeforeReturn = await lstat(finalPath, { bigint: true });
+      if (!isExactRegularFile(finalBeforeReturn, pendingStats, 2n)) {
         throw corruptRemnant(
-          "A published device import receipt changed identity during remnant cleanup.",
+          "A published device import receipt changed identity during remnant reconciliation.",
         );
       }
+      linkedFinals.set(finalName, pendingStats);
       continue;
     }
     const pendingBeforeUnlink = await lstat(pendingPath, { bigint: true });
     if (!isExactRegularFile(pendingBeforeUnlink, pendingStats, 1n)) {
       throw corruptRemnant("An unpublished device import remnant changed identity before cleanup.");
     }
-    await unlink(pendingPath);
   }
-  return entries.filter((entry) => !entry.name.startsWith(".pending-"));
+  return {
+    entries: entries.filter((entry) => !entry.name.startsWith(".pending-")),
+    linkedFinals,
+  };
+}
+
+async function readReconciledRegularFile(
+  path: string,
+  preservedLinkIdentity: PhysicalFileIdentity | undefined,
+): Promise<string> {
+  const before = await lstat(path, { bigint: true });
+  const expectedLinkCount = preservedLinkIdentity === undefined ? 1n : 2n;
+  const expectedIdentity = preservedLinkIdentity ?? before;
+  if (!isExactRegularFile(before, expectedIdentity, expectedLinkCount)) {
+    throw corruptRemnant("A reconciled device import file has an invalid physical identity.");
+  }
+  const content = await readFile(path, "utf8");
+  const after = await lstat(path, { bigint: true });
+  if (!isExactRegularFile(after, before, expectedLinkCount)) {
+    throw corruptRemnant("A reconciled device import file changed identity while it was read.");
+  }
+  return content;
 }
 
 function createImportIntent(binding: PortableDeviceImportBinding): PortableDeviceImportIntent {
@@ -498,15 +525,15 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
   async #readReceipts(): Promise<PortableDeviceImportReceipt[]> {
     const directory = receiptDirectory(this.#stateRoot);
     try {
-      const entries = await reconcileAtomicWriteRemnants(
+      const reconciled = await reconcileAtomicWriteRemnants(
         directory,
         portableDeviceImportReceiptSchema,
         (receipt) => `${receipt.profileId}.json`,
       );
-      if (entries === undefined) return [];
+      if (reconciled === undefined) return [];
       const receipts: PortableDeviceImportReceipt[] = [];
       const operationIds = new Set<string>();
-      for (const entry of entries) {
+      for (const entry of reconciled.entries) {
         if (!entry.isFile() || !entry.name.endsWith(".json")) {
           throw new DurableStoreError(
             "STORE_CORRUPT",
@@ -514,15 +541,10 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
           );
         }
         const path = join(directory, entry.name);
-        const stats = await lstat(path);
-        if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
-          throw new DurableStoreError(
-            "STORE_CORRUPT",
-            "A device import receipt must be an exact regular file.",
-          );
-        }
         const receipt = portableDeviceImportReceiptSchema.parse(
-          JSON.parse(await readFile(path, "utf8")) as unknown,
+          JSON.parse(
+            await readReconciledRegularFile(path, reconciled.linkedFinals.get(entry.name)),
+          ) as unknown,
         );
         if (
           entry.name !== `${receipt.profileId}.json` ||
@@ -553,15 +575,15 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
   async #readIntents(): Promise<PortableDeviceImportIntent[]> {
     const directory = intentDirectory(this.#stateRoot);
     try {
-      const entries = await reconcileAtomicWriteRemnants(
+      const reconciled = await reconcileAtomicWriteRemnants(
         directory,
         portableDeviceImportIntentSchema,
         (intent) => `${intent.binding.profileId}.json`,
       );
-      if (entries === undefined) return [];
+      if (reconciled === undefined) return [];
       const intents: PortableDeviceImportIntent[] = [];
       const operationIds = new Set<string>();
-      for (const entry of entries) {
+      for (const entry of reconciled.entries) {
         if (!entry.isFile() || !entry.name.endsWith(".json")) {
           throw new DurableStoreError(
             "STORE_CORRUPT",
@@ -569,15 +591,10 @@ export class FilePortableDeviceImportReceiptStore implements PortableDeviceImpor
           );
         }
         const path = join(directory, entry.name);
-        const stats = await lstat(path);
-        if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
-          throw new DurableStoreError(
-            "STORE_CORRUPT",
-            "A device import intent must be an exact regular file.",
-          );
-        }
         const intent = portableDeviceImportIntentSchema.parse(
-          JSON.parse(await readFile(path, "utf8")) as unknown,
+          JSON.parse(
+            await readReconciledRegularFile(path, reconciled.linkedFinals.get(entry.name)),
+          ) as unknown,
         );
         if (
           entry.name !== `${intent.binding.profileId}.json` ||

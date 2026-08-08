@@ -157,6 +157,16 @@ function redactJsonDocument(text: string, encodedLayer = 0): JsonDocumentRedacti
           replacementKey = `redactedField${String(replacementSequence)}`;
         } while (Object.hasOwn(current, replacementKey));
         Reflect.set(current, replacementKey, "[REDACTED:CREDENTIAL]");
+      } else if (typeof nested === "string") {
+        const document = redactJsonDocument(nested);
+        const embedded =
+          document.fieldsRemoved === 0 && !document.parsed
+            ? redactEmbeddedJsonDocuments(nested)
+            : document;
+        if (embedded.fieldsRemoved > 0) {
+          Reflect.set(current, key, embedded.text);
+          fieldsRemoved += embedded.fieldsRemoved;
+        }
       } else if (typeof nested === "object" && nested !== null) {
         pending.push(nested);
       }

@@ -17,7 +17,7 @@ export const TASK9_CONTRACT_TEST_FILES = [
 export const TASK9_CONTRACT_TEST_COUNTS = {
   "test/atomic-write.test.ts": 21,
   "test/file-lease-manager.test.ts": 13,
-  "test/task9-archive.test.ts": 26,
+  "test/task9-archive.test.ts": 27,
   "test/task9-recovery.test.ts": 11,
   "test/task9-checkpoint.test.ts": 2,
   "test/task9-cancellation.test.ts": 3,
@@ -37,6 +37,7 @@ export const TASK9_CRITICAL_CONTRACT_ASSERTIONS = [
   "Task 9 Run Archive resumes an interrupted device import from exact durable policy state without manual editing",
   "Task 9 Run Archive resumes device intent and receipt publication after process termination at every atomic boundary",
   "Task 9 Run Archive fails closed without deleting foreign device atomic-write remnants",
+  "Task 9 Run Archive rebinds device remnant path identities before accepting or deleting them",
   "Task 9 Run Archive rejects credential-shaped text even when portable Evidence metadata is forged safe",
 ] as const;
 

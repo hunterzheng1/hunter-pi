@@ -101,11 +101,6 @@ describe("Task 9 platform Evidence", () => {
     const root = await mkdtemp(join(tmpdir(), "hpi-task9-temp-alias-test-"));
     const physicalParent = join(root, "physical-parent");
     const aliasedParent = join(root, "aliased-parent");
-    const originalTemporaryEnvironment = {
-      TEMP: process.env["TEMP"],
-      TMP: process.env["TMP"],
-      TMPDIR: process.env["TMPDIR"],
-    };
     try {
       await mkdir(physicalParent);
       await symlink(
@@ -119,10 +114,7 @@ describe("Task 9 platform Evidence", () => {
       expect(temporaryRoot).toBe(await realpath(temporaryRoot));
       expect(dirname(temporaryRoot)).toBe(await realpath(physicalParent));
 
-      process.env["TEMP"] = aliasedParent;
-      process.env["TMP"] = aliasedParent;
-      process.env["TMPDIR"] = aliasedParent;
-      const finality = await runTask9FinalityFixture();
+      const finality = await runTask9FinalityFixture(aliasedParent);
       expect(finality).toMatchObject({
         process: { terminalFinality: "FINAL" },
         writerLease: { state: "RELEASED" },
@@ -133,10 +125,6 @@ describe("Task 9 platform Evidence", () => {
         },
       });
     } finally {
-      for (const [key, value] of Object.entries(originalTemporaryEnvironment)) {
-        if (value === undefined) Reflect.deleteProperty(process.env, key);
-        else process.env[key] = value;
-      }
       await rm(root, { force: true, recursive: true });
     }
   });

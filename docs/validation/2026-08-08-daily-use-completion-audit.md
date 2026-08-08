@@ -27,7 +27,9 @@ real implementations. The following daily-use gates remain open:
   reconciler at a canonical physical path, and recovers after forced termination at all three
   claim/receipt/removal boundaries. Windows-local Evidence passes; the first three PR attempts
   passed Ubuntu on their predecessor sources. The last two Windows failures have the same exact
-  temporary-path-alias identity, now covered by a full finality-fixture regression; final-source
+  temporary-path-alias identity, now covered by a full finality-fixture regression. A fourth hosted
+  attempt failed only because the first regression polluted Ubuntu's global Unix-socket temporary
+  path; the replacement injects the fixture parent without changing OS process state. Final-source
   Windows/Ubuntu receipts, exact aggregate comparison, and real OS power loss remain unproven;
 - import/export/delete replay and clean-profile second-device projection now use immutable intents,
   exact archive/operation identities, v3 policy reconciliation, quoted-JSON credential rejection,

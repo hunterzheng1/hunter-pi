@@ -67,8 +67,14 @@ shape proves the failure was `LeaseError/LEASE_STORE_CORRUPT: leaseRoot must not
 the hosted Windows temporary root used an 8.3 alias, while the safety-correct File Lease store
 requires a canonical physical path. The next replacement resolves both Task 9 temporary roots to
 their physical paths before any store setup, exercises the complete finality fixture through a
-directory alias, and gives every scripted npm subprocess a finite ten-minute elapsed limit. Remote
-CI for that replacement source remains `PENDING`. Exact merged-head main CI
+directory alias, and gives every scripted npm subprocess a finite ten-minute elapsed limit. Hosted
+run [`31253996038`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31253996038) then exposed a
+test-only Ubuntu boundary before Evidence generation: globally replacing `TMPDIR` made the
+process-liveness Unix socket exceed the platform address limit and fail with `EINVAL`. The remaining
+Windows job was cancelled after the Ubuntu failure because no aggregate could pass. The next
+replacement injects only the finality fixture's temporary parent, leaving process-liveness and
+other OS temporary paths untouched. Remote CI for that replacement source remains `PENDING`. Exact
+merged-head main CI
 [`31244419248`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31244419248) passes the prior
 rate-limit/CI hardening baseline but does not prove this Task 9 v2 source. Earlier replacement and
 merged-head runs remain recorded as

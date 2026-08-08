@@ -470,8 +470,8 @@ export async function runTask9ContractMatrix(
   }
 }
 
-export async function runTask9FinalityFixture() {
-  const fixtureRoot = await createTask9TemporaryRoot("hpi-task9-platform-");
+export async function runTask9FinalityFixture(baseDirectory = tmpdir()) {
+  const fixtureRoot = await createTask9TemporaryRoot("hpi-task9-platform-", baseDirectory);
   let finalityCheckpoint: Task9FinalityCheckpoint = "SETUP";
   let finalityFailed = false;
   try {

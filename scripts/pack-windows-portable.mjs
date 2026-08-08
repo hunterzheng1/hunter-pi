@@ -142,7 +142,7 @@ try {
     throw new Error("The Windows portable package requires a clean source tree.");
   }
   const cliPackage = z
-    .strictObject({ version: z.string() })
+    .looseObject({ version: z.string() })
     .parse(JSON.parse(await readFile(join(repositoryRoot, "apps", "cli", "package.json"), "utf8")));
   const productVersion = cliPackage.version;
   const enginePackageName = "@earendil-works/pi-coding-agent";

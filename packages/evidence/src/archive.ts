@@ -193,16 +193,168 @@ export const archiveImportRequestSchema = z.strictObject({
 });
 export type ArchiveImportRequest = z.input<typeof archiveImportRequestSchema>;
 
-export const archiveImportReceiptSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-archive-import-receipt.v1"),
+const archiveImportReceiptFactsSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-archive-import-receipt.v2"),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   archiveId: archiveIdSchema,
   artifactFingerprint: fingerprintSchema,
-  outcome: z.enum(["APPLIED", "NOOP"]),
+  readOnlyProjectionFingerprint: fingerprintSchema,
+  recordedOutcome: z.enum(["APPLIED", "NOOP"]),
   observedAt: timestampSchema,
 });
+
+function archiveImportReceiptFacts(value: z.infer<typeof archiveImportReceiptFactsSchema>) {
+  return archiveImportReceiptFactsSchema.parse({
+    schemaVersion: value.schemaVersion,
+    operationId: value.operationId,
+    operationFingerprint: value.operationFingerprint,
+    archiveId: value.archiveId,
+    artifactFingerprint: value.artifactFingerprint,
+    readOnlyProjectionFingerprint: value.readOnlyProjectionFingerprint,
+    recordedOutcome: value.recordedOutcome,
+    observedAt: value.observedAt,
+  });
+}
+
+function archiveImportReceiptFingerprint(value: z.infer<typeof archiveImportReceiptFactsSchema>) {
+  return sha256Fingerprint(canonicalJson(archiveImportReceiptFacts(value)));
+}
+
+export const archiveImportReceiptSchema = z
+  .strictObject({
+    ...archiveImportReceiptFactsSchema.shape,
+    outcome: z.enum(["APPLIED", "NOOP"]),
+    receiptFingerprint: fingerprintSchema,
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.receiptFingerprint !== archiveImportReceiptFingerprint(receipt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["receiptFingerprint"],
+        message: "Archive import receipt fingerprint does not match its immutable facts",
+      });
+    }
+  });
 export type ArchiveImportReceipt = z.infer<typeof archiveImportReceiptSchema>;
+
+export const importedArchiveProjectionRequestSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-imported-archive-projection-request.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  archiveId: archiveIdSchema,
+  artifactFingerprint: fingerprintSchema,
+});
+export type ImportedArchiveProjectionRequest = z.input<
+  typeof importedArchiveProjectionRequestSchema
+>;
+
+const importedArchiveProjectionFactsSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-imported-archive-projection.v1"),
+  accessMode: z.literal("READ_ONLY"),
+  readOnly: z.literal(true),
+  workflowAuthority: z.literal("NONE"),
+  archiveState: z.literal("IMPORTED_ARCHIVE"),
+  archiveId: archiveIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  importOperationId: operationIdSchema,
+  importOperationFingerprint: fingerprintSchema,
+  runId: runIdSchema,
+  planRevisionId: planRevisionIdSchema,
+  sourceFingerprint: fingerprintSchema,
+  archiveOutcome: z.enum(["READY", "BLOCKED", "FAILED", "CANCELLED", "INCOMPLETE"]),
+  sourceArchiveOutcome: z.enum(["READY", "BLOCKED", "FAILED", "CANCELLED", "INCOMPLETE"]),
+  archivedAt: timestampSchema,
+  sourceProjectionFingerprint: fingerprintSchema,
+  archiveProjection: runProjectionSchema,
+});
+
+function importedArchiveProjectionFingerprint(
+  value: z.infer<typeof importedArchiveProjectionFactsSchema>,
+) {
+  return sha256Fingerprint(
+    canonicalJson(
+      importedArchiveProjectionFactsSchema.parse({
+        schemaVersion: value.schemaVersion,
+        accessMode: value.accessMode,
+        readOnly: value.readOnly,
+        workflowAuthority: value.workflowAuthority,
+        archiveState: value.archiveState,
+        archiveId: value.archiveId,
+        artifactFingerprint: value.artifactFingerprint,
+        importOperationId: value.importOperationId,
+        importOperationFingerprint: value.importOperationFingerprint,
+        runId: value.runId,
+        planRevisionId: value.planRevisionId,
+        sourceFingerprint: value.sourceFingerprint,
+        archiveOutcome: value.archiveOutcome,
+        sourceArchiveOutcome: value.sourceArchiveOutcome,
+        archivedAt: value.archivedAt,
+        sourceProjectionFingerprint: value.sourceProjectionFingerprint,
+        archiveProjection: value.archiveProjection,
+      }),
+    ),
+  );
+}
+
+export const importedArchiveProjectionSchema = z
+  .strictObject({
+    ...importedArchiveProjectionFactsSchema.shape,
+    projectionFingerprint: fingerprintSchema,
+  })
+  .superRefine((projection, context) => {
+    if (projection.projectionFingerprint !== importedArchiveProjectionFingerprint(projection)) {
+      context.addIssue({
+        code: "custom",
+        path: ["projectionFingerprint"],
+        message: "Imported Archive projection fingerprint does not match its immutable facts",
+      });
+    }
+    if (
+      projection.archiveProjection.run.runId !== projection.runId ||
+      projection.archiveProjection.planRevision.planRevisionId !== projection.planRevisionId ||
+      projection.archiveProjection.run.sourceFingerprint !== projection.sourceFingerprint ||
+      projection.archiveProjection.run.lifecycle !== projection.archiveOutcome ||
+      projection.sourceArchiveOutcome !== projection.archiveOutcome ||
+      sha256Fingerprint(canonicalJson(projection.archiveProjection)) !==
+        projection.sourceProjectionFingerprint
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["archiveProjection"],
+        message: "Imported Archive projection does not bind the exact archived Run facts",
+      });
+    }
+    const hasLiveAttempt = projection.archiveProjection.attempts.some((attempt) =>
+      ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
+    );
+    const hasLiveCheckpointState = projection.archiveProjection.checkpoints.some(
+      (checkpoint) =>
+        checkpoint.activeOperationReceiptIds.length > 0 ||
+        checkpoint.unknownOperationIds.length > 0 ||
+        checkpoint.heldWriterLeaseIds.length > 0 ||
+        checkpoint.processReferences.length > 0 ||
+        checkpoint.engine.sessionReference !== undefined,
+    );
+    if (hasLiveAttempt || hasLiveCheckpointState) {
+      context.addIssue({
+        code: "custom",
+        path: ["archiveProjection"],
+        message: "An imported Archive projection cannot expose live workflow state",
+      });
+    }
+  });
+
+type DeepReadonly<T> = T extends (...arguments_: never[]) => unknown
+  ? T
+  : T extends readonly (infer Item)[]
+    ? readonly DeepReadonly<Item>[]
+    : T extends object
+      ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+      : T;
+export type ImportedArchiveProjection = DeepReadonly<
+  z.infer<typeof importedArchiveProjectionSchema>
+>;
 
 export const archiveDeleteExportRequestSchema = z.strictObject({
   schemaVersion: z.literal("hpi-archive-delete-export.v1"),
@@ -249,9 +401,10 @@ const archiveDeletePendingSchema = z.strictObject({
 
 export interface RunArchiveStore {
   finalize(request: ArchiveFinalizeRequest): Promise<ArchiveManifest>;
-  read(archiveId: string): Promise<ArchiveManifest>;
+  read(archiveId: string): Promise<ArchiveManifest | ImportedArchiveProjection>;
   export(request: ArchiveExportRequest): Promise<ArchiveExportReceipt>;
   import(request: ArchiveImportRequest): Promise<ArchiveImportReceipt>;
+  projectImported(request: ImportedArchiveProjectionRequest): Promise<ImportedArchiveProjection>;
   deleteExport(request: ArchiveDeleteExportRequest): Promise<ArchiveDeleteExportReceipt>;
 }
 
@@ -267,8 +420,73 @@ function archivePackageFilename(): string {
   return "package.json";
 }
 
-function archivePackageFingerprint(archive: ArchivePackage): string {
+export function archivePackageFingerprint(archive: ArchivePackage): string {
   return sha256Fingerprint(canonicalJson(archive));
+}
+
+function freezeDeep<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) freezeDeep(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function createImportedArchiveProjection(input: {
+  readonly archive: ArchivePackage;
+  readonly artifactFingerprint: string;
+  readonly operationId: string;
+  readonly operationFingerprint: string;
+}): ImportedArchiveProjection {
+  const facts = importedArchiveProjectionFactsSchema.parse({
+    schemaVersion: "hpi-imported-archive-projection.v1",
+    accessMode: "READ_ONLY",
+    readOnly: true,
+    workflowAuthority: "NONE",
+    archiveState: "IMPORTED_ARCHIVE",
+    archiveId: input.archive.manifest.archiveId,
+    artifactFingerprint: input.artifactFingerprint,
+    importOperationId: input.operationId,
+    importOperationFingerprint: input.operationFingerprint,
+    runId: input.archive.manifest.runId,
+    planRevisionId: input.archive.manifest.planRevisionId,
+    sourceFingerprint: input.archive.manifest.sourceFingerprint,
+    archiveOutcome: input.archive.manifest.outcome,
+    sourceArchiveOutcome: input.archive.manifest.outcome,
+    archivedAt: input.archive.manifest.archivedAt,
+    sourceProjectionFingerprint: input.archive.manifest.projectionDigest,
+    archiveProjection: input.archive.projection,
+  });
+  return freezeDeep(
+    importedArchiveProjectionSchema.parse({
+      ...facts,
+      projectionFingerprint: importedArchiveProjectionFingerprint(facts),
+    }),
+  );
+}
+
+function createArchiveImportReceipt(input: {
+  readonly operationId: string;
+  readonly operationFingerprint: string;
+  readonly archiveId: string;
+  readonly artifactFingerprint: string;
+  readonly readOnlyProjectionFingerprint: string;
+  readonly recordedOutcome: "APPLIED" | "NOOP";
+  readonly observedAt: string;
+}): ArchiveImportReceipt {
+  const facts = archiveImportReceiptFactsSchema.parse({
+    schemaVersion: "hpi-archive-import-receipt.v2",
+    ...input,
+  });
+  return archiveImportReceiptSchema.parse({
+    ...facts,
+    outcome: facts.recordedOutcome,
+    receiptFingerprint: archiveImportReceiptFingerprint(facts),
+  });
+}
+
+function asReplayReceipt(receipt: ArchiveImportReceipt): ArchiveImportReceipt {
+  return archiveImportReceiptSchema.parse({ ...receipt, outcome: "NOOP" });
 }
 
 function operationReceiptPath(stateRoot: string, kind: "imports" | "deletes", key: string): string {
@@ -295,6 +513,13 @@ async function readImmutableJsonOptional<T>(
     return schema.parse(parseJson(await readFile(path, "utf8")));
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") return undefined;
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "The immutable Archive operation receipt is corrupt or has an invalid identity fingerprint.",
+        error,
+      );
+    }
     throw storeErrorFrom(error, "STORE_CORRUPT");
   }
 }
@@ -340,7 +565,20 @@ async function withArchiveOperationLock<T>(key: string, operation: () => Promise
 }
 
 export function assertPortableArchive(archive: ArchivePackage): void {
+  const projectionHasLiveAttempt = archive.projection.attempts.some((attempt) =>
+    ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
+  );
+  const projectionHasLiveCheckpointState = archive.projection.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.activeOperationReceiptIds.length > 0 ||
+      checkpoint.unknownOperationIds.length > 0 ||
+      checkpoint.heldWriterLeaseIds.length > 0 ||
+      checkpoint.processReferences.length > 0 ||
+      checkpoint.engine.sessionReference !== undefined,
+  );
   if (
+    projectionHasLiveAttempt ||
+    projectionHasLiveCheckpointState ||
     archive.portability.activeAttemptIds.length > 0 ||
     archive.portability.activeOperationReceiptIds.length > 0 ||
     archive.portability.unknownOperationIds.length > 0 ||
@@ -679,14 +917,31 @@ export class FileRunArchiveStore implements RunArchiveStore {
     return archive.manifest;
   }
 
-  public async read(archiveId: string): Promise<ArchiveManifest> {
+  public async read(archiveId: string): Promise<ArchiveManifest | ImportedArchiveProjection> {
     await assertSafeDirectoryPath(this.#stateRoot);
-    const package_ = await this.#readPackageOptional(archiveId);
+    const parsedArchiveId = archiveIdSchema.parse(archiveId);
+    const package_ = await this.#readPackageOptional(parsedArchiveId);
     if (package_ === undefined) {
       throw new DurableStoreError("NOT_FOUND", "The requested Archive identity was not found.");
     }
-    await this.#assertCanonicalArchive(package_);
-    return package_.manifest;
+    if (this.#kernel !== undefined) {
+      await this.#assertCanonicalArchive(package_);
+      return package_.manifest;
+    }
+    const receipt = await this.#readImportReceiptOptional(parsedArchiveId);
+    if (receipt === undefined) {
+      throw new DurableStoreError(
+        "INVALID_TARGET",
+        "Archive read without a canonical Workflow Kernel binding requires a persisted import receipt.",
+      );
+    }
+    return this.projectImported({
+      schemaVersion: "hpi-imported-archive-projection-request.v1",
+      operationId: receipt.operationId,
+      operationFingerprint: receipt.operationFingerprint,
+      archiveId: parsedArchiveId,
+      artifactFingerprint: receipt.artifactFingerprint,
+    });
   }
 
   public async export(request: ArchiveExportRequest): Promise<ArchiveExportReceipt> {
@@ -766,6 +1021,12 @@ export class FileRunArchiveStore implements RunArchiveStore {
 
   public async import(request: ArchiveImportRequest): Promise<ArchiveImportReceipt> {
     const parsed = archiveImportRequestSchema.parse(request);
+    if (this.#kernel !== undefined) {
+      throw new DurableStoreError(
+        "INVALID_TARGET",
+        "Archive import requires an archive-only store without a live Workflow Kernel binding.",
+      );
+    }
     return withArchiveOperationLock(
       `${this.#stateRoot}:archive:${parsed.archive.manifest.archiveId}`,
       () =>
@@ -783,10 +1044,19 @@ export class FileRunArchiveStore implements RunArchiveStore {
     assertArchivePackage(parsed.archive);
     const artifactFingerprint = archivePackageFingerprint(parsed.archive);
     const archiveId = parsed.archive.manifest.archiveId;
+    const importedProjection = createImportedArchiveProjection({
+      archive: parsed.archive,
+      artifactFingerprint,
+      operationId: parsed.operationId,
+      operationFingerprint: parsed.operationFingerprint,
+    });
     const priorReceipt = await this.#readImportReceiptOptional(archiveId);
     if (priorReceipt !== undefined) {
       assertOperationIdentity(priorReceipt, parsed);
-      if (priorReceipt.artifactFingerprint !== artifactFingerprint) {
+      if (
+        priorReceipt.artifactFingerprint !== artifactFingerprint ||
+        priorReceipt.readOnlyProjectionFingerprint !== importedProjection.projectionFingerprint
+      ) {
         throw new DurableStoreError(
           "IDENTITY_CONFLICT",
           "The imported Archive identity is already bound to different facts.",
@@ -800,9 +1070,7 @@ export class FileRunArchiveStore implements RunArchiveStore {
           "Imported Archive identity is already bound to other facts.",
         );
       }
-      return existing === undefined || priorReceipt.outcome === "NOOP"
-        ? priorReceipt
-        : archiveImportReceiptSchema.parse({ ...priorReceipt, outcome: "NOOP" });
+      return asReplayReceipt(priorReceipt);
     }
     const existing = await this.#readPackageOptional(archiveId);
     if (existing !== undefined) {
@@ -812,30 +1080,81 @@ export class FileRunArchiveStore implements RunArchiveStore {
           "Imported Archive identity is already bound to other facts.",
         );
       }
-      const receipt = archiveImportReceiptSchema.parse({
-        schemaVersion: "hpi-archive-import-receipt.v1",
+      const receipt = createArchiveImportReceipt({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         archiveId: parsed.archive.manifest.archiveId,
         artifactFingerprint,
-        outcome: "NOOP",
+        readOnlyProjectionFingerprint: importedProjection.projectionFingerprint,
+        recordedOutcome: "NOOP",
         observedAt: new Date().toISOString(),
       });
       await this.#writeImportReceipt(receipt);
       return receipt;
     }
-    const receipt = archiveImportReceiptSchema.parse({
-      schemaVersion: "hpi-archive-import-receipt.v1",
+    const receipt = createArchiveImportReceipt({
       operationId: parsed.operationId,
       operationFingerprint: parsed.operationFingerprint,
       archiveId: parsed.archive.manifest.archiveId,
       artifactFingerprint,
-      outcome: "APPLIED",
+      readOnlyProjectionFingerprint: importedProjection.projectionFingerprint,
+      recordedOutcome: "APPLIED",
       observedAt: new Date().toISOString(),
     });
     await this.#writeImportReceipt(receipt);
     await this.#writePackage(parsed.archive);
     return receipt;
+  }
+
+  public async projectImported(
+    request: ImportedArchiveProjectionRequest,
+  ): Promise<ImportedArchiveProjection> {
+    const parsed = importedArchiveProjectionRequestSchema.parse(request);
+    if (this.#kernel !== undefined) {
+      throw new DurableStoreError(
+        "INVALID_TARGET",
+        "Imported Archive projection requires an archive-only store without live Workflow Kernel authority.",
+      );
+    }
+    await assertSafeDirectoryPath(this.#stateRoot);
+    const receipt = await this.#readImportReceiptOptional(parsed.archiveId);
+    if (receipt === undefined) {
+      throw new DurableStoreError(
+        "NOT_FOUND",
+        "Imported Archive projection requires its persisted import receipt.",
+      );
+    }
+    assertOperationIdentity(receipt, parsed);
+    if (receipt.artifactFingerprint !== parsed.artifactFingerprint) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "Imported Archive projection is bound to a different artifact fingerprint.",
+      );
+    }
+    const archive = await this.#readPackage(parsed.archiveId);
+    const artifactFingerprint = archivePackageFingerprint(archive);
+    if (
+      artifactFingerprint !== parsed.artifactFingerprint ||
+      artifactFingerprint !== receipt.artifactFingerprint
+    ) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "Imported Archive package does not match its persisted receipt.",
+      );
+    }
+    const projection = createImportedArchiveProjection({
+      archive,
+      artifactFingerprint,
+      operationId: receipt.operationId,
+      operationFingerprint: receipt.operationFingerprint,
+    });
+    if (receipt.readOnlyProjectionFingerprint !== projection.projectionFingerprint) {
+      throw new DurableStoreError(
+        "IDENTITY_CONFLICT",
+        "Imported Archive projection fingerprint does not match its persisted receipt.",
+      );
+    }
+    return projection;
   }
 
   public async deleteExport(
@@ -1019,11 +1338,24 @@ export class FileRunArchiveStore implements RunArchiveStore {
       const archive = archivePackageSchema.parse(
         parseJson(await readFile(join(directory, archivePackageFilename()), "utf8")),
       );
+      if (archive.manifest.archiveId !== parsedArchiveId) {
+        throw new DurableStoreError(
+          "STORE_CORRUPT",
+          "The persisted Archive package names a different Archive identity than its directory.",
+        );
+      }
       assertPortableArchive(archive);
       assertArchivePackage(archive);
       return archive;
     } catch (error) {
       if (isErrnoException(error) && error.code === "ENOENT") return undefined;
+      if (error instanceof z.ZodError || error instanceof SyntaxError) {
+        throw new DurableStoreError(
+          "STORE_CORRUPT",
+          "The persisted Archive package has an incompatible schema version or corrupt contents.",
+          error,
+        );
+      }
       throw storeErrorFrom(error, "STORE_CORRUPT");
     }
   }
@@ -1061,15 +1393,28 @@ export class FileRunArchiveStore implements RunArchiveStore {
         "An import receipt is bound to a different Archive identity than its path.",
       );
     }
+    if (receipt !== undefined && receipt.outcome !== receipt.recordedOutcome) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "A persisted Archive import receipt cannot contain a replay-only outcome.",
+      );
+    }
     return receipt;
   }
 
   async #writeImportReceipt(receipt: ArchiveImportReceipt): Promise<void> {
+    const parsed = archiveImportReceiptSchema.parse(receipt);
+    if (parsed.outcome !== parsed.recordedOutcome) {
+      throw new DurableStoreError(
+        "STORE_CORRUPT",
+        "Only the immutable Archive import fact can be persisted.",
+      );
+    }
     await this.#storage.writeCritical(() =>
       writeImmutableAtomically({
-        directory: dirname(operationReceiptPath(this.#stateRoot, "imports", receipt.archiveId)),
-        filename: `${receipt.archiveId}.json`,
-        content: `${canonicalJson(receipt)}\n`,
+        directory: dirname(operationReceiptPath(this.#stateRoot, "imports", parsed.archiveId)),
+        filename: `${parsed.archiveId}.json`,
+        content: `${canonicalJson(parsed)}\n`,
       }),
     );
   }

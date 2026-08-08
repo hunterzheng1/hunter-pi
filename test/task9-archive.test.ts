@@ -1,8 +1,12 @@
-import { access, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { build } from "esbuild";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   attemptFinalityReceiptIdSchema,
@@ -22,6 +26,8 @@ import {
   FileRunArchiveStore,
   LocalStorageController,
   PortableDeviceImporter,
+  portableDeviceImportBindingSchema,
+  portableDeviceImportReceiptSchema,
 } from "@hunter-pi/evidence";
 import {
   DurableWorkflowKernel,
@@ -36,6 +42,93 @@ import {
   fixtureTimestamp,
 } from "./support/workflow-domain-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
+
+const atomicInterruptionFixtureSource = fileURLToPath(
+  new URL("./support/atomic-write-interruption-child.ts", import.meta.url),
+);
+let atomicInterruptionFixtureRoot: string;
+let atomicInterruptionFixtureBundle: string;
+
+beforeAll(async () => {
+  atomicInterruptionFixtureRoot = await createTemporaryTestDirectory(
+    tmpdir(),
+    "hunter-pi-atomic-interruption-fixture-",
+  );
+  atomicInterruptionFixtureBundle = join(
+    atomicInterruptionFixtureRoot,
+    "atomic-write-interruption-child.mjs",
+  );
+  await build({
+    alias: {
+      "@hunter-pi/domain": fileURLToPath(
+        new URL("../packages/domain/src/index.ts", import.meta.url),
+      ),
+    },
+    bundle: true,
+    entryPoints: [atomicInterruptionFixtureSource],
+    format: "esm",
+    logLevel: "silent",
+    outfile: atomicInterruptionFixtureBundle,
+    platform: "node",
+    target: "node24",
+  });
+});
+
+afterAll(async () => {
+  await rm(atomicInterruptionFixtureRoot, { force: true, recursive: true });
+});
+
+async function leaveInterruptedAtomicWrite(options: {
+  readonly boundary: "BEFORE_TEMP_WRITE" | "AFTER_TEMP_WRITE" | "AFTER_TEMP_SYNC" | "AFTER_PUBLISH";
+  readonly content: string;
+  readonly directory: string;
+  readonly filename: string;
+}): Promise<void> {
+  const child = spawn(process.execPath, [atomicInterruptionFixtureBundle], {
+    env: {
+      ...process.env,
+      HPI_TEST_ATOMIC_BOUNDARY: options.boundary,
+      HPI_TEST_ATOMIC_CONTENT: Buffer.from(options.content, "utf8").toString("base64"),
+      HPI_TEST_ATOMIC_DIRECTORY: options.directory,
+      HPI_TEST_ATOMIC_FILENAME: options.filename,
+    },
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const completion = new Promise<{ readonly code: number | null; readonly signal: string | null }>(
+    (resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolvePromise({ code, signal }));
+    },
+  );
+  const marker = '"event":"ATOMIC_WRITE_PAUSED"';
+  const deadline = Date.now() + 10_000;
+  try {
+    while (!stdout.includes(marker)) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        const result = await completion;
+        throw new Error(`atomic fixture exited before pause: ${JSON.stringify(result)} ${stderr}`);
+      }
+      if (Date.now() >= deadline) throw new Error(`atomic fixture did not pause: ${stderr}`);
+      await delay(10);
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  const result = await completion;
+  expect(result.code).not.toBe(0);
+}
 
 async function createTerminalProjection(
   root: string,
@@ -674,6 +767,31 @@ describe("Task 9 Run Archive", () => {
           capturedText: "Cookie: session=super-secret-value",
           capturedBytes: 41,
           totalBytes: 41,
+        },
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
+      {
+        ...evidence,
+        summary: '{"access_token":"fixture-json-secret"}',
+        redaction: {
+          version: "hunter-redaction/1" as const,
+          applied: false,
+          fieldsRemoved: 0,
+          categories: [],
+        },
+      },
+      {
+        ...evidence,
+        capture: {
+          ...evidence.capture,
+          capturedText: '{"cookie":"sid=fixture-json-secret"}',
+          capturedBytes: 36,
+          totalBytes: 36,
         },
         redaction: {
           version: "hunter-redaction/1" as const,
@@ -1415,6 +1533,110 @@ describe("Task 9 Run Archive", () => {
     expect(reconcilePolicy).toHaveBeenCalledTimes(2);
     expect(doctor).toHaveBeenCalledTimes(2);
     expect(loginReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("resumes device intent and receipt publication after process termination at every atomic boundary", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-device-atomic-interruption-",
+    );
+    const { archive } = await createPortableArchiveFixture(
+      join(root, "portable"),
+      "archive_task9-device-atomic-interruption",
+      "archive-device-atomic-interruption",
+    );
+    const templateRoot = join(root, "template");
+    const request = {
+      schemaVersion: "hpi-device-import.v1" as const,
+      operationId: "op_device-import-atomic-interruption" as const,
+      operationFingerprint: `sha256:${"2".repeat(64)}`,
+      profileId: "device-profile-atomic-interruption",
+      projectPolicy: {
+        schemaVersion: "hpi-project-policy.v1" as const,
+        policyFingerprint: fixtureFingerprint,
+      },
+      archive,
+      observedAt: fixtureTimestamp,
+    };
+    await new PortableDeviceImporter({
+      archiveStore: new FileRunArchiveStore({ stateRoot: templateRoot }),
+      receiptStore: new FilePortableDeviceImportReceiptStore({ stateRoot: templateRoot }),
+      clonePolicy: {
+        reconcile: () => Promise.resolve({ status: "ABSENT" as const, policyFingerprint: null }),
+        clone: () =>
+          Promise.resolve({ status: "PASS" as const, policyFingerprint: fixtureFingerprint }),
+      },
+      doctor: { run: () => Promise.resolve("PASS") },
+      loginReadiness: { check: () => Promise.resolve("PASS") },
+    }).import(request);
+
+    const profileFilename = `${request.profileId}.json`;
+    const templateIntent = await readFile(
+      join(templateRoot, ".operation-receipts", "device-import-intents", profileFilename),
+      "utf8",
+    );
+    const templateReceiptText = await readFile(
+      join(templateRoot, ".operation-receipts", "device-imports", profileFilename),
+      "utf8",
+    );
+    const templateReceipt = portableDeviceImportReceiptSchema.parse(
+      JSON.parse(templateReceiptText) as unknown,
+    );
+    const binding = portableDeviceImportBindingSchema.parse({
+      schemaVersion: "hpi-device-import-binding.v1",
+      operationId: templateReceipt.operationId,
+      operationFingerprint: templateReceipt.operationFingerprint,
+      profileId: templateReceipt.profileId,
+      projectPolicyFingerprint: templateReceipt.projectPolicyFingerprint,
+      archiveId: templateReceipt.archiveId,
+      artifactFingerprint: templateReceipt.artifactFingerprint,
+      runId: templateReceipt.runId,
+      planRevisionId: templateReceipt.planRevisionId,
+      sourceFingerprint: templateReceipt.sourceFingerprint,
+      archivedRunOutcome: templateReceipt.archivedRunOutcome,
+    });
+    const boundaries = [
+      "BEFORE_TEMP_WRITE",
+      "AFTER_TEMP_WRITE",
+      "AFTER_TEMP_SYNC",
+      "AFTER_PUBLISH",
+    ] as const;
+
+    for (const target of ["INTENT", "RECEIPT"] as const) {
+      for (const boundary of boundaries) {
+        const stateRoot = join(root, `${target.toLowerCase()}-${boundary.toLowerCase()}`);
+        const intentRoot = join(stateRoot, ".operation-receipts", "device-import-intents");
+        const receiptRoot = join(stateRoot, ".operation-receipts", "device-imports");
+        if (target === "RECEIPT") {
+          await mkdir(intentRoot, { recursive: true });
+          await writeFile(join(intentRoot, profileFilename), templateIntent, { flag: "wx" });
+        }
+        const targetRoot = target === "INTENT" ? intentRoot : receiptRoot;
+        await leaveInterruptedAtomicWrite({
+          boundary,
+          content: target === "INTENT" ? templateIntent : templateReceiptText,
+          directory: targetRoot,
+          filename: profileFilename,
+        });
+
+        const createReceipt = vi.fn(() => Promise.resolve(templateReceipt));
+        const resolution = await new FilePortableDeviceImportReceiptStore({ stateRoot }).recordOnce(
+          binding,
+          createReceipt,
+        );
+        expect(resolution.receipt).toEqual(templateReceipt);
+        const publishedBeforeTermination = target === "RECEIPT" && boundary === "AFTER_PUBLISH";
+        expect(resolution.replayed).toBe(publishedBeforeTermination);
+        expect(createReceipt).toHaveBeenCalledTimes(publishedBeforeTermination ? 0 : 1);
+        for (const directory of [intentRoot, receiptRoot]) {
+          const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return [];
+            throw error;
+          });
+          expect(entries.filter((entry) => entry.startsWith(".pending-"))).toEqual([]);
+        }
+      }
+    }
   });
 
   it("rejects legacy or mismatched policy clone results", async () => {

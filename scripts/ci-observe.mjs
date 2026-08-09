@@ -47,6 +47,13 @@ const CONCLUSIONS = new Set([
   "timed_out",
 ]);
 
+/** @param {unknown} value @returns {string | null} */
+function normalizeConclusion(value) {
+  if (value === null || value === "") return null;
+  if (typeof value === "string" && CONCLUSIONS.has(value)) return value;
+  throw new ObserverBlockedError("CI_RUN_RESPONSE_INVALID");
+}
+
 class ObserverBlockedError extends Error {
   /** @param {string} reason */
   constructor(reason) {
@@ -189,13 +196,12 @@ function isRecord(value) {
 function parseRunSnapshot(value) {
   if (!isRecord(value)) throw new ObserverBlockedError("CI_RUN_RESPONSE_INVALID");
   const status = value["status"];
-  const conclusion = value["conclusion"];
+  const conclusion = normalizeConclusion(value["conclusion"]);
   const headSha = value["headSha"];
   const jobs = value["jobs"];
   if (
     typeof status !== "string" ||
     !RUN_STATUSES.has(status) ||
-    (conclusion !== null && (typeof conclusion !== "string" || !CONCLUSIONS.has(conclusion))) ||
     typeof headSha !== "string" ||
     !/^[a-f0-9]{40}$/u.test(headSha) ||
     !Array.isArray(jobs) ||
@@ -208,14 +214,12 @@ function parseRunSnapshot(value) {
     if (!isRecord(job)) throw new ObserverBlockedError("CI_RUN_RESPONSE_INVALID");
     const name = job["name"];
     const jobStatus = job["status"];
-    const jobConclusion = job["conclusion"];
+    const jobConclusion = normalizeConclusion(job["conclusion"]);
     if (
       typeof name !== "string" ||
       name.trim().length === 0 ||
       typeof jobStatus !== "string" ||
-      !JOB_STATUSES.has(jobStatus) ||
-      (jobConclusion !== null &&
-        (typeof jobConclusion !== "string" || !CONCLUSIONS.has(jobConclusion)))
+      !JOB_STATUSES.has(jobStatus)
     ) {
       throw new ObserverBlockedError("CI_RUN_RESPONSE_INVALID");
     }

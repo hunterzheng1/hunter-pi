@@ -77,6 +77,14 @@ describe("CI control-plane observer", () => {
     expect(parseRunSnapshot(valid)).toEqual(valid);
     expect(completedRunSucceeded(valid)).toBe(true);
     expect(
+      parseRunSnapshot({
+        ...valid,
+        status: "in_progress",
+        conclusion: "",
+        jobs: [{ name: "quality", status: "in_progress", conclusion: "" }],
+      }),
+    ).toMatchObject({ conclusion: null, jobs: [{ conclusion: null }] });
+    expect(
       completedRunSucceeded({
         ...valid,
         jobs: [{ name: "quality", status: "completed", conclusion: "skipped" }],

@@ -17,6 +17,23 @@
 - five frozen broken/malicious plugin fixtures, two qualified update/rollback cycles, and the privacy/storage gates;
 - exact Windows and Ubuntu CI for the final source/artifact identity.
 
+## Production capture finalizer (2026-08-09)
+
+The package exports `PilotEvidenceCaptureFinalizer` and its provider-neutral runtime type, but the constructor
+accepts only a module-private capability issued by the product runtime; the capability factory is not exported
+from the package entry. A production pilot runtime supplies one complete Evidence draft without
+`captureProvenance`; the finalizer runs only on Windows, consumes the collector once, adds the sole
+`LIVE_WINDOWS_PILOT` provenance, validates the exact frozen plan fingerprint, Operator scope, and machine
+identity, rejects unknown or provenance-bearing fields, and returns the opaque capture authority accepted by
+`FilePilotArchiveStore`. It redacts collector failures to fixed messages and deep-freezes the resulting
+Evidence. The integration test writes the returned authority through the real Archive store, while negative
+tests cover replay, plan/scope drift, self-selected provenance, and credential/path-shaped extras.
+
+This is a production boundary, not a pilot result: the runtime collector still has to be backed by the real
+Windows Pi/Workflow observations, and no repository, Provider credential, or Provider request was used here.
+The real ten-task pilot and its immutable aggregate Archive remain `NOT_RUN / NOT_PROVEN` until that separately
+authorized runtime produces the required observations and exact hosted receipts.
+
 ## Current disposition
 
 The evaluator, explicit plan compiler, safe compile/preflight/evaluate CLI, and policy tests are implemented and pass. The disposable-fixture entry point now fails closed unless `--allow-provider-request` is supplied and the operator confirms the declared Provider scope. PR #32's exact head `7cc85b5b190c44ebc3eb737b08dd4078ded8e7b2` passed run [`31082027466`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31082027466), and merge `e886b48a617d6df8f63bbaae9cadcc0ea0f66dba` passed exact main run [`31083253052`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31083253052) across Windows, Ubuntu, containment, and Pi Evidence jobs. Documentation merge `8324ca74604472468bc2c42c5e924663e57a61a4` retained the first Task 7 containment failures in main run [`31085901324`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31085901324); the failed Windows/Ubuntu jobs were rerun without source changes and passed, followed by the Task 7 Evidence aggregation. The real ten-task pilot is still **NOT_RUN** because no repository targets, Provider credentials, or operator authorization for a real request were supplied or safely inferable. This is an evidence boundary, not a product pass. The product must remain `NOT_PROVEN` for daily-use acceptance until a dated pilot Archive and its real-use observations exist.

@@ -18,6 +18,7 @@ The first prerequisite slice makes Provider accounting trustworthy before the se
 - cost is conservatively rounded up to integer minor units after aggregation;
 - truncated, incomplete, missing, malformed, inconsistent, or overflowing usage is `NOT_PROVEN`, never inferred as zero;
 - `hpi-managed-change.v3` requires exact usage for every Agent Attempt, cross-checks its Provider and resource-accounting totals, adds finite per-change token and cost budgets, blocks an unaccounted or unreserved fixback request, and returns `STOP` when usage is missing or over budget. The strict v2 parser remains available for historical replay.
+- `hpi-pilot-evidence.v6` accounts the three required raw-Pi comparator requests, tokens, and Provider-reported cost in the same frozen pilot authorization budget as Hunter-managed Runs; the earlier v5 hosted receipts remain historical rather than being relabeled.
 
 ## Remaining capture work
 

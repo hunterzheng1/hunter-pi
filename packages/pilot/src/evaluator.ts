@@ -358,13 +358,21 @@ export class PilotEvaluator {
     }
     const frozenProviderRequestPolicy =
       plan?.operatorScope.providerRequestPolicy ?? evidence.operatorScope.providerRequestPolicy;
-    const providerUsage = evidence.runArchives.reduce(
+    const managedProviderUsage = evidence.runArchives.reduce(
       (usage, run) => ({
         requests: usage.requests + run.providerRequestCount,
         tokens: usage.tokens + run.providerTokenCount,
         costMinor: usage.costMinor + run.providerCostMinor,
       }),
       { requests: 0, tokens: 0, costMinor: 0 },
+    );
+    const providerUsage = evidence.pairedComparators.reduce(
+      (usage, comparator) => ({
+        requests: usage.requests + comparator.rawPiProviderRequestCount,
+        tokens: usage.tokens + comparator.rawPiProviderTokenCount,
+        costMinor: usage.costMinor + comparator.rawPiProviderCostMinor,
+      }),
+      managedProviderUsage,
     );
     const zeroToleranceFailures: string[] = [];
     if (

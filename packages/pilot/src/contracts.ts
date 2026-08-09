@@ -524,6 +524,9 @@ export const pilotComparatorSchema = z
     hunterManualInterventions: nonnegativeIntegerSchema,
     hunterAdditionalOverheadMinutes: nonnegativeNumberSchema,
     containedFalseCompletion: z.boolean(),
+    rawPiProviderRequestCount: positiveIntegerSchema,
+    rawPiProviderTokenCount: nonnegativeIntegerSchema,
+    rawPiProviderCostMinor: nonnegativeIntegerSchema,
   })
   .superRefine((comparator, context) => {
     if (comparator.rawPiCapturedFactCount > comparator.applicableFactCount) {
@@ -556,7 +559,7 @@ export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
 export const pilotEvidenceSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-evidence.v5"),
+    schemaVersion: z.literal("hpi-pilot-evidence.v6"),
     captureProvenance: pilotCaptureProvenanceSchema,
     planFingerprint: fingerprintSchema,
     operatorScope: pilotOperatorScopeSchema,

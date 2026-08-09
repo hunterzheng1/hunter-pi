@@ -16,7 +16,11 @@ import {
   type RealManagedChangeTarget,
 } from "@hunter-pi/managed-change";
 import { Task6PiEngineHost, type PiProviderUsage } from "@hunter-pi/pi-host";
+import { FileRunArchiveStore, FileWorkflowEventStore } from "@hunter-pi/evidence";
+import { DurableWorkflowKernel } from "@hunter-pi/workflow-kernel";
+import { FilePilotCaptureCoordinator, PilotPlanCompiler } from "@hunter-pi/pilot";
 import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
+import { completePilotPlanInput } from "./support/task12-plan-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
 const cleanupRoots: string[] = [];
@@ -267,6 +271,159 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("persists a real run through the durable workflow and immutable Task 9 Archive", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const stateRoot = join(root, "managed-run-state");
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Archive the real-project result",
+      goal: "Change result.txt so the declared project check passes.",
+      nonGoals: ["Commit, push, publish, or deploy"],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: {
+        label: "Project result check",
+        executable: "node",
+        argv: ["verify.mjs"],
+      },
+      target,
+    });
+
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      now: () => "2026-08-06T00:00:10.000Z",
+      durableArchive: {
+        stateRoot,
+        archiveId: "archive_real-pilot-01",
+        distributionReleaseId: "release_hunter-pi-0.1.0",
+        operationId: "op_real-pilot-archive-01",
+      },
+    });
+
+    const eventStore = new FileWorkflowEventStore({ stateRoot: join(stateRoot, "workflow") });
+    const kernel = new DurableWorkflowKernel(eventStore);
+    const archiveStore = new FileRunArchiveStore({
+      stateRoot: join(stateRoot, "archive"),
+      kernel,
+    });
+    const manifest = await archiveStore.read("archive_real-pilot-01");
+    expect(manifest).toMatchObject({
+      schemaVersion: "hpi-archive.v1",
+      archiveId: "archive_real-pilot-01",
+      runId: artifact.projection.run.runId,
+      outcome: "READY",
+      archiveStatus: "ARCHIVED",
+      sourceFingerprint: artifact.repository.sourceFingerprint,
+    });
+    expect((await kernel.project(artifact.projection.run.runId)).run).toMatchObject({
+      archiveStatus: "ARCHIVED",
+      archiveId: "archive_real-pilot-01",
+    });
+    expect(await eventStore.read(artifact.projection.run.runId)).toHaveLength(
+      artifact.projection.eventCursor + 1,
+    );
+    const package_ = await archiveStore.readCanonicalPackage("archive_real-pilot-01");
+    expect(package_.projection.run.predecessorRunId).toBeUndefined();
+    const taskReceiptEvidence = package_.evidence.find(
+      (evidence) => evidence.evidenceId === "evidence_real-task-receipt",
+    );
+    expect(taskReceiptEvidence?.capture.capturedText).toBeDefined();
+    expect(JSON.parse(taskReceiptEvidence?.capture.capturedText ?? "null")).toMatchObject({
+      schemaVersion: "hpi-real-managed-change-task-receipt.v1",
+      runId: artifact.projection.run.runId,
+      repositoryFingerprint: target.repositoryFingerprint,
+      targetReferenceFingerprint: target.targetReferenceFingerprint,
+      sourceFingerprint: artifact.repository.sourceFingerprint,
+      mode: "MANAGED",
+      acceptanceCheckDefinitionFingerprints: [artifact.plan.checkDefinitionFingerprint],
+      terminalOutcome: "READY",
+      taskResult: "GO",
+      sourcePreserved: true,
+      rawSecretLeakage: false,
+      providerUsage: {
+        status: "PASS",
+        requestCount: 1,
+        tokenCount: 165,
+        costMinorUnits: 1,
+      },
+      reviewP0P1Count: 0,
+    });
+
+    const input = completePilotPlanInput();
+    const repositoryTargets = input.repositoryTargets.map((candidate) =>
+      candidate.targetId === target.targetId
+        ? {
+            ...candidate,
+            repositoryFingerprint: target.repositoryFingerprint,
+            sourceFingerprint: target.sourceFingerprint,
+            targetReferenceFingerprint: target.targetReferenceFingerprint,
+          }
+        : candidate,
+    );
+    const plan = new PilotPlanCompiler().compile({
+      ...input,
+      repositoryTargets,
+      acceptanceChecks: input.acceptanceChecks.map((check, index) =>
+        index === 0
+          ? { ...check, definitionFingerprint: artifact.plan.checkDefinitionFingerprint }
+          : check,
+      ),
+      tasks: input.tasks.map((task, index) =>
+        task.targetId === target.targetId
+          ? {
+              ...task,
+              sourceFingerprint: target.sourceFingerprint,
+              mode: index === 0 ? ("MANAGED" as const) : task.mode,
+            }
+          : task,
+      ),
+    });
+    const coordinator = new FilePilotCaptureCoordinator({
+      stateRoot: join(root, "pilot-capture"),
+      archiveStateRoot: join(root, "pilot-archive"),
+      managedRunStateRoot: stateRoot,
+      now: () => "2026-08-06T00:00:10.000Z",
+    });
+    await coordinator.open({
+      schemaVersion: "hpi-pilot-capture-open.v1",
+      sessionId: "pilot-real-managed-session",
+      archiveId: "pilot-real-managed-archive",
+      plan,
+    });
+    const taskCapture = await coordinator.recordManagedTask({
+      schemaVersion: "hpi-pilot-capture-managed-task.v1",
+      sessionId: "pilot-real-managed-session",
+      operationId: "capture-real-managed-task-01",
+      taskId: "pilot-task-01",
+      archiveIds: ["archive_real-pilot-01"],
+      metrics: {
+        applicableFactCount: 20,
+        capturedFactCount: 20,
+        manualInterventions: 1,
+        rawPiCapturedFactCount: 15,
+        rawPiManualInterventions: 3,
+      },
+    });
+    expect(taskCapture).toMatchObject({
+      outcome: "RECORDED",
+      status: {
+        counts: { taskChains: 1, runArchives: 1 },
+        providerUsage: { requests: 1, tokens: 165, costMinor: 1 },
+      },
+    });
   });
 
   it("returns STOP when the Engine cannot prove exact Provider usage", async () => {

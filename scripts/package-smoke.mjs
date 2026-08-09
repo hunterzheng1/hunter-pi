@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -11,30 +11,29 @@ import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 import { packCliArtifact } from "./cli-package.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
-const packageNames = [
-  "@hunter-pi/domain",
-  "@hunter-pi/execution",
-  "@hunter-pi/evidence",
-  "@hunter-pi/engine-contracts",
-  "@hunter-pi/pi-host",
-  "@hunter-pi/pilot",
-  "@hunter-pi/plugin-manager",
-  "@hunter-pi/updater",
-  "@hunter-pi/workflow-kernel",
-  "@hunter-pi/testkit",
-];
-const packageDirectories = [
-  "domain",
-  "execution",
-  "evidence",
-  "engine-contracts",
-  "pi-host",
-  "pilot",
-  "plugin-manager",
-  "updater",
-  "workflow-kernel",
-  "testkit",
-];
+const packageManifestSchema = z.looseObject({
+  name: z.string().regex(/^@hunter-pi\/[a-z0-9-]+$/u),
+  version: z.literal("0.0.0"),
+});
+const packageDirectories = (
+  await readdir(join(repositoryRoot, "packages"), { withFileTypes: true })
+)
+  .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+  .map((entry) => entry.name)
+  .toSorted();
+const packageNames = await Promise.all(
+  packageDirectories.map(async (packageDirectory) => {
+    const manifest = packageManifestSchema.parse(
+      JSON.parse(
+        await readFile(join(repositoryRoot, "packages", packageDirectory, "package.json"), "utf8"),
+      ),
+    );
+    return manifest.name;
+  }),
+);
+if (packageDirectories.length === 0 || new Set(packageNames).size !== packageNames.length) {
+  throw new Error("Package smoke workspace discovery is empty or contains duplicate identities.");
+}
 
 /** @type {(text: string) => unknown} */
 const parseJson = JSON.parse;

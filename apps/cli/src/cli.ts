@@ -75,15 +75,19 @@ import {
   createPilotRepositoryTargetBlockedReceipt,
   createPilotRepositoryTargetReceipt,
   FilePilotArchiveStore,
+  FilePilotCaptureCoordinator,
+  PilotCaptureCoordinatorError,
   PilotEvaluator,
   PilotPlanCompiler,
+  pilotCaptureObservationSchema,
+  pilotExecutionPlanSchema,
   pilotTargetIdSchema,
   type PilotPlanInput,
   type PilotRepositoryTargetReceipt,
   type PilotPreflightFailure,
   type TrustedPilotArchive,
 } from "@hunter-pi/pilot";
-import { operationIdSchema } from "@hunter-pi/domain";
+import { archiveIdSchema, operationIdSchema } from "@hunter-pi/domain";
 import {
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
@@ -768,7 +772,7 @@ function assertChangeOptions(arguments_: readonly string[]): void {
     if (
       option === undefined ||
       value === undefined ||
-      !new Set(["--repo", "--plan"]).has(option) ||
+      !new Set(["--repo", "--plan", "--run-archive-id"]).has(option) ||
       seen.has(option) ||
       value.startsWith("-")
     ) {
@@ -777,7 +781,13 @@ function assertChangeOptions(arguments_: readonly string[]): void {
     seen.add(option);
     index += 2;
   }
-  if (!jsonSeen || seen.size !== 2) throw new HpiCliUsageError();
+  if (!jsonSeen || !seen.has("--repo") || !seen.has("--plan") || seen.size > 3) {
+    throw new HpiCliUsageError();
+  }
+  const runArchiveId = optionValue(arguments_, "--run-archive-id");
+  if (runArchiveId !== undefined && !archiveIdSchema.safeParse(runArchiveId).success) {
+    throw new HpiCliUsageError();
+  }
 }
 
 function assertUpdateOptions(arguments_: readonly string[]): void {
@@ -861,6 +871,30 @@ function validateCliArguments(arguments_: readonly string[]): void {
   if (command === "pilot" && arguments_[1] === "compile") {
     assertPilotJsonOptions(arguments_.slice(2), new Set(["--input"]));
     return;
+  }
+  if (command === "pilot" && arguments_[1] === "capture") {
+    const action = arguments_[2];
+    const options = arguments_.slice(3);
+    if (action === "open") {
+      assertPilotJsonOptions(options, new Set(["--plan", "--session-id", "--archive-id"]));
+      return;
+    }
+    if (action === "record") {
+      assertPilotJsonOptions(options, new Set(["--session-id", "--operation-id", "--observation"]));
+      return;
+    }
+    if (action === "managed-task") {
+      assertPilotJsonOptions(
+        options,
+        new Set(["--session-id", "--operation-id", "--task-id", "--archive-ids", "--metrics"]),
+      );
+      return;
+    }
+    if (action === "status" || action === "finalize") {
+      assertPilotJsonOptions(options, new Set(["--session-id"]));
+      return;
+    }
+    throw new HpiCliUsageError();
   }
   if (command === "pilot" && arguments_[1] === "target") {
     assertPilotTargetOptions(arguments_.slice(2));
@@ -1532,6 +1566,7 @@ async function realChangeCommand(
       repositoryBranch: repository.branch,
     }),
   );
+  const runArchiveId = optionValue(arguments_, "--run-archive-id");
   const artifact = await runRealManagedChange({
     repository: repository.root,
     request: parsedPlan.data,
@@ -1543,6 +1578,19 @@ async function realChangeCommand(
     environmentFingerprint,
     writerLeaseManager,
     writerLeaseOwnerFingerprint,
+    ...(runArchiveId === undefined
+      ? {}
+      : {
+          durableArchive: {
+            stateRoot: join(paths.root, "pilot", "managed-runs"),
+            archiveId: runArchiveId,
+            distributionReleaseId: `release_hunter-pi-${version.productVersion}`,
+            operationId: `op_real-archive-${sha256(runArchiveId).slice(
+              "sha256:".length,
+              "sha256:".length + 24,
+            )}`,
+          },
+        }),
     now: dependencies.now,
   });
   line(dependencies.io, JSON.stringify(artifact));
@@ -2118,7 +2166,10 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi update apply --candidate <file> --artifact <file> --json");
   line(io, "       hpi update rollback <release-id> --json");
   line(io, "       hpi smoke tui");
-  line(io, "       hpi change --repo <directory> --plan <file> --json --allow-provider-request");
+  line(
+    io,
+    "       hpi change --repo <directory> --plan <file> [--run-archive-id <id>] --json --allow-provider-request",
+  );
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin list | plugin doctor | plugin disable <id> | plugin remove <id>");
   line(
@@ -2139,6 +2190,20 @@ function printHelp(io: HpiCliIo): void {
   );
   line(io, "       hpi pilot compile --input <file> --json");
   line(io, "       hpi pilot target --repo <directory> --target-id <id> --json");
+  line(
+    io,
+    "       hpi pilot capture open --plan <file> --session-id <id> --archive-id <id> --json",
+  );
+  line(
+    io,
+    "       hpi pilot capture record --session-id <id> --operation-id <id> --observation <file> --json",
+  );
+  line(
+    io,
+    "       hpi pilot capture managed-task --session-id <id> --operation-id <id> --task-id <id> --archive-ids <id[,id]> --metrics <file> --json",
+  );
+  line(io, "       hpi pilot capture status --session-id <id> --json");
+  line(io, "       hpi pilot capture finalize --session-id <id> --json");
   line(io, "       hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json");
   line(io, "       hpi pilot preflight --plan <file> --json");
 }
@@ -2240,6 +2305,209 @@ async function pilotEvaluateCommand(
   return decision.outcome === "GO" ? 0 : 2;
 }
 
+function pilotCaptureBlocked(
+  dependencies: HpiCliDependencies,
+  code: string,
+  nextAction: string,
+): number {
+  line(
+    dependencies.io,
+    JSON.stringify({
+      schemaVersion: "hpi-pilot-capture-command.v1",
+      status: "BLOCKED",
+      code,
+      nextAction,
+    }),
+  );
+  return 2;
+}
+
+function pilotCaptureNextAction(error: PilotCaptureCoordinatorError): string {
+  switch (error.code) {
+    case "SESSION_NOT_FOUND":
+      return "Open the intended capture session with its exact frozen plan.";
+    case "SESSION_CONFLICT":
+      return "Use the exact plan and Archive identity already bound to this session.";
+    case "SESSION_CORRUPT":
+      return "Stop using this session and preserve its state for integrity review.";
+    case "OPERATION_CONFLICT":
+    case "FACT_CONFLICT":
+      return "Use a new identity only for a genuinely new observation; never rewrite prior facts.";
+    case "SESSION_SEALED":
+      return "Do not append observations after finalization has started.";
+    case "OBSERVATION_INVALID":
+      return "Provide one strict plan-bound capture observation without paths or credentials.";
+    case "PROVIDER_BUDGET_EXCEEDED":
+      return "Stop Provider work; the frozen pilot authorization budget is exhausted.";
+    case "INCOMPLETE":
+      return "Record every next action reported by capture status before finalizing.";
+    case "WINDOWS_REQUIRED":
+      return "Retry finalization on the frozen Windows pilot machine.";
+    case "ARCHIVE_MISMATCH":
+      return "Preserve both stores and stop; the committed Archive binding does not match.";
+    case "STORE_FAILURE":
+      return "Retry once after checking local storage health; preserve state if it repeats.";
+  }
+}
+
+async function pilotCaptureCommand(
+  arguments_: readonly string[],
+  dependencies: HpiCliDependencies,
+): Promise<number> {
+  const action = arguments_[0];
+  const options = arguments_.slice(1);
+  const paths = resolveHpiPaths({
+    env: dependencies.environment,
+    homeDirectory: dependencies.homeDirectory,
+  });
+  const coordinator = new FilePilotCaptureCoordinator({
+    stateRoot: join(paths.root, "pilot", "capture"),
+    archiveStateRoot: join(paths.root, "pilot", "archive-store"),
+    managedRunStateRoot: join(paths.root, "pilot", "managed-runs"),
+    now: dependencies.now,
+  });
+  try {
+    if (action === "open") {
+      const planPath = optionValue(options, "--plan");
+      const sessionId = optionValue(options, "--session-id");
+      const archiveId = optionValue(options, "--archive-id");
+      if (planPath === undefined || sessionId === undefined || archiveId === undefined) {
+        throw new HpiCliUsageError();
+      }
+      const planFile = await readPilotJsonFile(planPath, dependencies);
+      if (planFile.failure !== undefined) {
+        return pilotCaptureBlocked(
+          dependencies,
+          `PLAN_${planFile.failure}`,
+          "Provide one readable strict frozen pilot execution-plan JSON file.",
+        );
+      }
+      const plan = pilotExecutionPlanSchema.safeParse(planFile.value);
+      if (!plan.success) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PLAN_INVALID",
+          "Compile and preflight one strict frozen pilot execution plan.",
+        );
+      }
+      const status = await coordinator.open({
+        schemaVersion: "hpi-pilot-capture-open.v1",
+        sessionId,
+        archiveId,
+        plan: plan.data,
+      });
+      line(dependencies.io, JSON.stringify(status));
+      return 0;
+    }
+    const sessionId = optionValue(options, "--session-id");
+    if (sessionId === undefined) throw new HpiCliUsageError();
+    if (action === "status") {
+      line(dependencies.io, JSON.stringify(await coordinator.status(sessionId)));
+      return 0;
+    }
+    if (action === "record") {
+      const operationId = optionValue(options, "--operation-id");
+      const observationPath = optionValue(options, "--observation");
+      if (operationId === undefined || observationPath === undefined) {
+        throw new HpiCliUsageError();
+      }
+      const observationFile = await readPilotJsonFile(observationPath, dependencies);
+      if (observationFile.failure !== undefined) {
+        return pilotCaptureBlocked(
+          dependencies,
+          `OBSERVATION_${observationFile.failure}`,
+          "Provide one readable strict capture-observation JSON file.",
+        );
+      }
+      const observation = pilotCaptureObservationSchema.safeParse(observationFile.value);
+      if (!observation.success) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "OBSERVATION_INVALID",
+          "Provide one strict plan-bound capture observation without paths or credentials.",
+        );
+      }
+      if (observation.data.kind === "TASK_CHAIN" || observation.data.kind === "RAW_PI_COMPARATOR") {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PRODUCT_CAPTURE_REQUIRED",
+          "Record task and raw Pi facts through their product-derived capture commands.",
+        );
+      }
+      const receipt = await coordinator.record({
+        schemaVersion: "hpi-pilot-capture-record.v1",
+        sessionId,
+        operationId,
+        observation: observation.data,
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return 0;
+    }
+    if (action === "managed-task") {
+      const operationId = optionValue(options, "--operation-id");
+      const taskId = optionValue(options, "--task-id");
+      const archiveIdsValue = optionValue(options, "--archive-ids");
+      const metricsPath = optionValue(options, "--metrics");
+      if (
+        operationId === undefined ||
+        taskId === undefined ||
+        archiveIdsValue === undefined ||
+        metricsPath === undefined
+      ) {
+        throw new HpiCliUsageError();
+      }
+      const archiveIds = archiveIdsValue.split(",");
+      if (archiveIds.some((archiveId) => !archiveIdSchema.safeParse(archiveId).success)) {
+        throw new HpiCliUsageError();
+      }
+      const metrics = await readPilotJsonFile(metricsPath, dependencies);
+      if (metrics.failure !== undefined) {
+        return pilotCaptureBlocked(
+          dependencies,
+          `METRICS_${metrics.failure}`,
+          "Provide one readable strict task-metrics JSON file.",
+        );
+      }
+      const receipt = await coordinator.recordManagedTask({
+        schemaVersion: "hpi-pilot-capture-managed-task.v1",
+        sessionId,
+        operationId,
+        taskId,
+        archiveIds,
+        metrics: metrics.value,
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return 0;
+    }
+    if (action === "finalize") {
+      const trusted = await coordinator.finalize(sessionId);
+      line(
+        dependencies.io,
+        JSON.stringify({
+          schemaVersion: "hpi-pilot-capture-command.v1",
+          status: "ARCHIVED",
+          archiveId: trusted.archive.archiveId,
+          planFingerprint: trusted.archive.planFingerprint,
+          evidenceFingerprint: trusted.archive.evidenceFingerprint,
+          archiveFingerprint: trusted.archive.archiveFingerprint,
+        }),
+      );
+      return 0;
+    }
+    throw new HpiCliUsageError();
+  } catch (error) {
+    if (error instanceof HpiCliUsageError) throw error;
+    if (error instanceof PilotCaptureCoordinatorError) {
+      return pilotCaptureBlocked(dependencies, error.code, pilotCaptureNextAction(error));
+    }
+    return pilotCaptureBlocked(
+      dependencies,
+      "STORE_FAILURE",
+      "Retry once after checking local storage health; preserve state if it repeats.",
+    );
+  }
+}
+
 export async function runHpiCli(
   arguments_: readonly string[],
   providedDependencies?: HpiCliDependencies,
@@ -2267,6 +2535,9 @@ export async function runHpiCli(
     }
     if (command === "pilot" && arguments_[1] === "compile") {
       return await pilotCompileCommand(arguments_.slice(2), dependencies);
+    }
+    if (command === "pilot" && arguments_[1] === "capture") {
+      return await pilotCaptureCommand(arguments_.slice(2), dependencies);
     }
     if (command === "pilot" && arguments_[1] === "evaluate") {
       return await pilotEvaluateCommand(arguments_.slice(2), dependencies);

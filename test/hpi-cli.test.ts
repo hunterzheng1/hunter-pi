@@ -102,6 +102,12 @@ function createIo(confirmed: boolean): CapturedIo {
   };
 }
 
+function lastStdoutJson(io: CapturedIo): Record<string, unknown> {
+  const output = io.stdout.at(-1);
+  if (output === undefined) throw new Error("CLI fixture did not emit JSON");
+  return JSON.parse(output) as Record<string, unknown>;
+}
+
 async function createDependencies(
   options: {
     readonly confirmed?: boolean;
@@ -210,6 +216,12 @@ describe("hpi command", () => {
       expect(io.stdout.join("\n")).toContain("--allow-provider-request");
       expect(io.stdout.join("\n")).toContain("hpi pilot preflight --plan <file> --json");
       expect(io.stdout.join("\n")).toContain("hpi pilot compile --input <file> --json");
+      expect(io.stdout.join("\n")).toContain(
+        "hpi pilot capture open --plan <file> --session-id <id> --archive-id <id> --json",
+      );
+      expect(io.stdout.join("\n")).toContain(
+        "hpi pilot capture record --session-id <id> --operation-id <id> --observation <file> --json",
+      );
       expect(io.stdout.join("\n")).toContain(
         "hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json",
       );
@@ -353,6 +365,225 @@ describe("hpi command", () => {
     expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v2" });
     expect(plan["planFingerprint"]).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan)).not.toContain(root);
+  });
+
+  it("opens, resumes, records, and reports a durable path-free pilot capture session", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan.json");
+    const observationPath = join(root, "pilot-installation-observation.json");
+    await writeFile(planPath, JSON.stringify(completePilotExecutionPlan()), "utf8");
+    await writeFile(
+      observationPath,
+      JSON.stringify({
+        kind: "INSTALLATION",
+        cleanProfileFingerprint: `sha256:${"e".repeat(64)}`,
+      }),
+      "utf8",
+    );
+
+    const openArguments = [
+      "pilot",
+      "capture",
+      "open",
+      "--plan",
+      planPath,
+      "--session-id",
+      "daily-pilot-session",
+      "--archive-id",
+      "daily-pilot-archive",
+      "--json",
+    ];
+    expect(await runHpiCli(openArguments, dependencies)).toBe(0);
+    expect(lastStdoutJson(io)).toMatchObject({
+      schemaVersion: "hpi-pilot-capture-status.v1",
+      state: "COLLECTING",
+      counts: { installation: 0, taskChains: 0 },
+    });
+    expect(await runHpiCli(openArguments, dependencies)).toBe(0);
+
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "record",
+          "--session-id",
+          "daily-pilot-session",
+          "--operation-id",
+          "record-installation",
+          "--observation",
+          observationPath,
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(lastStdoutJson(io)).toMatchObject({
+      schemaVersion: "hpi-pilot-capture-record-receipt.v1",
+      outcome: "RECORDED",
+      status: { counts: { installation: 1 } },
+    });
+
+    expect(
+      await runHpiCli(
+        ["pilot", "capture", "status", "--session-id", "daily-pilot-session", "--json"],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(lastStdoutJson(io)).toMatchObject({
+      state: "COLLECTING",
+      counts: { installation: 1 },
+    });
+    expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
+  });
+
+  it("requires a canonical product Archive instead of accepting a caller-authored task chain", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const plan = completePilotExecutionPlan();
+    const evidence = completePilotEvidence(plan);
+    const task = evidence.taskResults[0];
+    if (task === undefined) throw new Error("pilot task fixture missing");
+    const planPath = join(root, "pilot-plan.json");
+    const observationPath = join(root, "pilot-task-observation.json");
+    await writeFile(planPath, JSON.stringify(plan), "utf8");
+    await writeFile(
+      observationPath,
+      JSON.stringify({
+        kind: "TASK_CHAIN",
+        taskId: task.taskId,
+        terminalOutcome: task.terminalOutcome,
+        sourcePreserved: task.sourcePreserved,
+        rawSecretLeakage: task.rawSecretLeakage,
+        applicableFactCount: task.applicableFactCount,
+        capturedFactCount: task.capturedFactCount,
+        manualInterventions: task.manualInterventions,
+        hunterOverheadMinutes: task.hunterOverheadMinutes,
+        rawPiCapturedFactCount: task.rawPiCapturedFactCount,
+        rawPiManualInterventions: task.rawPiManualInterventions,
+        runs: evidence.runArchives
+          .filter((run) => run.taskId === task.taskId)
+          .map((run) => ({
+            runId: run.runId,
+            replacementOfRunId: run.replacementOfRunId,
+            archiveId: run.archiveId,
+            archiveFingerprint: run.archiveFingerprint,
+            terminalOutcome: run.terminalOutcome,
+            providerRequestCount: run.providerRequestCount,
+            providerTokenCount: run.providerTokenCount,
+            providerCostMinor: run.providerCostMinor,
+          })),
+      }),
+      "utf8",
+    );
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "open",
+          "--plan",
+          planPath,
+          "--session-id",
+          "daily-pilot-session",
+          "--archive-id",
+          "daily-pilot-archive",
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "record",
+          "--session-id",
+          "daily-pilot-session",
+          "--operation-id",
+          "forged-task-chain",
+          "--observation",
+          observationPath,
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(2);
+    expect(lastStdoutJson(io)).toMatchObject({
+      schemaVersion: "hpi-pilot-capture-command.v1",
+      status: "BLOCKED",
+      code: "PRODUCT_CAPTURE_REQUIRED",
+    });
+    expect(
+      await runHpiCli(
+        ["pilot", "capture", "status", "--session-id", "daily-pilot-session", "--json"],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(lastStdoutJson(io)).toMatchObject({ counts: { taskChains: 0 } });
+  });
+
+  it("fails closed on invalid capture input without echoing paths or secret-shaped values", async () => {
+    const { dependencies, io, root } = await createDependencies();
+    const planPath = join(root, "pilot-plan.json");
+    const observationPath = join(root, "private-observation.json");
+    await writeFile(planPath, JSON.stringify(completePilotExecutionPlan()), "utf8");
+    await writeFile(
+      observationPath,
+      JSON.stringify({ credential: "token=do-not-echo", privatePath: root }),
+      "utf8",
+    );
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "open",
+          "--plan",
+          planPath,
+          "--session-id",
+          "daily-pilot-session",
+          "--archive-id",
+          "daily-pilot-archive",
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "record",
+          "--session-id",
+          "daily-pilot-session",
+          "--operation-id",
+          "record-invalid",
+          "--observation",
+          observationPath,
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(2);
+    expect(lastStdoutJson(io)).toMatchObject({
+      schemaVersion: "hpi-pilot-capture-command.v1",
+      status: "BLOCKED",
+      code: "OBSERVATION_INVALID",
+    });
+    const output = `${io.stdout.join("")} ${io.stderr.join("")}`;
+    expect(output).not.toContain(root);
+    expect(output).not.toContain("do-not-echo");
+
+    expect(
+      await runHpiCli(
+        ["pilot", "capture", "finalize", "--session-id", "daily-pilot-session", "--json"],
+        dependencies,
+      ),
+    ).toBe(2);
+    expect(lastStdoutJson(io)).toMatchObject({ code: "INCOMPLETE", status: "BLOCKED" });
   });
 
   it("blocks pilot compilation without echoing unreadable or invalid input", async () => {
@@ -537,6 +768,34 @@ describe("hpi command", () => {
       ["--safe-mode", "unexpected"],
       ["pilot", "compile", "--input"],
       ["pilot", "evaluate", "--plan", "plan.json", "--json"],
+      ["pilot", "capture", "open", "--plan", "plan.json", "--json"],
+      ["pilot", "capture", "status", "--session-id", "session", "--session-id", "again", "--json"],
+      [
+        "pilot",
+        "capture",
+        "managed-task",
+        "--session-id",
+        "session",
+        "--operation-id",
+        "operation",
+        "--task-id",
+        "task",
+        "--archive-ids",
+        "not-an-archive-id",
+        "--metrics",
+        "metrics.json",
+        "--json",
+      ],
+      [
+        "change",
+        "--repo",
+        "repository",
+        "--plan",
+        "plan.json",
+        "--run-archive-id",
+        "not-an-archive-id",
+        "--json",
+      ],
     ]) {
       let launched = false;
       const { dependencies, io } = await createDependencies({

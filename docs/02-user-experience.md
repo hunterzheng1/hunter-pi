@@ -110,6 +110,26 @@ The user sees:
 
 `READY` means the change met its declared local acceptance checks. It does not mean pushed, merged, released, deployed, or accepted by another person.
 
+## Daily-use pilot capture
+
+The Task 12 operator first opens one durable session against an already compiled and preflighted execution plan:
+
+```powershell
+hpi pilot capture open --plan .\pilot-plan.json --session-id pilot-2026-08 --archive-id pilot-archive-2026-08 --json
+hpi pilot capture status --session-id pilot-2026-08 --json
+```
+
+For a pilot Managed task, the change command is given a unique Run Archive identity:
+
+```powershell
+hpi change --repo D:\Pilot\sample --plan .\task-01.json --run-archive-id archive-task-01 --json --allow-provider-request
+hpi pilot capture managed-task --session-id pilot-2026-08 --operation-id capture-task-01 --task-id task-01 --archive-ids archive-task-01 --metrics .\task-01-metrics.json --json
+```
+
+The first command writes the Workflow Kernel history and strict product task receipt into the canonical Task 9 Archive. The second replays that Archive and derives the repository, source, target reference, checks, outcome, Provider usage, Run identity, and Archive fingerprint; the metrics file may provide only the predeclared fact-coverage and intervention counts. A replacement chain lists Archive identities in order, separated by commas. The generic `capture record` command is reserved for explicit operator/runtime receipts such as installation or performance and refuses caller-authored task chains or raw-Pi comparator results; those product facts require an internal capability that is not exported from the package entry. `capture finalize` remains blocked until status reports every frozen observation present, and it runs only on the pilot Windows machine.
+
+These commands are an acceptance harness, not a shortcut to a product claim. Quick-task and raw-Pi comparator results require their own product-derived capture paths; until those paths and the complete real Archive exist, status remains `NOT_PROVEN`.
+
 ## Failure and recovery
 
 If an Agent returns without satisfying output contracts:

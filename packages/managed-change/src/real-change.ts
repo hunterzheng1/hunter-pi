@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -48,14 +48,18 @@ import {
   canonicalJson,
   createPortableEvidenceEnvelope,
   createRunSummaryEvidence,
+  FileRunArchiveStore,
+  FileWorkflowEventStore,
   redactPortableText,
   sha256Fingerprint,
 } from "@hunter-pi/evidence";
 import { runDeclaredCommandVerification } from "@hunter-pi/verification";
 import {
+  DurableWorkflowKernel,
   InMemoryWorkflowKernel,
   runProjectionSchema,
   type RunProjection,
+  type WorkflowKernel,
 } from "@hunter-pi/workflow-kernel";
 
 const terminalSafeTextSchema = z
@@ -252,6 +256,25 @@ const providerEvidenceV2Schema = z.strictObject({
 const providerEvidenceSchema = providerEvidenceV2Schema.extend({
   usage: providerUsageEvidenceSchema,
 });
+
+export const realManagedChangeTaskReceiptSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v1"),
+  runId: runSchema.shape.runId,
+  repositoryFingerprint: fingerprintSchema,
+  targetReferenceFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  mode: z.literal("MANAGED"),
+  acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
+  terminalOutcome: z.enum(["READY", "BLOCKED", "FAILED", "CANCELLED", "INCOMPLETE"]),
+  taskResult: z.enum(["GO", "REVISE", "STOP"]),
+  sourcePreserved: z.boolean(),
+  rawSecretLeakage: z.boolean(),
+  providerUsage: providerUsageEvidenceSchema,
+  reviewP0P1Count: safeNonnegativeIntegerSchema,
+  overheadMs: safeNonnegativeIntegerSchema,
+});
+export type RealManagedChangeTaskReceipt = z.infer<typeof realManagedChangeTaskReceiptSchema>;
+
 const repositoryEvidenceSchema = z.strictObject({
   scope: z.literal("EXPLICIT_OPERATOR_SELECTED"),
   branch: terminalSafeTextSchema.max(512),
@@ -607,7 +630,6 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     "-z",
     "--untracked-files=all",
   ]);
-  const sourceFingerprint = sha256(`hpi-real-source.v1\0${baseCommit}\0${baseTree}`);
   const pilotRepositoryFingerprint = pilotTargetFingerprint({
     schemaVersion: "hpi-pilot-repository-identity.v1",
     canonicalRepositoryIdentity: repository,
@@ -617,6 +639,7 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     baseCommit,
     baseTree,
   });
+  const sourceFingerprint = pilotSourceFingerprint;
   const pilotTargetReferenceFingerprint = pilotTargetFingerprint({
     schemaVersion: "hpi-pilot-target-reference.v1",
     branch,
@@ -919,7 +942,7 @@ function observedProviderUsage(
 
 async function runAgent(options: {
   readonly engineHost: EngineHost;
-  readonly kernel: InMemoryWorkflowKernel;
+  readonly kernel: WorkflowKernel;
   readonly run: Run;
   readonly plan: PlanRevision;
   readonly attemptId: AttemptId;
@@ -1082,6 +1105,12 @@ export interface RunRealManagedChangeOptions {
   readonly environmentFingerprint: Fingerprint;
   readonly writerLeaseManager: LeaseManager;
   readonly writerLeaseOwnerFingerprint: Fingerprint;
+  readonly durableArchive?: {
+    readonly stateRoot: string;
+    readonly archiveId: string;
+    readonly distributionReleaseId: string;
+    readonly operationId: string;
+  };
   readonly now?: () => string;
   readonly monotonicNow?: () => number;
 }
@@ -1270,7 +1299,17 @@ export async function runRealManagedChange(
         "the selected repository changed between clean preflight and writer-lease acquisition",
       );
     }
-    const kernel = new InMemoryWorkflowKernel();
+    const eventStore =
+      options.durableArchive === undefined
+        ? undefined
+        : new FileWorkflowEventStore({
+            stateRoot: join(options.durableArchive.stateRoot, "workflow"),
+            now,
+          });
+    const kernel =
+      eventStore === undefined
+        ? new InMemoryWorkflowKernel()
+        : new DurableWorkflowKernel(eventStore);
     await kernel.dispatch({
       schemaVersion: "1.0.0",
       type: "CREATE_RUN",
@@ -1778,11 +1817,77 @@ export async function runRealManagedChange(
       !sourceLoss &&
       !secretLeak;
     const taskResult = correctnessPassed ? "GO" : "STOP";
-    return realManagedChangeEvidenceSchema.parse({
+    if (options.durableArchive !== undefined) {
+      const taskReceipt = realManagedChangeTaskReceiptSchema.parse({
+        schemaVersion: "hpi-real-managed-change-task-receipt.v1",
+        runId: run.runId,
+        repositoryFingerprint: inputRequest.target.repositoryFingerprint,
+        targetReferenceFingerprint: inputRequest.target.targetReferenceFingerprint,
+        sourceFingerprint: plan.sourceFingerprint,
+        mode: "MANAGED",
+        acceptanceCheckDefinitionFingerprints: [checkDefinitionFingerprint],
+        terminalOutcome: projection.change.lifecycle,
+        taskResult,
+        sourcePreserved: !sourceLoss,
+        rawSecretLeakage: secretLeak,
+        providerUsage,
+        reviewP0P1Count: recordedReviewFindings.filter(
+          (finding) => finding.severity === "P0" || finding.severity === "P1",
+        ).length,
+        overheadMs,
+      });
+      allEvidence.push(
+        makeEvidence({
+          evidenceId: "evidence_real-task-receipt",
+          kind: "review",
+          runId: run.runId,
+          attemptId: latestAttempt.attemptId,
+          createdAt: now(),
+          sourceFingerprint: plan.sourceFingerprint,
+          summary: "The durable Managed Change task receipt binds outcome and Provider usage.",
+          content: JSON.stringify(taskReceipt),
+          repository: snapshot.repository,
+          prompt,
+        }),
+      );
+    }
+    const artifact = realManagedChangeEvidenceSchema.parse({
       ...portableBeforeScore,
       taskResult,
       scorecard: { ...scorecard, zeroFalseReady: portableBeforeScore.scorecard.zeroFalseReady },
     });
+    if (options.durableArchive !== undefined && eventStore !== undefined) {
+      const events = await eventStore.read(run.runId);
+      const operationFingerprint = sha256Fingerprint(
+        canonicalJson({
+          schemaVersion: "hpi-real-managed-change-archive-operation.v1",
+          operationId: options.durableArchive.operationId,
+          archiveId: options.durableArchive.archiveId,
+          distributionReleaseId: options.durableArchive.distributionReleaseId,
+          runId: run.runId,
+          sourceFingerprint: plan.sourceFingerprint,
+          projectionFingerprint: sha256Fingerprint(canonicalJson(projection)),
+          eventFingerprint: sha256Fingerprint(canonicalJson(events)),
+          evidenceFingerprint: sha256Fingerprint(canonicalJson(artifact.evidence)),
+        }),
+      );
+      await new FileRunArchiveStore({
+        stateRoot: join(options.durableArchive.stateRoot, "archive"),
+        kernel,
+      }).finalize({
+        schemaVersion: "hpi-archive-finalize.v1",
+        operationId: options.durableArchive.operationId,
+        operationFingerprint,
+        archiveId: options.durableArchive.archiveId,
+        distributionReleaseId: options.durableArchive.distributionReleaseId,
+        projection,
+        events: [...events],
+        evidence: [...artifact.evidence],
+        recoveryLimits: { maxAttempts: 2, maxElapsedMs: 60_000 },
+        archivedAt: artifact.observedAt,
+      });
+    }
+    return artifact;
   } finally {
     if (!writerLeaseReleased) {
       await writerLease.release().catch(() => undefined);

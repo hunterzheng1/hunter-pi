@@ -13,7 +13,13 @@ import {
   type HpiCliDependencies,
   type HpiCliIo,
 } from "@hunter-pi/cli";
-import type { RealManagedChangeTarget } from "@hunter-pi/managed-change";
+import {
+  realManagedChangeEvidenceSchema,
+  type RealManagedChangeTarget,
+} from "@hunter-pi/managed-change";
+import { FileRunArchiveStore, FileWorkflowEventStore } from "@hunter-pi/evidence";
+import { DurableWorkflowKernel } from "@hunter-pi/workflow-kernel";
+import { PilotPlanCompiler } from "@hunter-pi/pilot";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -22,12 +28,21 @@ import {
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
+import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
+import { completePilotPlanInput } from "./support/task12-plan-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
+const qualifiedPiSuccessScript = [
+  "const fs = require('node:fs');",
+  "fs.writeFileSync('result.txt', 'READY\\n');",
+  "const usage={input:120,output:30,cacheRead:10,cacheWrite:5,totalTokens:165,cost:{input:0.0012,output:0.0006,cacheRead:0.0001,cacheWrite:0.00005,total:0.00195}};",
+  "process.stdout.write(JSON.stringify({type:'message_end',message:{role:'assistant',usage}})+'\\n');",
+  "process.stdout.write(JSON.stringify({type:'agent_end'})+'\\n');",
+].join("\n");
 
 afterEach(async () => {
   await Promise.all(
@@ -211,25 +226,145 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         stderrDigest: `sha256:${"b".repeat(64)}`,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     };
 
     expect(
       await runHpiCli(
-        ["change", "--repo", repository, "--plan", planPath, "--json", "--allow-provider-request"],
+        [
+          "change",
+          "--repo",
+          repository,
+          "--plan",
+          planPath,
+          "--run-archive-id",
+          "archive_cli-real-pilot-01",
+          "--json",
+          "--allow-provider-request",
+        ],
         { ...dependencies, runTask6Process },
       ),
     ).toBe(0);
     expect(processRequests).toBe(1);
-    const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    const artifact = realManagedChangeEvidenceSchema.parse(JSON.parse(io.stdout.join("")));
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
+      schemaVersion: "hpi-managed-change.v3",
       taskResult: "GO",
       repository: { scope: "EXPLICIT_OPERATOR_SELECTED" },
       cleanup: { status: "NOT_APPLICABLE", targetWorkingTree: "PRESERVED_CHANGED" },
     });
     expect(JSON.stringify(artifact)).not.toContain(root);
     expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
+    const paths = resolveHpiPaths({
+      env: dependencies.environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    const managedRunRoot = join(paths.root, "pilot", "managed-runs");
+    const eventStore = new FileWorkflowEventStore({
+      stateRoot: join(managedRunRoot, "workflow"),
+    });
+    const archive = await new FileRunArchiveStore({
+      stateRoot: join(managedRunRoot, "archive"),
+      kernel: new DurableWorkflowKernel(eventStore),
+    }).read("archive_cli-real-pilot-01");
+    expect(archive).toMatchObject({
+      schemaVersion: "hpi-archive.v1",
+      archiveId: "archive_cli-real-pilot-01",
+      outcome: "READY",
+    });
+
+    const pilotInput = completePilotPlanInput();
+    const pilotPlan = new PilotPlanCompiler().compile({
+      ...pilotInput,
+      repositoryTargets: pilotInput.repositoryTargets.map((candidate) =>
+        candidate.targetId === target.targetId
+          ? {
+              ...candidate,
+              repositoryFingerprint: target.repositoryFingerprint,
+              sourceFingerprint: target.sourceFingerprint,
+              targetReferenceFingerprint: target.targetReferenceFingerprint,
+            }
+          : candidate,
+      ),
+      acceptanceChecks: pilotInput.acceptanceChecks.map((check, index) =>
+        index === 0
+          ? { ...check, definitionFingerprint: artifact.plan.checkDefinitionFingerprint }
+          : check,
+      ),
+      tasks: pilotInput.tasks.map((task, index) =>
+        task.targetId === target.targetId
+          ? {
+              ...task,
+              sourceFingerprint: target.sourceFingerprint,
+              mode: index === 0 ? ("MANAGED" as const) : task.mode,
+            }
+          : task,
+      ),
+    });
+    const pilotPlanPath = join(root, "pilot-plan.json");
+    const metricsPath = join(root, "pilot-task-metrics.json");
+    await writeFile(pilotPlanPath, JSON.stringify(pilotPlan), "utf8");
+    await writeFile(
+      metricsPath,
+      JSON.stringify({
+        applicableFactCount: 20,
+        capturedFactCount: 20,
+        manualInterventions: 1,
+        rawPiCapturedFactCount: 15,
+        rawPiManualInterventions: 3,
+      }),
+      "utf8",
+    );
+    io.stdout.splice(0);
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "open",
+          "--plan",
+          pilotPlanPath,
+          "--session-id",
+          "pilot-real-cli-session",
+          "--archive-id",
+          "pilot-real-cli-archive",
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "managed-task",
+          "--session-id",
+          "pilot-real-cli-session",
+          "--operation-id",
+          "capture-real-cli-task-01",
+          "--task-id",
+          "pilot-task-01",
+          "--archive-ids",
+          "archive_cli-real-pilot-01",
+          "--metrics",
+          metricsPath,
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    const capture = JSON.parse(io.stdout.at(-1) ?? "null") as Record<string, unknown>;
+    expect(capture).toMatchObject({
+      schemaVersion: "hpi-pilot-capture-record-receipt.v1",
+      outcome: "RECORDED",
+      status: {
+        counts: { taskChains: 1, runArchives: 1 },
+        providerUsage: { requests: 1, tokens: 165, costMinor: 1 },
+      },
+    });
+    expect(JSON.stringify(capture)).not.toContain(root);
   });
 
   it("emits a structured STOP artifact when the declared project check is unavailable", async () => {
@@ -263,6 +398,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         stderrDigest: `sha256:${"b".repeat(64)}`,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     };
 
@@ -274,7 +410,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     ).toBe(2);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
+      schemaVersion: "hpi-managed-change.v3",
       taskResult: "STOP",
       projection: {
         change: { lifecycle: "BLOCKED" },
@@ -291,11 +427,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       const { dependencies, io, root, repository } = await createCliFixture();
       const planPath = join(root, "change-plan.json");
       const target = await targetFor(repository);
-      await writeFile(
-        join(root, "pi-cli.js"),
-        "const fs = require('node:fs');\nfs.writeFileSync('result.txt', 'READY\\n');\nprocess.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');\n",
-        "utf8",
-      );
+      await writeFile(join(root, "pi-cli.js"), qualifiedPiSuccessScript, "utf8");
       await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
 
       expect(
@@ -314,7 +446,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       ).toBe(0);
       const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
       expect(artifact).toMatchObject({
-        schemaVersion: "hpi-managed-change.v2",
+        schemaVersion: "hpi-managed-change.v3",
         taskResult: "GO",
         writerLease: { acquireOutcome: "ACQUIRED", releaseOutcome: "RELEASED" },
       });

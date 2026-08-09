@@ -9,11 +9,18 @@ import { inspectHpiPilotTarget } from "@hunter-pi/cli";
 import type { EngineHost } from "@hunter-pi/engine-contracts";
 import { createFileLeaseManager, type LeaseManager } from "@hunter-pi/execution";
 import {
+  realManagedChangeEvidenceSchema,
+  realManagedChangeEvidenceV2Schema,
   realManagedChangeRequestSchema,
   runRealManagedChange,
   type RealManagedChangeTarget,
 } from "@hunter-pi/managed-change";
-import { Task6PiEngineHost } from "@hunter-pi/pi-host";
+import { Task6PiEngineHost, type PiProviderUsage } from "@hunter-pi/pi-host";
+import { FileRunArchiveStore, FileWorkflowEventStore } from "@hunter-pi/evidence";
+import { DurableWorkflowKernel } from "@hunter-pi/workflow-kernel";
+import { FilePilotCaptureCoordinator, PilotPlanCompiler } from "@hunter-pi/pilot";
+import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
+import { completePilotPlanInput } from "./support/task12-plan-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
 const cleanupRoots: string[] = [];
@@ -96,6 +103,7 @@ async function createWriterLease(root: string): Promise<{
 function createMutationHost(
   extraMutation?: (workspace: string) => Promise<void>,
   beforeMutation?: () => void | Promise<void>,
+  providerUsage: PiProviderUsage = fixturePiProviderUsage,
 ): EngineHost {
   return new Task6PiEngineHost({
     launchPlanForWorkspace: (workspace) =>
@@ -119,6 +127,7 @@ function createMutationHost(
         stderrDigest: fingerprintB,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage,
         containment:
           process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
         terminalFinality: "FINAL",
@@ -197,11 +206,26 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     });
 
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
+      schemaVersion: "hpi-managed-change.v3",
       taskResult: "GO",
       repository: { scope: "EXPLICIT_OPERATOR_SELECTED" },
       productSource: { state: "CLEAN" },
-      provider: { id: "openai-codex", requestStatus: "DETECTED" },
+      provider: {
+        id: "openai-codex",
+        requestStatus: "DETECTED",
+        usage: {
+          status: "PASS",
+          requestCount: 1,
+          tokenCount: 165,
+          costMinorUnits: 1,
+          reasons: [],
+        },
+      },
+      resourceAccounting: {
+        status: "PASS",
+        consumed: { tokens: 165, costMinorUnits: 1 },
+        unprovenReasons: [],
+      },
       cleanup: { status: "NOT_APPLICABLE" },
     });
     expect(artifact.projection.change.lifecycle).toBe("READY");
@@ -210,6 +234,399 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
     expect(JSON.stringify(artifact)).not.toContain(root);
     expect(runGit(repository, ["status", "--porcelain=v1"]).trim()).toBe("M result.txt");
+
+    const historicalProvider: Record<string, unknown> = { ...artifact.provider };
+    Reflect.deleteProperty(historicalProvider, "usage");
+    const historicalBudgets: Record<string, unknown> = {
+      ...artifact.resourceAccounting.budgets,
+    };
+    Reflect.deleteProperty(historicalBudgets, "maxTokens");
+    Reflect.deleteProperty(historicalBudgets, "maxCostMinorUnits");
+    const historicalConsumed: Record<string, unknown> = {
+      ...artifact.resourceAccounting.consumed,
+    };
+    Reflect.deleteProperty(historicalConsumed, "tokens");
+    Reflect.deleteProperty(historicalConsumed, "costMinorUnits");
+    const historicalV2 = {
+      ...artifact,
+      schemaVersion: "hpi-managed-change.v2",
+      provider: historicalProvider,
+      resourceAccounting: {
+        ...artifact.resourceAccounting,
+        budgets: historicalBudgets,
+        consumed: historicalConsumed,
+      },
+    };
+    expect(realManagedChangeEvidenceV2Schema.parse(historicalV2)).toEqual(historicalV2);
+    expect(realManagedChangeEvidenceSchema.safeParse(historicalV2).success).toBe(false);
+    expect(
+      realManagedChangeEvidenceSchema.safeParse({
+        ...artifact,
+        resourceAccounting: {
+          ...artifact.resourceAccounting,
+          consumed: {
+            ...artifact.resourceAccounting.consumed,
+            tokens: (artifact.resourceAccounting.consumed.tokens ?? 0) + 1,
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("persists a real run through the durable workflow and immutable Task 9 Archive", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const stateRoot = join(root, "managed-run-state");
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Archive the real-project result",
+      goal: "Change result.txt so the declared project check passes.",
+      nonGoals: ["Commit, push, publish, or deploy"],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: {
+        label: "Project result check",
+        executable: "node",
+        argv: ["verify.mjs"],
+      },
+      target,
+    });
+
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      now: () => "2026-08-06T00:00:10.000Z",
+      durableArchive: {
+        stateRoot,
+        archiveId: "archive_real-pilot-01",
+        distributionReleaseId: "release_hunter-pi-0.1.0",
+        operationId: "op_real-pilot-archive-01",
+      },
+    });
+
+    const eventStore = new FileWorkflowEventStore({ stateRoot: join(stateRoot, "workflow") });
+    const kernel = new DurableWorkflowKernel(eventStore);
+    const archiveStore = new FileRunArchiveStore({
+      stateRoot: join(stateRoot, "archive"),
+      kernel,
+    });
+    const manifest = await archiveStore.read("archive_real-pilot-01");
+    expect(manifest).toMatchObject({
+      schemaVersion: "hpi-archive.v1",
+      archiveId: "archive_real-pilot-01",
+      runId: artifact.projection.run.runId,
+      outcome: "READY",
+      archiveStatus: "ARCHIVED",
+      sourceFingerprint: artifact.repository.sourceFingerprint,
+    });
+    expect((await kernel.project(artifact.projection.run.runId)).run).toMatchObject({
+      archiveStatus: "ARCHIVED",
+      archiveId: "archive_real-pilot-01",
+    });
+    expect(await eventStore.read(artifact.projection.run.runId)).toHaveLength(
+      artifact.projection.eventCursor + 1,
+    );
+    const package_ = await archiveStore.readCanonicalPackage("archive_real-pilot-01");
+    expect(package_.projection.run.predecessorRunId).toBeUndefined();
+    const taskReceiptEvidence = package_.evidence.find(
+      (evidence) => evidence.evidenceId === "evidence_real-task-receipt",
+    );
+    expect(taskReceiptEvidence?.capture.capturedText).toBeDefined();
+    expect(JSON.parse(taskReceiptEvidence?.capture.capturedText ?? "null")).toMatchObject({
+      schemaVersion: "hpi-real-managed-change-task-receipt.v1",
+      runId: artifact.projection.run.runId,
+      repositoryFingerprint: target.repositoryFingerprint,
+      targetReferenceFingerprint: target.targetReferenceFingerprint,
+      sourceFingerprint: artifact.repository.sourceFingerprint,
+      mode: "MANAGED",
+      acceptanceCheckDefinitionFingerprints: [artifact.plan.checkDefinitionFingerprint],
+      terminalOutcome: "READY",
+      taskResult: "GO",
+      sourcePreserved: true,
+      rawSecretLeakage: false,
+      providerUsage: {
+        status: "PASS",
+        requestCount: 1,
+        tokenCount: 165,
+        costMinorUnits: 1,
+      },
+      reviewP0P1Count: 0,
+    });
+
+    const input = completePilotPlanInput();
+    const repositoryTargets = input.repositoryTargets.map((candidate) =>
+      candidate.targetId === target.targetId
+        ? {
+            ...candidate,
+            repositoryFingerprint: target.repositoryFingerprint,
+            sourceFingerprint: target.sourceFingerprint,
+            targetReferenceFingerprint: target.targetReferenceFingerprint,
+          }
+        : candidate,
+    );
+    const plan = new PilotPlanCompiler().compile({
+      ...input,
+      repositoryTargets,
+      acceptanceChecks: input.acceptanceChecks.map((check, index) =>
+        index === 0
+          ? { ...check, definitionFingerprint: artifact.plan.checkDefinitionFingerprint }
+          : check,
+      ),
+      tasks: input.tasks.map((task, index) =>
+        task.targetId === target.targetId
+          ? {
+              ...task,
+              sourceFingerprint: target.sourceFingerprint,
+              mode: index === 0 ? ("MANAGED" as const) : task.mode,
+            }
+          : task,
+      ),
+    });
+    const coordinator = new FilePilotCaptureCoordinator({
+      stateRoot: join(root, "pilot-capture"),
+      archiveStateRoot: join(root, "pilot-archive"),
+      managedRunStateRoot: stateRoot,
+      now: () => "2026-08-06T00:00:10.000Z",
+    });
+    await coordinator.open({
+      schemaVersion: "hpi-pilot-capture-open.v1",
+      sessionId: "pilot-real-managed-session",
+      archiveId: "pilot-real-managed-archive",
+      plan,
+    });
+    const taskCapture = await coordinator.recordManagedTask({
+      schemaVersion: "hpi-pilot-capture-managed-task.v1",
+      sessionId: "pilot-real-managed-session",
+      operationId: "capture-real-managed-task-01",
+      taskId: "pilot-task-01",
+      archiveIds: ["archive_real-pilot-01"],
+      metrics: {
+        applicableFactCount: 20,
+        capturedFactCount: 20,
+        manualInterventions: 1,
+        rawPiCapturedFactCount: 15,
+        rawPiManualInterventions: 3,
+      },
+    });
+    expect(taskCapture).toMatchObject({
+      outcome: "RECORDED",
+      status: {
+        counts: { taskChains: 1, runArchives: 1 },
+        providerUsage: { requests: 1, tokens: 165, costMinor: 1 },
+      },
+    });
+  });
+
+  it("returns STOP when the Engine cannot prove exact Provider usage", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject unaccounted Provider usage",
+      goal: "Change result.txt only when Provider usage remains measurable.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(undefined, undefined, {
+        status: "NOT_PROVEN",
+        requestCount: null,
+        tokenCount: null,
+        costMinorUnits: null,
+        reasons: ["ASSISTANT_USAGE_MISSING"],
+      }),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact).toMatchObject({
+      taskResult: "STOP",
+      provider: {
+        requestStatus: "NOT_PROVEN",
+        usage: {
+          status: "NOT_PROVEN",
+          requestCount: null,
+          tokenCount: null,
+          costMinorUnits: null,
+          reasons: ["ENGINE_PROVIDER_USAGE_MISSING"],
+        },
+      },
+      resourceAccounting: {
+        status: "NOT_PROVEN",
+        unprovenReasons: ["ENGINE_PROVIDER_USAGE_MISSING"],
+      },
+    });
+  });
+
+  it("does not start a fixback Provider request after unaccounted first-attempt usage", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    let providerCalls = 0;
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Do not retry unaccounted usage",
+      goal: "Preserve the failed attempt without starting an unaccounted fixback request.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(
+        (workspace) => writeFile(join(workspace, "result.txt"), "NOT_READY\n", "utf8"),
+        () => {
+          providerCalls += 1;
+        },
+        {
+          status: "NOT_PROVEN",
+          requestCount: null,
+          tokenCount: null,
+          costMinorUnits: null,
+          reasons: ["ASSISTANT_USAGE_MISSING"],
+        },
+      ),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(providerCalls).toBe(1);
+    expect(artifact).toMatchObject({
+      taskResult: "STOP",
+      resourceAccounting: {
+        status: "NOT_PROVEN",
+        unprovenReasons: ["ENGINE_PROVIDER_USAGE_MISSING"],
+      },
+    });
+    expect(artifact.projection.attempts).toHaveLength(1);
+    expect(artifact.projection.verificationReceipts).toHaveLength(1);
+    expect(artifact.projection.verificationReceipts[0]?.outcome).toBe("FAIL");
+  });
+
+  it("returns a structured STOP without a fixback request when the retry reserve is exhausted", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    let providerCalls = 0;
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reserve the fixback Provider budget",
+      goal: "Do not start a fixback request when its finite token reserve is unavailable.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(
+        (workspace) => writeFile(join(workspace, "result.txt"), "NOT_READY\n", "utf8"),
+        () => {
+          providerCalls += 1;
+        },
+        {
+          status: "PASS",
+          requestCount: 1,
+          tokenCount: 200_000,
+          costMinorUnits: 1_000,
+          reasons: [],
+        },
+      ),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(providerCalls).toBe(1);
+    expect(artifact).toMatchObject({
+      schemaVersion: "hpi-managed-change.v3",
+      taskResult: "STOP",
+      provider: { usage: { status: "PASS", tokenCount: 200_000, costMinorUnits: 1_000 } },
+      resourceAccounting: {
+        status: "PASS",
+        consumed: { tokens: 200_000, costMinorUnits: 1_000 },
+      },
+    });
+    expect(artifact.projection.attempts).toHaveLength(1);
+    expect(artifact.projection.verificationReceipts[0]?.outcome).toBe("FAIL");
+  });
+
+  it("returns STOP when measured Provider tokens exceed the finite per-change budget", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Enforce the Provider token budget",
+      goal: "Change result.txt without exceeding the finite Provider token budget.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(undefined, undefined, {
+        status: "PASS",
+        requestCount: 1,
+        tokenCount: 200_001,
+        costMinorUnits: 1,
+        reasons: [],
+      }),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact).toMatchObject({
+      taskResult: "STOP",
+      provider: { usage: { status: "PASS", tokenCount: 200_001 } },
+      resourceAccounting: {
+        status: "EXCEEDED",
+        budgets: { maxTokens: 200_000, maxCostMinorUnits: 1_000 },
+        consumed: { tokens: 200_001, costMinorUnits: 1 },
+      },
+    });
   });
 
   it("returns a bounded STOP artifact when the declared independent check cannot start", async () => {

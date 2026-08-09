@@ -34,7 +34,7 @@ export function completePilotEvidence(
     };
   });
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v5",
+    schemaVersion: "hpi-pilot-evidence.v6",
     captureProvenance,
     planFingerprint: plan.planFingerprint,
     operatorScope: plan.operatorScope,
@@ -193,6 +193,9 @@ export function completePilotEvidence(
       hunterManualInterventions: 1,
       hunterAdditionalOverheadMinutes: 4,
       containedFalseCompletion: false,
+      rawPiProviderRequestCount: 1,
+      rawPiProviderTokenCount: 100,
+      rawPiProviderCostMinor: 1,
     })),
     observedAt: fixtureTimestamp,
   });

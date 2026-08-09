@@ -680,6 +680,27 @@ async function withArchiveOperationLock<T>(key: string, operation: () => Promise
   }
 }
 
+function portableArchiveTextCategories(value: unknown): readonly string[] {
+  const categories = new Set<string>();
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      for (const category of redactPortableText(current).categories) categories.add(category);
+      continue;
+    }
+    if (Array.isArray(current)) {
+      const nestedValues: readonly unknown[] = current;
+      pending.push(...nestedValues);
+      continue;
+    }
+    if (current !== null && typeof current === "object") {
+      pending.push(...Object.values(current as Record<string, unknown>));
+    }
+  }
+  return [...categories];
+}
+
 export function assertPortableArchive(archive: ArchivePackage): void {
   const projectionHasLiveAttempt = archive.projection.attempts.some((attempt) =>
     ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
@@ -715,7 +736,10 @@ export function assertPortableArchive(archive: ArchivePackage): void {
       "A portable Archive cannot contain a device-local path.",
     );
   }
-  const archiveTextCategories = redactPortableText(serialized).categories;
+  // Scan typed string values independently. Scanning serialized JSON as one text stream can
+  // manufacture path-shaped substrings across adjacent JSON fields even when no field contains
+  // a path; the explicit serialized path check above still guards untyped path syntax.
+  const archiveTextCategories = portableArchiveTextCategories(archive);
   if (
     archiveTextCategories.some((category) =>
       [
@@ -1075,6 +1099,28 @@ export class FileRunArchiveStore implements RunArchiveStore {
       archiveId: parsedArchiveId,
       artifactFingerprint: receipt.artifactFingerprint,
     });
+  }
+
+  /**
+   * Returns the exact native Archive package only after replaying it against the canonical
+   * Workflow Kernel. Product adapters use this to derive higher-level receipts without trusting
+   * caller-authored copies of Archive JSON.
+   */
+  public async readCanonicalPackage(archiveId: string): Promise<ArchivePackage> {
+    if (this.#kernel === undefined) {
+      throw new DurableStoreError(
+        "INVALID_TARGET",
+        "A native Archive package requires a canonical Workflow Kernel binding.",
+      );
+    }
+    await assertSafeDirectoryPath(this.#stateRoot);
+    const parsedArchiveId = archiveIdSchema.parse(archiveId);
+    const package_ = await this.#readPackageOptional(parsedArchiveId);
+    if (package_ === undefined) {
+      throw new DurableStoreError("NOT_FOUND", "The requested Archive identity was not found.");
+    }
+    await this.#assertCanonicalArchive(package_);
+    return freezeDeep(archivePackageSchema.parse(package_));
   }
 
   public async export(request: ArchiveExportRequest): Promise<ArchiveExportReceipt> {

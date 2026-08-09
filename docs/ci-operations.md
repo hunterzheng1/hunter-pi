@@ -12,6 +12,12 @@ inspection into a high-frequency API poller.
 - Locked installs use npm's offline-preferred mode and disable audit/fund
   network work. Compiled checks reuse the build already produced by the same
   job instead of rebuilding before each smoke.
+- Package and clean-install smokes discover every regular `packages/*` and
+  `apps/*` workspace manifest from the checkout. They do not use a manually
+  maintained internal-package allowlist. Adding a workspace dependency must
+  therefore exercise its packed tarball and locked clean-install closure in
+  the same CI run; an npm `E404` for `@hunter-pi/*` is a local closure defect,
+  not a registry error to retry.
 - The Windows `quality` job has a 55-minute bound because hosted filesystem
   variance affects the two isolated npm installation smokes and the exact
   portable artifact assembly. The portable artifact is still built once, only

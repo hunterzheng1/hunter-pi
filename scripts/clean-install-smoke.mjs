@@ -1,22 +1,24 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { runNpm } from "./npm-process.mjs";
 import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
-const workspaceManifests = [
-  "packages/domain/package.json",
-  "packages/evidence/package.json",
-  "packages/engine-contracts/package.json",
-  "packages/execution/package.json",
-  "packages/pi-host/package.json",
-  "packages/pilot/package.json",
-  "packages/plugin-manager/package.json",
-  "packages/updater/package.json",
-  "packages/workflow-kernel/package.json",
-  "packages/testkit/package.json",
-];
+const workspaceManifests = (
+  await Promise.all(
+    ["apps", "packages"].map(async (workspaceParent) =>
+      (await readdir(join(repositoryRoot, workspaceParent), { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+        .map((entry) => join(workspaceParent, entry.name, "package.json")),
+    ),
+  )
+)
+  .flat()
+  .toSorted();
+if (workspaceManifests.length === 0) {
+  throw new Error("Clean-install workspace discovery found no manifests.");
+}
 const rootFiles = [".npmrc", "package-lock.json", "package.json"];
 const temporaryRoot = await createCanonicalTemporaryDirectory("hunter-pi-clean-install-");
 const npmIsolationRoot = join(temporaryRoot, ".npm-isolation");

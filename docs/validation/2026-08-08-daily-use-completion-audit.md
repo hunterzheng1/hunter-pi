@@ -252,3 +252,32 @@ They do not supply the missing real-use observations: no two explicitly selected
 repositories, Provider/model/endpoint/account authorization, bounded credential scope, ten-task
 observation set, or immutable aggregate pilot Archive is available. The real Windows daily-use pilot
 therefore remains `NOT_RUN / NOT_PROVEN`, and no production or daily-use GO is claimed.
+
+## Addendum (2026-08-10) — Durable capture coordinator and Managed Archive ingestion
+
+The active Task 12 continuation now implements the first end-to-end production observation path. A durable,
+plan-bound coordinator stores HMAC-linked append-only facts, operation idempotency, cumulative Provider
+request/token/cost budgets, fixed path-free status, an immutable finalization intent/commit, and recovery of
+an interrupted publication. A Managed Change can use the durable Workflow Kernel and Task 9 Archive store;
+its canonical package contains one strict product-generated task receipt. The pilot coordinator reads and
+replays that exact package and binds its repository, source, target reference, acceptance checks, terminal
+outcome, Provider usage, Run chain, and Archive fingerprint to the frozen task oracle. Caller-authored task
+chains and raw-Pi comparator results are rejected by the generic public record schema and CLI; the internal
+product-observation path requires a module-private runtime capability that is not exported from the package
+entry.
+
+This closes only the Managed-task ingestion seam. Quick-task and raw-Pi comparator capture are not yet
+product-derived, the installation/performance/interruption/Plugin/update/privacy/CI observations have not
+been assembled from one real run, and no ten-task Windows Archive has been finalized. The daily-use
+disposition therefore remains `NOT_RUN / NOT_PROVEN`; deterministic tests or locally constructed receipts
+do not change it.
+
+The first complete local gate for this slice retained one packaging failure after 64 test files / 589 tests,
+strict compilation, build, and formatting had passed. `package-smoke` returned npm `E404` because its manual
+workspace tarball list omitted the new `@hunter-pi/managed-change` dependency and npm attempted to resolve
+that private package publicly. This was a release-closure defect, not treated as transient network variance.
+The package smoke now discovers and installs every `packages/*` tarball, and the clean-install smoke discovers
+every `apps/*` and `packages/*` manifest. A fresh complete `npm run verify` then passed 64 test files / 589
+tests, lint, typecheck, strict compilation, build, formatting, all 13 internal package tarballs, the single CLI
+artifact, the complete clean-install closure, and the compiled provider-independent Pi probe. Hosted PR and
+exact merged-head CI remain required before this implementation slice can be closed.

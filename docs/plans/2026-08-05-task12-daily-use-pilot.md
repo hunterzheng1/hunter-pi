@@ -6,7 +6,7 @@
 
 ## Evidence contract
 
-`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v5` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; comparator/task-result binding for both identities and numeric observations; and an explicit receipt that recovery or rollback required no manual Hunter state-file editing. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. Its `PilotPlanCompiler` freezes the machine profile, comparator/check fingerprints, five plugin fixtures, two update candidates, ten tasks, three paired tasks, two distinct repository identities, and the Provider authorization policy into a path-free, fingerprint-bound execution plan. Evidence must carry the exact plan fingerprint and authorization scope, and the evaluator rejects task, paired-comparator, Plugin, update, or machine identities that do not match that plan. A false `READY` is a zero-tolerance `STOP`, not a 9-of-10 quantitative miss. `hpi pilot compile --input <file> --json` emits only a strict, path-free execution plan or the same redacted blocked preflight receipt; `hpi pilot preflight --plan <file> --json` exposes only a redacted `READY`/`BLOCKED` receipt with fixed actionable reason codes; and `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json` emits the strict decision, returning exit code 0 only for `GO` and never starting Pi or sending a Provider request. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
+`@hunter-pi/pilot` contains the strict `hpi-pilot-evidence.v6` schema and evaluator. It requires an explicit PASS fresh-install receipt bound to the tested source, release artifact, and clean profile; exact Windows/Ubuntu CI receipts bound to source, artifact, Engine, and run identities; comparator/task-result binding for both identities and numeric observations; exact Provider request/token/cost accounting for both Hunter Runs and all three raw-Pi comparators; and an explicit receipt that recovery or rollback required no manual Hunter state-file editing. It retains raw counts and calculates nearest-rank p95 for the required warm-start, acknowledgement, and memory samples. Its `PilotPlanCompiler` freezes the machine profile, comparator/check fingerprints, five plugin fixtures, two update candidates, ten tasks, three paired tasks, two distinct repository identities, and the Provider authorization policy into a path-free, fingerprint-bound execution plan. Evidence must carry the exact plan fingerprint and authorization scope, and the evaluator rejects task, paired-comparator, Plugin, update, or machine identities that do not match that plan. A false `READY` is a zero-tolerance `STOP`, not a 9-of-10 quantitative miss. `hpi pilot compile --input <file> --json` emits only a strict, path-free execution plan or the same redacted blocked preflight receipt; `hpi pilot preflight --plan <file> --json` exposes only a redacted `READY`/`BLOCKED` receipt with fixed actionable reason codes; and `hpi pilot evaluate --plan <file> --evidence <file> --archive <file> --json` emits the strict decision, returning exit code 0 only for `GO` and never starting Pi or sending a Provider request. It returns `GO`, `REVISE`, `STOP`, or `NOT_PROVEN`; missing CI, missing Provider-latency separation, identity mismatches, and incomplete pilot observations cannot become `GO`.
 
 ## Required run
 
@@ -108,3 +108,20 @@ bundled Pi TUI without a model request; `/hunter-status` returned
 `TuiSmoke=DETECTED Acknowledgement=MANUAL Provider=NOT_PROVEN`. A following `hpi doctor --json` returned
 `overallStatus=DETECTED` with `interactive_tui=DETECTED`. This closes the exact-artifact local TUI smoke
 gate, but the ten-task real-project pilot and its daily-use acceptance remain `NOT_PROVEN`.
+
+## Provider usage accounting prerequisite (2026-08-10)
+
+The production capture coordinator cannot accept guessed Provider counts. The qualified Pi JSON adapter now
+accounts only assistant `message_end` events from a stream ending in `agent_end`, validates both token and
+cost component totals, aggregates Provider-reported cost into conservative integer minor units, and exposes
+the result through provider-neutral Engine resource usage. Its one-use runtime snapshot disables Provider
+transport retry, Agent auto-retry, and automatic compaction. The unqualified historical Task 6 process path
+remains `NOT_PROVEN`; repeated messages inside `agent_end` are ignored to prevent double counting. Missing,
+malformed, inconsistent, incomplete, truncated, or overflowing usage also remains `NOT_PROVEN`.
+
+Real-project `hpi-managed-change.v3` Evidence now carries that exact per-Run usage, cross-checks Provider and
+resource-accounting totals, binds finite token and cost budgets in addition to the existing
+turn/operation/command/output limits, and refuses a fixback request after an unaccounted or unreserved first
+Attempt. Missing accounting or an exceeded budget produces `STOP`. This is a capture prerequisite, not the
+real pilot: the append-only capture session and ten-task Windows Archive are still required before daily-use
+acceptance can become `GO`.

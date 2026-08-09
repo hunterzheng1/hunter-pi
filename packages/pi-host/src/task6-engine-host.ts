@@ -45,6 +45,11 @@ import {
 } from "@hunter-pi/domain";
 import { LfOnlyNdjsonDecoder } from "./ndjson.js";
 import type { PiLaunchPlan } from "./product-launcher.js";
+import {
+  accountPiProviderUsage,
+  piProviderUsageSchema,
+  unavailablePiProviderUsage,
+} from "./provider-usage.js";
 
 export const task6PiProcessResultSchema = z.strictObject({
   exitCode: z.number().int(),
@@ -56,6 +61,7 @@ export const task6PiProcessResultSchema = z.strictObject({
   stderrDigest: fingerprintSchema,
   capturedBytes: z.number().int().nonnegative(),
   outputTruncated: z.boolean(),
+  providerUsage: piProviderUsageSchema,
   containment: z
     .enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE", "TEST_CONTAINED"])
     .optional(),
@@ -196,12 +202,14 @@ export async function runTask6PiJsonProcess(
       const stderr = Buffer.concat(stderrChunks);
       const eventTypes: string[] = [];
       let recordCount = 0;
+      let providerUsage = unavailablePiProviderUsage();
       let framingValid = !outputTruncated && !processError;
       if (framingValid) {
         try {
           const decoder = new LfOnlyNdjsonDecoder(request.maximumOutputBytes);
           const records = [...decoder.push(stdout), ...decoder.finish()];
           recordCount = records.length;
+          providerUsage = accountPiProviderUsage(records, "NOT_PROVEN");
           for (const record of records) {
             const type = Reflect.get(record, "type");
             if (typeof type === "string") eventTypes.push(type);
@@ -221,6 +229,7 @@ export async function runTask6PiJsonProcess(
           stderrDigest: sha256(stderr),
           capturedBytes,
           outputTruncated,
+          providerUsage,
         }),
       );
     });
@@ -398,6 +407,15 @@ export class Task6PiEngineHost implements EngineHost {
             kind: "AGENT_RETURNED",
             observedAt: this.#now(),
             summary: "Pi emitted agent_end; independent Verification is still required.",
+            ...(processResult.providerUsage.status === "PASS"
+              ? {
+                  resourceUsage: {
+                    externalOperations: processResult.providerUsage.requestCount,
+                    tokens: processResult.providerUsage.tokenCount,
+                    costMinorUnits: processResult.providerUsage.costMinorUnits,
+                  },
+                }
+              : {}),
           }),
         );
       }

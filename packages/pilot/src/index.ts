@@ -8,6 +8,26 @@ export {
   type PilotEvidenceDraft,
 } from "./capture.js";
 export * from "./archive.js";
+export {
+  FilePilotCaptureCoordinator,
+  PilotCaptureCoordinatorError,
+  pilotCaptureManagedTaskInputSchema,
+  pilotCaptureNextActionSchema,
+  pilotCaptureObservationSchema,
+  pilotCaptureOpenInputSchema,
+  pilotCaptureRecordInputSchema,
+  pilotCaptureRecordReceiptSchema,
+  pilotCaptureStatusSchema,
+  type FilePilotCaptureCoordinatorOptions,
+  type PilotCaptureCoordinatorErrorCode,
+  type PilotCaptureManagedTaskInput,
+  type PilotCaptureNextAction,
+  type PilotCaptureObservation,
+  type PilotCaptureOpenInput,
+  type PilotCaptureRecordInput,
+  type PilotCaptureRecordReceipt,
+  type PilotCaptureStatus,
+} from "./capture-session.js";
 export * from "./evaluator.js";
 export * from "./plan.js";
 export * from "./serialization.js";

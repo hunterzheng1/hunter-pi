@@ -110,6 +110,28 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.reasons.join(" ")).toMatch(/Provider.*budget|maximum.*request|token|cost/u);
   });
 
+  it("counts raw Pi comparator Provider usage against the frozen budget", () => {
+    const planInput = completePilotPlanInput();
+    const plan = new PilotPlanCompiler().compile({
+      ...planInput,
+      operatorScope: {
+        ...planInput.operatorScope,
+        maxProviderRequests: 13,
+        maxProviderTokens: 1_300,
+        maxProviderCostMinor: 13,
+      },
+    });
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const decision = new PilotEvaluator().evaluate(
+      evidence,
+      plan,
+      trustedArchiveFor(evidence, plan, "pilot-archive-raw-pi-budget-test"),
+    );
+
+    expect(decision.outcome).toBe("STOP");
+    expect(decision.reasons.join(" ")).toMatch(/Provider.*budget|maximum.*request|token|cost/u);
+  });
+
   it("counts only READY linked replacement Runs as successful interruptions", () => {
     const plan = completePilotExecutionPlan();
     const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
@@ -333,7 +355,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   it("requires an explicit no-manual-state-edit receipt before evaluating daily-use readiness", () => {
     const evidence = {
       ...completeEvidence(),
-      schemaVersion: "hpi-pilot-evidence.v5" as const,
+      schemaVersion: "hpi-pilot-evidence.v6" as const,
       manualStateEditingRequired: false,
     };
     expect(() => pilotEvidenceSchema.parse(evidence)).not.toThrow();
@@ -346,11 +368,11 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.reasons.join(" ")).toMatch(/manual.*state|zero-tolerance/u);
   });
 
-  it("rejects legacy Evidence and incomplete v4 receipts fail closed", () => {
+  it("rejects legacy Evidence and incomplete v5 receipts fail closed", () => {
     const evidence = completeEvidence();
     expect(() =>
-      pilotEvidenceSchema.parse({ ...evidence, schemaVersion: "hpi-pilot-evidence.v4" }),
-    ).toThrow(/schemaVersion|v4/u);
+      pilotEvidenceSchema.parse({ ...evidence, schemaVersion: "hpi-pilot-evidence.v5" }),
+    ).toThrow(/schemaVersion|v5/u);
 
     const withoutManualStateReceipt: Record<string, unknown> = { ...evidence };
     delete withoutManualStateReceipt["manualStateEditingRequired"];

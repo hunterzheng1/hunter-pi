@@ -1343,54 +1343,61 @@ export async function runRealManagedChange(
             },
           ]),
     ];
-    const reviewEvidence = makeEvidence({
-      evidenceId: reviewEvidenceId,
-      kind: "review",
-      runId: run.runId,
-      attemptId: latestAttempt.attemptId,
-      createdAt: now(),
-      sourceFingerprint: plan.sourceFingerprint,
-      summary: `Deterministic real-project review completed with ${String(findings.length)} blocking finding(s).`,
-      content: JSON.stringify({
-        changedPaths: parsedStatus.paths,
-        allowedPaths: request.allowedPaths,
-        baseCommitUnchanged,
-        findings,
-        resourceAccounting,
-      }),
-      repository: snapshot.repository,
-      prompt,
-    });
-    allEvidence.push(reviewEvidence);
-    const reviewStep = plan.steps.find((step) => step.stepId === "step_real-review");
-    if (reviewStep?.kind !== "review") throw new Error("real-project review Step is missing");
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "RECORD_REVIEW_RECEIPT",
-      receipt: reviewReceiptSchema.parse({
-        schemaVersion: "1.0.0",
-        reviewReceiptId: "review_real",
+    let recordedReviewFindings: readonly ReviewFinding[] = [];
+    if (latestVerification.outcome === "PASS") {
+      const reviewEvidence = makeEvidence({
+        evidenceId: reviewEvidenceId,
+        kind: "review",
         runId: run.runId,
         attemptId: latestAttempt.attemptId,
-        stepId: reviewStep.stepId,
-        inputFingerprint: reviewStep.inputFingerprint,
-        reviewDefinitionFingerprint: reviewStep.reviewDefinitionFingerprint,
-        configurationFingerprint: reviewStep.configurationFingerprint,
-        workspaceFingerprint: plan.workspaceFingerprint,
+        createdAt: now(),
         sourceFingerprint: plan.sourceFingerprint,
-        resultFingerprint: sha256(
-          JSON.stringify({
-            verificationInputFingerprint: latestVerification.inputFingerprint,
-            changedPaths: parsedStatus.paths,
+        summary: `Deterministic real-project review completed with ${String(findings.length)} blocking finding(s).`,
+        content: JSON.stringify({
+          changedPaths: parsedStatus.paths,
+          allowedPaths: request.allowedPaths,
+          baseCommitUnchanged,
+          findings,
+          resourceAccounting,
+        }),
+        repository: snapshot.repository,
+        prompt,
+      });
+      allEvidence.push(reviewEvidence);
+      const reviewProjection = await kernel.project(run.runId);
+      if (reviewProjection.run.lifecycle === "REVIEWING") {
+        const reviewStep = plan.steps.find((step) => step.stepId === "step_real-review");
+        if (reviewStep?.kind !== "review") throw new Error("real-project review Step is missing");
+        recordedReviewFindings = findings;
+        await kernel.dispatch({
+          schemaVersion: "1.0.0",
+          type: "RECORD_REVIEW_RECEIPT",
+          receipt: reviewReceiptSchema.parse({
+            schemaVersion: "1.0.0",
+            reviewReceiptId: "review_real",
+            runId: run.runId,
+            attemptId: latestAttempt.attemptId,
+            stepId: reviewStep.stepId,
+            inputFingerprint: reviewStep.inputFingerprint,
+            reviewDefinitionFingerprint: reviewStep.reviewDefinitionFingerprint,
+            configurationFingerprint: reviewStep.configurationFingerprint,
+            workspaceFingerprint: plan.workspaceFingerprint,
+            sourceFingerprint: plan.sourceFingerprint,
+            resultFingerprint: sha256(
+              JSON.stringify({
+                verificationInputFingerprint: latestVerification.inputFingerprint,
+                changedPaths: parsedStatus.paths,
+                findings,
+              }),
+            ),
+            outcome: findings.length === 0 ? "PASS" : "FAIL",
+            observedAt: now(),
             findings,
+            evidenceIds: [reviewEvidence.evidenceId],
           }),
-        ),
-        outcome: latestVerification.outcome === "PASS" && findings.length === 0 ? "PASS" : "FAIL",
-        observedAt: now(),
-        findings,
-        evidenceIds: [reviewEvidence.evidenceId],
-      }),
-    });
+        });
+      }
+    }
     const projection = await kernel.project(run.runId);
     const summary = finalSummary(projection);
     const summaryEvidence = createRunSummaryEvidence(
@@ -1452,7 +1459,7 @@ export async function runRealManagedChange(
         allowedPaths: request.allowedPaths,
         baseCommitUnchanged,
         agentReturned,
-        findings,
+        findings: recordedReviewFindings,
       },
       resourceAccounting,
       finalSummary: summary,

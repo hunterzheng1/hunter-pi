@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   planRevisionSchema,
@@ -68,6 +69,38 @@ function minimalEnvironment(): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: "0",
     NO_COLOR: "1",
   };
+}
+
+function resolveWindowsNpmCli(executable: string): string | undefined {
+  if (process.platform !== "win32" || !["npm", "npm.cmd"].includes(executable.toLowerCase())) {
+    return undefined;
+  }
+  const candidates = isAbsolute(executable)
+    ? [executable]
+    : (process.env["PATH"] ?? "")
+        .split(delimiter)
+        .filter((entry) => entry.length > 0)
+        .flatMap((entry) => [join(entry, executable), join(entry, `${executable}.cmd`)])
+        .filter((candidate, index, all) => all.indexOf(candidate) === index);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    const npmCli = join(dirname(candidate), "node_modules", "npm", "bin", "npm-cli.js");
+    if (existsSync(npmCli)) return npmCli;
+  }
+  return undefined;
+}
+
+function resolveProcessInvocation(
+  executableInput: string,
+  arguments_: readonly string[],
+): { readonly executable: string; readonly arguments: readonly string[] } {
+  if (executableInput === "node") {
+    return { executable: process.execPath, arguments: arguments_ };
+  }
+  const npmCli = resolveWindowsNpmCli(executableInput);
+  return npmCli === undefined
+    ? { executable: executableInput, arguments: arguments_ }
+    : { executable: process.execPath, arguments: [npmCli, ...arguments_] };
 }
 
 function runGit(repository: string, arguments_: readonly string[]): Buffer {
@@ -154,10 +187,10 @@ function runBoundedProcess(options: {
   readonly maximumOutputBytes: number;
 }): Promise<CapturedProcessResult> {
   return new Promise((resolvePromise) => {
-    const executable = options.executable === "node" ? process.execPath : options.executable;
+    const invocation = resolveProcessInvocation(options.executable, options.arguments);
     let child;
     try {
-      child = spawn(executable, [...options.arguments], {
+      child = spawn(invocation.executable, [...invocation.arguments], {
         cwd: options.cwd,
         env: minimalEnvironment(),
         shell: false,

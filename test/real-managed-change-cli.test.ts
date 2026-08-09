@@ -231,6 +231,58 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
   });
 
+  it("emits a structured STOP artifact when the declared project check is unavailable", async () => {
+    const { dependencies, io, root, repository } = await createCliFixture();
+    const planPath = join(root, "change-plan.json");
+    const target = await targetFor(repository);
+    await writeFile(
+      planPath,
+      JSON.stringify({
+        ...plan(target),
+        check: {
+          label: "Unavailable project check",
+          executable: "hpi-check-executable-that-does-not-exist",
+          argv: ["--version"],
+        },
+      }),
+      "utf8",
+    );
+
+    const runTask6Process = async (
+      request: Task6PiProcessRequest,
+    ): Promise<Task6PiProcessResult> => {
+      await writeFile(join(request.plan.cwd, "result.txt"), "READY\n", "utf8");
+      return {
+        exitCode: 0,
+        timedOut: false,
+        framingValid: true,
+        eventTypes: ["agent_start", "tool_execution_start", "agent_end"],
+        recordCount: 3,
+        stdoutDigest: `sha256:${"a".repeat(64)}`,
+        stderrDigest: `sha256:${"b".repeat(64)}`,
+        capturedBytes: 128,
+        outputTruncated: false,
+      };
+    };
+
+    expect(
+      await runHpiCli(
+        ["change", "--repo", repository, "--plan", planPath, "--json", "--allow-provider-request"],
+        { ...dependencies, runTask6Process },
+      ),
+    ).toBe(2);
+    const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    expect(artifact).toMatchObject({
+      schemaVersion: "hpi-managed-change.v2",
+      taskResult: "STOP",
+      projection: {
+        change: { lifecycle: "BLOCKED" },
+        verificationReceipts: [{ outcome: "BLOCKED" }],
+      },
+    });
+    expect(io.stderr.join("\n")).not.toContain("CommandStatus=INCOMPATIBLE");
+  });
+
   it("uses the qualified process and writer-lease path by default", async () => {
     const { dependencies, io, root, repository } = await createCliFixture();
     const planPath = join(root, "change-plan.json");

@@ -284,4 +284,28 @@ describe("independent command verifier", () => {
     expect(result.receipt.outcome).toBe("FAIL");
     expect(result.receipt.workspaceFingerprint).toBe(promotion.workspaceFingerprint);
   });
+
+  it("launches the npm command shim through Node on Windows", async () => {
+    const runVerification = requireRunVerification();
+    const { fixture, promotion } = await createPromotedFixture();
+    const planRevision = createPlan(promotion, {
+      executable: "npm",
+      argv: ["--version"],
+    });
+
+    const result = await runVerification({
+      planRevision,
+      runId: "run_task6",
+      attemptId: "att_task6-1",
+      checkId: "check_task6-result",
+      verificationReceiptId: "verify_task6-npm",
+      evidenceId: "evidence_task6-npm",
+      repository: fixture.repository,
+      environmentFingerprint: fingerprintA,
+      timeoutMs: 5_000,
+      maximumOutputBytes: 4_096,
+    });
+
+    expect(result.receipt.outcome).toBe("PASS");
+  });
 });

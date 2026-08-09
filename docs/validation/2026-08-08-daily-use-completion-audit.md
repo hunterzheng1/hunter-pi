@@ -235,8 +235,8 @@ credential, Provider request, or daily-use GO was inferred or touched; the pilot
 
 ## Addendum (2026-08-09) — Current merged-head continuation audit
 
-The current clean `main` head is `87f65ff472ede5e2cd8f56547af85a3bc02707da`. Exact merged-head CI
-run [`31287350105`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31287350105) completed with
+The current clean `main` head is `48e2909272c2436f907e3702016813438a77a575`. Exact merged-head CI
+run [`31289777913`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31289777913) completed with
 all six required jobs successful: Windows and Ubuntu quality, Task 7 containment on both platforms,
 Pi/Task 9/Task 10 Evidence consistency, and Task 7 Evidence consistency.
 

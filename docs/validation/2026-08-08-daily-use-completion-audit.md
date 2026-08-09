@@ -235,8 +235,8 @@ credential, Provider request, or daily-use GO was inferred or touched; the pilot
 
 ## Addendum (2026-08-09) — Current merged-head continuation audit
 
-This addendum uses the last code-bearing merged baseline `48e2909272c2436f907e3702016813438a77a575`. Exact merged-head CI
-run [`31289777913`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31289777913) completed with
+This addendum uses the last code-bearing merged baseline `9bce51d0fcd51dacff4487893ed05f11f40304a2`. Exact merged-head CI
+run [`31296506169`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31296506169) completed with
 all six required jobs successful: Windows and Ubuntu quality, Task 7 containment on both platforms,
 Pi/Task 9/Task 10 Evidence consistency, and Task 7 Evidence consistency.
 

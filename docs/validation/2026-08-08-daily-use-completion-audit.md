@@ -226,7 +226,7 @@ consumes the collector exactly once, adds `LIVE_WINDOWS_PILOT` itself, and verif
 fingerprint, Operator scope, and machine profile before issuing the opaque `TrustedPilotEvidenceCapture`.
 Unknown fields, caller-selected provenance, invalid schema data, plan drift, and credential/path-shaped extras
 fail closed with fixed non-sensitive errors. The returned authority is accepted by the existing append-only
-`FilePilotArchiveStore`; a focused integration test proves that hand-off and the focused suite is 5/5.
+`FilePilotArchiveStore`; a focused integration test proves that hand-off and the focused suite is 9/9.
 
 The finalizer does not manufacture observations or authorize a repository/Provider request. Its runtime
 collector must still be connected to the separately authorized real Windows pilot. No real repository,

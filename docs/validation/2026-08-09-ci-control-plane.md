@@ -59,3 +59,30 @@ Task 9–11 remain complete only within their recorded provider-neutral and unsi
 developer-preview bounds. Task 12 still has no explicitly selected pair of real
 repositories, bounded Provider authorization, ten-task observation set, or immutable
 aggregate Archive, so Windows-first daily-use acceptance remains `NOT_PROVEN`.
+
+## Follow-up after the observer fix
+
+PR #66 first exercised the observer against a pending run whose GitHub CLI JSON represented
+pending conclusions as an empty string. The observer failed closed with
+`CI_RUN_RESPONSE_INVALID`; it did not report a false pass. The parser was then tightened to
+normalize only the documented pending representations (`null` and empty string), while
+continuing to reject unknown conclusions. The focused observer suite passed 7/7 locally.
+
+The replacement PR run
+[`31312884636`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31312884636), bound to
+`2a6922ecd836f10095b9d504265f4cecf6365766`, passed all six required jobs. PR #66 was merged
+as `f1c03b6b5ffd3c181bbe541bcc33c18064496995`; the exact merged-head main run
+[`31313952000`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31313952000) then passed
+Windows and Ubuntu quality, Pi + Task 9 + Task 10 Evidence, Task 7 containment, and Task 7
+Evidence. The earlier cancelled/failed observations remain preserved as history.
+
+The final read-only quota snapshot was:
+
+```text
+core:    4939 / 5000 remaining
+graphql: 4984 / 5000 remaining
+search:    30 / 30 remaining
+```
+
+This confirms that the GitHub API limit is currently clear. The guard remains necessary because
+quota availability is operational state, not proof of product readiness.

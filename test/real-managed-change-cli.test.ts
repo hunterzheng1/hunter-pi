@@ -28,7 +28,6 @@ import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
-const hostedTimeoutMs = vitestResourcePolicy.managedProcessIntegrationTimeoutMs;
 
 afterEach(async () => {
   await Promise.all(
@@ -287,6 +286,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
 
   it(
     "uses the qualified process and writer-lease path by default",
+    { timeout: vitestResourcePolicy.managedProcessIntegrationTimeoutMs },
     async () => {
       const { dependencies, io, root, repository } = await createCliFixture();
       const planPath = join(root, "change-plan.json");
@@ -323,6 +323,5 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       );
       expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
     },
-    hostedTimeoutMs,
   );
 });

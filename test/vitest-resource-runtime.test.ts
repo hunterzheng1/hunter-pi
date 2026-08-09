@@ -45,8 +45,8 @@ describe("Vitest resource fixture runtime", () => {
 
     expect(managedProcessTimeout).toBe(60_000);
     expect(managedProcessTimeout).toBeGreaterThan(vitestResourcePolicy.testTimeoutMs);
-    expect(managedChangeSource).toContain(
-      "vitestResourcePolicy.managedProcessIntegrationTimeoutMs",
+    expect(managedChangeSource).toMatch(
+      /it\(\s*"uses the qualified process and writer-lease path by default",\s*\{\s*timeout:\s*vitestResourcePolicy\.managedProcessIntegrationTimeoutMs\s*\}/u,
     );
   });
 

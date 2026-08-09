@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.build.json --clean && tsc -b tsconfig.build.json --pretty false && node scripts/bundle-cli.mjs",
     "clean-install-smoke": "node scripts/clean-install-smoke.mjs",
+    "ci:observe": "node scripts/ci-observe.mjs",
     "compare:pi-evidence": "npm run build && node dist/tools/compare-pi-probe-evidence.js",
     "compare:task7-evidence:compiled": "node dist/tools/compare-task7-platform-evidence.js",
     "compare:task7-evidence": "npm run build && node dist/tools/compare-task7-platform-evidence.js",

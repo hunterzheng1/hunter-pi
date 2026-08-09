@@ -692,9 +692,13 @@ export async function runTask10PlatformProbe(
   }
 }
 
-function parseOutput(arguments_: readonly string[]): string {
+export function parseTask10OutputArgument(
+  arguments_: readonly string[],
+  defaultOutput = `${outputRoot}/${process.platform}-node24-${String(process.pid)}.json`,
+): string {
+  if (arguments_.length === 0) return defaultOutput;
   if (arguments_.length !== 2 || arguments_[0] !== "--output" || arguments_[1] === undefined) {
-    throw new Error("usage: task10-platform-probe --output <approved-path.json>");
+    throw new Error("usage: task10-platform-probe [--output <approved-path.json>]");
   }
   return arguments_[1];
 }
@@ -718,7 +722,10 @@ function approvedOutput(repositoryRoot: string, candidate: string): string {
 
 async function runCli(): Promise<void> {
   const repositoryRoot = resolve(process.cwd());
-  const outputPath = approvedOutput(repositoryRoot, parseOutput(process.argv.slice(2)));
+  const outputPath = approvedOutput(
+    repositoryRoot,
+    parseTask10OutputArgument(process.argv.slice(2)),
+  );
   const directory = dirname(outputPath);
   await assertSafeDirectoryPath(directory);
   await mkdir(directory, { recursive: true });

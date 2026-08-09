@@ -22,6 +22,10 @@ inspection into a high-frequency API poller.
   Task 10 reuses the existing Windows/Ubuntu `quality` jobs and the existing
   aggregate Evidence job; it does not add another checkout or `npm ci` job.
   Its small receipts use 14-day artifact retention.
+- The compiled Task 10 platform probe accepts either an explicit `--output
+  <approved-path.json>` argument or no arguments. With no argument it writes a
+  unique receipt below `.artifacts/task10-platform`; both forms still require a
+  clean worktree before the source identity is emitted.
 - Workflow concurrency cancels stale runs for the same ref. A cancelled run is
   retained as history; it is not relabelled as a pass.
 

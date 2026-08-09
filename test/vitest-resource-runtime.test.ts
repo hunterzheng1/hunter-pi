@@ -1,4 +1,4 @@
-import { access, rm, writeFile } from "node:fs/promises";
+import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -31,6 +31,23 @@ describe("Vitest resource fixture runtime", () => {
     expect(configuration.test?.testTimeout).toBe(vitestResourcePolicy.testTimeoutMs);
     expect(vitestResourcePolicy.maxWorkers).toBe(1);
     expect(vitestResourcePolicy.testTimeoutMs).toBe(30_000);
+  });
+
+  it("gives the hosted managed-process integration room beyond one platform startup ceiling", async () => {
+    const managedProcessTimeout = Reflect.get(
+      vitestResourcePolicy,
+      "managedProcessIntegrationTimeoutMs",
+    );
+    const managedChangeSource = await readFile(
+      new URL("./real-managed-change-cli.test.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(managedProcessTimeout).toBe(60_000);
+    expect(managedProcessTimeout).toBeGreaterThan(vitestResourcePolicy.testTimeoutMs);
+    expect(managedChangeSource).toContain(
+      "vitestResourcePolicy.managedProcessIntegrationTimeoutMs",
+    );
   });
 
   it("contains temporary fixtures and restores inherited Temp variables after teardown", async () => {

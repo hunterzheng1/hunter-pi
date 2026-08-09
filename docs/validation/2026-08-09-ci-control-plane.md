@@ -86,3 +86,26 @@ search:    30 / 30 remaining
 
 This confirms that the GitHub API limit is currently clear. The guard remains necessary because
 quota availability is operational state, not proof of product readiness.
+
+## Windows managed-process test budget hardening
+
+The documentation-only PR #67 run
+[`31315672694`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31315672694) retained one
+Windows failure: 447 tests passed, while
+`real-managed-change-cli.test.ts` reached its exact 30-second test timeout. The failed Windows job
+was rerun once without a source change; the same run then passed all six required jobs. PR #67 was
+merged as `67a5d5692e107acdd685ff595f8b2e720889f216`, and exact merged-head main run
+[`31317016233`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31317016233) passed all six
+Windows/Ubuntu quality, containment, and Evidence jobs without a rerun.
+
+This was the second retained hosted timeout for the same integration test. Its outer 30-second
+Vitest budget equalled the Windows Job Object helper's own 30-second containment-start ceiling,
+leaving no budget for the Git fixture, durable leases, verification, and cleanup. The test now uses
+a dedicated 60-second integration budget from the shared Vitest resource policy. Product process
+timeouts and the repository-wide 30-second default are unchanged, and a policy regression test
+requires the dedicated budget to remain both explicit and larger than the default.
+
+The focused policy and real-change suites passed 9/9 locally. The first full `test:ci` retained an
+unrelated 30-second Pi child-probe timeout after 50 files and 444 tests passed; the exact focused Pi
+probe then passed 5/5, and a second complete `test:ci` passed 51 files and 449 tests. The initial
+local child-probe timeout remains part of this validation history and is not relabeled as a pass.

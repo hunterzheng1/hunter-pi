@@ -23,10 +23,12 @@ import {
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
+import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
+const hostedTimeoutMs = vitestResourcePolicy.managedProcessIntegrationTimeoutMs;
 
 afterEach(async () => {
   await Promise.all(
@@ -283,32 +285,44 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     expect(io.stderr.join("\n")).not.toContain("CommandStatus=INCOMPATIBLE");
   });
 
-  it("uses the qualified process and writer-lease path by default", async () => {
-    const { dependencies, io, root, repository } = await createCliFixture();
-    const planPath = join(root, "change-plan.json");
-    const target = await targetFor(repository);
-    await writeFile(
-      join(root, "pi-cli.js"),
-      "const fs = require('node:fs');\nfs.writeFileSync('result.txt', 'READY\\n');\nprocess.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');\n",
-      "utf8",
-    );
-    await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
+  it(
+    "uses the qualified process and writer-lease path by default",
+    async () => {
+      const { dependencies, io, root, repository } = await createCliFixture();
+      const planPath = join(root, "change-plan.json");
+      const target = await targetFor(repository);
+      await writeFile(
+        join(root, "pi-cli.js"),
+        "const fs = require('node:fs');\nfs.writeFileSync('result.txt', 'READY\\n');\nprocess.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');\n",
+        "utf8",
+      );
+      await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
 
-    expect(
-      await runHpiCli(
-        ["change", "--repo", repository, "--plan", planPath, "--json", "--allow-provider-request"],
-        dependencies,
-      ),
-    ).toBe(0);
-    const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
-    expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
-      taskResult: "GO",
-      writerLease: { acquireOutcome: "ACQUIRED", releaseOutcome: "RELEASED" },
-    });
-    expect(JSON.stringify(artifact)).toMatch(
-      /containment=(?:WINDOWS_JOB_OBJECT|LINUX_SUBREAPER_PROCESS_TREE)/u,
-    );
-    expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
-  }, 30_000);
+      expect(
+        await runHpiCli(
+          [
+            "change",
+            "--repo",
+            repository,
+            "--plan",
+            planPath,
+            "--json",
+            "--allow-provider-request",
+          ],
+          dependencies,
+        ),
+      ).toBe(0);
+      const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+      expect(artifact).toMatchObject({
+        schemaVersion: "hpi-managed-change.v2",
+        taskResult: "GO",
+        writerLease: { acquireOutcome: "ACQUIRED", releaseOutcome: "RELEASED" },
+      });
+      expect(JSON.stringify(artifact)).toMatch(
+        /containment=(?:WINDOWS_JOB_OBJECT|LINUX_SUBREAPER_PROCESS_TREE)/u,
+      );
+      expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("READY\n");
+    },
+    hostedTimeoutMs,
+  );
 });

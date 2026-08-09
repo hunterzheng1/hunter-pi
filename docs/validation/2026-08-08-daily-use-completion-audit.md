@@ -232,3 +232,23 @@ The finalizer does not manufacture observations or authorize a repository/Provid
 collector must still be connected to the separately authorized real Windows pilot. No real repository,
 credential, Provider request, or daily-use GO was inferred or touched; the pilot disposition remains
 `NOT_RUN / NOT_PROVEN` pending the full dated Archive and exact Windows/Ubuntu receipts.
+
+## Addendum (2026-08-09) — Current merged-head continuation audit
+
+The current clean `main` head is `87f65ff472ede5e2cd8f56547af85a3bc02707da`. Exact merged-head CI
+run [`31287350105`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31287350105) completed with
+all six required jobs successful: Windows and Ubuntu quality, Task 7 containment on both platforms,
+Pi/Task 9/Task 10 Evidence consistency, and Task 7 Evidence consistency.
+
+The current checkout independently passed `npm run verify`: 61 test files and 553 tests, lint,
+typecheck, strict compiler smoke, build, formatting, external package smoke, clean-install smoke,
+and the compiled Pi probe. The current Windows Task 9 platform probe passed 6/6 checks with
+credential-free/path-free privacy PASS; the current Windows Task 10 platform probe passed 9/9 checks
+with the same privacy PASS. The current Windows x64 portable package reports `sourceState=CLEAN`,
+`updateChannel=developer-preview`, `signed=false`, and its launcher reports `update status=READY`.
+
+These results close the current provider-neutral implementation and hosted-verification boundary.
+They do not supply the missing real-use observations: no two explicitly selected operator-owned
+repositories, Provider/model/endpoint/account authorization, bounded credential scope, ten-task
+observation set, or immutable aggregate pilot Archive is available. The real Windows daily-use pilot
+therefore remains `NOT_RUN / NOT_PROVEN`, and no production or daily-use GO is claimed.

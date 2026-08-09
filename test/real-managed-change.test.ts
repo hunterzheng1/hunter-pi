@@ -212,6 +212,45 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     expect(runGit(repository, ["status", "--porcelain=v1"]).trim()).toBe("M result.txt");
   });
 
+  it("returns a bounded STOP artifact when the declared independent check cannot start", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Report an unavailable project check",
+      goal: "Change result.txt while preserving a blocked independent check result.",
+      nonGoals: ["Commit, push, publish, or deploy"],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: {
+        label: "Unavailable project check",
+        executable: "hpi-check-executable-that-does-not-exist",
+        argv: ["--version"],
+      },
+      target,
+    });
+
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.projection.change.lifecycle).toBe("BLOCKED");
+    expect(artifact.projection.verificationReceipts[0]?.outcome).toBe("BLOCKED");
+    expect(artifact.review.findings).toEqual([]);
+    expect(artifact.cleanup.targetWorkingTree).toBe("PRESERVED_CHANGED");
+  });
+
   it("blocks a frozen target identity mismatch before starting the Agent", async () => {
     const { root, repository } = await createRepository();
     const writerLease = await createWriterLease(root);

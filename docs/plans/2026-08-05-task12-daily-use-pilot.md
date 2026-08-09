@@ -87,3 +87,14 @@ credential, or Provider request was inferred or touched. The source-level test c
 package export, and the current product has no production capture finalizer; daily-use acceptance remains
 `NOT_RUN / NOT_PROVEN` until a separately authorized Windows pilot produces its complete immutable
 Archive and exact hosted Windows/Ubuntu receipts.
+
+## Real-project attempt hardening (2026-08-09)
+
+Two explicitly authorized disposable-worktree requests were exercised under a frozen two-request budget;
+the exact bounded results are recorded in [2026-08-09 — real-project bounded attempts](../validation/2026-08-09-real-project-bounded-attempts.md).
+The first exposed two provider-neutral defects: Windows could not launch the standard `npm` command shim
+from the shell-free verifier, and a blocked final check could trigger an invalid Review Receipt transition.
+The verifier now resolves the Windows npm CLI through Node, and a blocked/failed final check returns a
+structured `STOP` artifact without appending a Review Receipt after a terminal Run. Focused unit and CLI
+regression tests pass. These fixes improve the real-project entry point but do not change the Task 12
+disposition: the complete daily-use pilot remains `NOT_PROVEN`.

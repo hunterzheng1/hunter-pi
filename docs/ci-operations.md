@@ -28,6 +28,12 @@ inspection into a high-frequency API poller.
   clean worktree before the source identity is emitted.
 - Workflow concurrency cancels stale runs for the same ref. A cancelled run is
   retained as history; it is not relabelled as a pass.
+- Real-project `hpi change` checks run with structured argv and `shell: false`.
+  On Windows, the standard `npm` command shim is resolved through the active
+  Node executable so a declared `npm test` check is actually runnable. If a
+  declared check remains unavailable or fails, the Run ends as a structured
+  `STOP`/`BLOCKED` result and does not append a Review Receipt after the
+  terminal Run state.
 
 ## Operator policy
 

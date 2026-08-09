@@ -64,3 +64,19 @@ but it does not prove the complete Task 12 daily-use pilot. The product remains
 `NOT_PROVEN` for daily-use acceptance until the required ten-task, paired
 comparator, interruption, plugin, update, archive, and exact hosted CI Evidence
 set is produced under a fresh explicit authorization budget.
+
+## Final merged-main Windows artifact smoke (2026-08-09)
+
+The exact Windows x64 portable artifact built from merged main
+`098569aaf4594d3281af8426d5896cc41787dba2` reported `sourceState=CLEAN`, Pi
+Engine `0.83.0`, and `update status=READY`. In a real terminal, `hpi smoke tui`
+started the bundled Pi TUI without sending a model request; the operator ran
+`/hunter-status`, observed `HunterStatus=DETECTED Command=/hunter-status`, and
+exited cleanly. The explicit acknowledgement returned
+`TuiSmoke=DETECTED Acknowledgement=MANUAL Provider=NOT_PROVEN`.
+
+After the acknowledgement, `hpi doctor --json` returned exit 0 and
+`overallStatus=DETECTED`, including `interactive_tui=DETECTED`. This proves the
+local product-shell/TUI smoke for the exact clean artifact, but it does not
+prove Provider request reliability or change the complete Task 12 daily-use
+disposition above.

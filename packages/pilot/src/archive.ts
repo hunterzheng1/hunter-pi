@@ -16,6 +16,7 @@ import { z } from "zod";
 
 import { TrustedPilotEvidenceCapture } from "./capture.js";
 import { type PilotEvidence, pilotEvidenceSchema } from "./contracts.js";
+import { deepFreeze } from "./immutability.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 
 const archiveIdSchema = z
@@ -156,13 +157,6 @@ const archiveIdentityFilenameSuffix = ".identity.json";
 const archiveCommitFilenameSuffix = ".committed.json";
 const trustedStoreToken = Symbol("trusted-pilot-archive-store");
 type PilotArchiveReceiptKind = "PACKAGE" | "IDENTITY" | "COMMIT";
-
-function deepFreeze<T>(value: T): T {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return value;
-}
 
 function storeProof(
   key: Uint8Array,

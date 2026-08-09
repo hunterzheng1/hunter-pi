@@ -216,3 +216,19 @@ smoke, and the compiled Pi public-interface probe. These results close the provi
 and hosted CI boundary only. No real repository, Provider credential, or Provider request was used, and the
 product still has no production capture finalizer; the real Windows daily-use pilot and its immutable
 aggregate Archive therefore remain `NOT_RUN / NOT_PROVEN`.
+
+## Addendum (2026-08-09) — Production capture finalizer
+
+The provider-neutral production boundary is now implemented in `packages/pilot/src/capture.ts`. The exported
+`PilotEvidenceCaptureFinalizer` accepts only a module-private runtime capability issued by the product runtime,
+requires the actual process to be Windows,
+consumes the collector exactly once, adds `LIVE_WINDOWS_PILOT` itself, and verifies the exact frozen Plan
+fingerprint, Operator scope, and machine profile before issuing the opaque `TrustedPilotEvidenceCapture`.
+Unknown fields, caller-selected provenance, invalid schema data, plan drift, and credential/path-shaped extras
+fail closed with fixed non-sensitive errors. The returned authority is accepted by the existing append-only
+`FilePilotArchiveStore`; a focused integration test proves that hand-off and the focused suite is 5/5.
+
+The finalizer does not manufacture observations or authorize a repository/Provider request. Its runtime
+collector must still be connected to the separately authorized real Windows pilot. No real repository,
+credential, Provider request, or daily-use GO was inferred or touched; the pilot disposition remains
+`NOT_RUN / NOT_PROVEN` pending the full dated Archive and exact Windows/Ubuntu receipts.

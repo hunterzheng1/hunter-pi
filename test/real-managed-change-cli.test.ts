@@ -22,12 +22,20 @@ import {
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
+import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
+const qualifiedPiSuccessScript = [
+  "const fs = require('node:fs');",
+  "fs.writeFileSync('result.txt', 'READY\\n');",
+  "const usage={input:120,output:30,cacheRead:10,cacheWrite:5,totalTokens:165,cost:{input:0.0012,output:0.0006,cacheRead:0.0001,cacheWrite:0.00005,total:0.00195}};",
+  "process.stdout.write(JSON.stringify({type:'message_end',message:{role:'assistant',usage}})+'\\n');",
+  "process.stdout.write(JSON.stringify({type:'agent_end'})+'\\n');",
+].join("\n");
 
 afterEach(async () => {
   await Promise.all(
@@ -211,6 +219,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         stderrDigest: `sha256:${"b".repeat(64)}`,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     };
 
@@ -223,7 +232,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     expect(processRequests).toBe(1);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
+      schemaVersion: "hpi-managed-change.v3",
       taskResult: "GO",
       repository: { scope: "EXPLICIT_OPERATOR_SELECTED" },
       cleanup: { status: "NOT_APPLICABLE", targetWorkingTree: "PRESERVED_CHANGED" },
@@ -263,6 +272,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         stderrDigest: `sha256:${"b".repeat(64)}`,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     };
 
@@ -274,7 +284,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     ).toBe(2);
     const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(artifact).toMatchObject({
-      schemaVersion: "hpi-managed-change.v2",
+      schemaVersion: "hpi-managed-change.v3",
       taskResult: "STOP",
       projection: {
         change: { lifecycle: "BLOCKED" },
@@ -291,11 +301,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       const { dependencies, io, root, repository } = await createCliFixture();
       const planPath = join(root, "change-plan.json");
       const target = await targetFor(repository);
-      await writeFile(
-        join(root, "pi-cli.js"),
-        "const fs = require('node:fs');\nfs.writeFileSync('result.txt', 'READY\\n');\nprocess.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');\n",
-        "utf8",
-      );
+      await writeFile(join(root, "pi-cli.js"), qualifiedPiSuccessScript, "utf8");
       await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
 
       expect(
@@ -314,7 +320,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       ).toBe(0);
       const artifact = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
       expect(artifact).toMatchObject({
-        schemaVersion: "hpi-managed-change.v2",
+        schemaVersion: "hpi-managed-change.v3",
         taskResult: "GO",
         writerLease: { acquireOutcome: "ACQUIRED", releaseOutcome: "RELEASED" },
       });

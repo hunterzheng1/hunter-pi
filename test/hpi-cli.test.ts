@@ -29,6 +29,7 @@ import {
 } from "./support/task12-plan-fixture.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
 import { testPilotEvidenceCapture } from "./support/task12-test-capture.js";
+import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
 import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
@@ -1091,6 +1092,7 @@ describe("hpi command", () => {
         stderrDigest: `sha256:${"b".repeat(64)}`,
         capturedBytes: 128,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     };
     const managedDependencies: HpiCliDependencies = {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 
 import {
   createFileLeaseManager,
@@ -24,6 +25,7 @@ import {
   type Task6PiProcessResult,
 } from "./task6-engine-host.js";
 import { LfOnlyNdjsonDecoder } from "./ndjson.js";
+import { accountPiProviderUsage, unavailablePiProviderUsage } from "./provider-usage.js";
 
 export interface QualifiedPiJsonProcessOptions {
   readonly leaseRoot: string;
@@ -31,7 +33,11 @@ export interface QualifiedPiJsonProcessOptions {
 }
 
 export class QualifiedPiProcessBlockedError extends Error {
-  public readonly reason: "LEASE_CONFLICT" | "PROCESS_FINALITY_NOT_PROVEN";
+  public readonly reason:
+    | "LEASE_CONFLICT"
+    | "PROCESS_FINALITY_NOT_PROVEN"
+    | "RUNTIME_CONFIGURATION_NOT_PROVEN"
+    | "RUNTIME_SNAPSHOT_CLEANUP_FAILED";
 
   public constructor(reason: QualifiedPiProcessBlockedError["reason"], message: string) {
     super(message);
@@ -57,6 +63,156 @@ function inheritedEnvironment(): Record<string, string> {
   );
 }
 
+interface QualifiedPiRuntimeSnapshot {
+  readonly directory: string;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
+const maximumRuntimeConfigurationBytes = 4 * 1024 * 1024;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readExactOptionalFile(path: string): Promise<Buffer | undefined> {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
+    throw new QualifiedPiProcessBlockedError(
+      "RUNTIME_CONFIGURATION_NOT_PROVEN",
+      "the Pi runtime snapshot source contains an aliased or non-regular file",
+    );
+  }
+  if (!Number.isSafeInteger(stats.size) || stats.size > maximumRuntimeConfigurationBytes) {
+    throw new QualifiedPiProcessBlockedError(
+      "RUNTIME_CONFIGURATION_NOT_PROVEN",
+      "the Pi runtime snapshot source exceeds its finite configuration limit",
+    );
+  }
+  return readFile(path);
+}
+
+async function prepareQualifiedPiRuntimeSnapshot(
+  leaseRoot: string,
+  environment: Readonly<Record<string, string>>,
+): Promise<QualifiedPiRuntimeSnapshot> {
+  const snapshotsRoot = join(dirname(resolve(leaseRoot)), "pi-runtime-snapshots");
+  let directory: string | undefined;
+  try {
+    await mkdir(snapshotsRoot, { recursive: true, mode: 0o700 });
+    const snapshotsRootStats = await lstat(snapshotsRoot);
+    if (
+      snapshotsRootStats.isSymbolicLink() ||
+      !snapshotsRootStats.isDirectory() ||
+      (await realpath(snapshotsRoot)) !== snapshotsRoot
+    ) {
+      throw new QualifiedPiProcessBlockedError(
+        "RUNTIME_CONFIGURATION_NOT_PROVEN",
+        "the Pi runtime snapshot root is not one exact physical directory",
+      );
+    }
+    directory = await mkdtemp(join(snapshotsRoot, "pi-runtime-"));
+    const configuredDirectory = environment["PI_CODING_AGENT_DIR"];
+    let sourceDirectory: string | undefined;
+    if (configuredDirectory !== undefined) {
+      sourceDirectory = resolve(configuredDirectory);
+      const stats = await lstat(sourceDirectory);
+      if (
+        stats.isSymbolicLink() ||
+        !stats.isDirectory() ||
+        (await realpath(sourceDirectory)) !== sourceDirectory
+      ) {
+        throw new QualifiedPiProcessBlockedError(
+          "RUNTIME_CONFIGURATION_NOT_PROVEN",
+          "the Pi runtime snapshot source is not one exact physical directory",
+        );
+      }
+    }
+
+    const sourceSettings =
+      sourceDirectory === undefined
+        ? undefined
+        : await readExactOptionalFile(join(sourceDirectory, "settings.json"));
+    let settings: Record<string, unknown> = {};
+    if (sourceSettings !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(sourceSettings.toString("utf8"));
+        if (!isPlainObject(parsed)) throw new Error("settings root is not an object");
+        settings = parsed;
+      } catch {
+        throw new QualifiedPiProcessBlockedError(
+          "RUNTIME_CONFIGURATION_NOT_PROVEN",
+          "the Pi runtime settings cannot be snapshotted safely",
+        );
+      }
+    }
+    const retry = isPlainObject(settings["retry"]) ? settings["retry"] : {};
+    const provider = isPlainObject(retry["provider"]) ? retry["provider"] : {};
+    const compaction = isPlainObject(settings["compaction"]) ? settings["compaction"] : {};
+    const boundedSettings = {
+      ...settings,
+      retry: {
+        ...retry,
+        enabled: false,
+        maxRetries: 0,
+        provider: { ...provider, maxRetries: 0 },
+      },
+      compaction: { ...compaction, enabled: false },
+    };
+    await writeFile(join(directory, "settings.json"), `${JSON.stringify(boundedSettings)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+
+    if (sourceDirectory !== undefined) {
+      for (const filename of ["auth.json", "models.json"] as const) {
+        const content = await readExactOptionalFile(join(sourceDirectory, filename));
+        if (content !== undefined) {
+          await writeFile(join(directory, filename), content, { flag: "wx", mode: 0o600 });
+        }
+      }
+    }
+    return {
+      directory,
+      environment: { ...environment, PI_CODING_AGENT_DIR: directory },
+    };
+  } catch (error) {
+    if (directory !== undefined) {
+      try {
+        await rm(directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 100 });
+      } catch {
+        throw new QualifiedPiProcessBlockedError(
+          "RUNTIME_SNAPSHOT_CLEANUP_FAILED",
+          "the temporary Pi runtime snapshot could not be removed",
+        );
+      }
+    }
+    if (error instanceof QualifiedPiProcessBlockedError) throw error;
+    throw new QualifiedPiProcessBlockedError(
+      "RUNTIME_CONFIGURATION_NOT_PROVEN",
+      "the Pi runtime configuration cannot be snapshotted safely",
+    );
+  }
+}
+
+async function removeQualifiedPiRuntimeSnapshot(
+  snapshot: QualifiedPiRuntimeSnapshot,
+): Promise<void> {
+  try {
+    await rm(snapshot.directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    throw new QualifiedPiProcessBlockedError(
+      "RUNTIME_SNAPSHOT_CLEANUP_FAILED",
+      "the temporary Pi runtime snapshot could not be removed",
+    );
+  }
+}
+
 function resultFromManagedProcess(
   finalReceipt: ManagedProcessFinalReceipt,
   stdout: Buffer,
@@ -66,6 +222,7 @@ function resultFromManagedProcess(
   const outputTruncated = finalReceipt.truncated;
   let eventTypes: string[] = [];
   let recordCount = 0;
+  let providerUsage = unavailablePiProviderUsage();
   let framingValid =
     finalReceipt.terminalFinality === "FINAL" &&
     !outputTruncated &&
@@ -75,6 +232,7 @@ function resultFromManagedProcess(
       const decoder = new LfOnlyNdjsonDecoder(maximumOutputBytes);
       const records = [...decoder.push(stdout), ...decoder.finish()];
       recordCount = records.length;
+      providerUsage = accountPiProviderUsage(records, "TRANSPORT_RETRIES_DISABLED");
       eventTypes = records.flatMap((record) => {
         const type = Reflect.get(record, "type");
         return typeof type === "string" ? [type] : [];
@@ -94,6 +252,7 @@ function resultFromManagedProcess(
     stderrDigest: sha256(stderr),
     capturedBytes: finalReceipt.retainedBytes,
     outputTruncated,
+    providerUsage,
     terminalFinality: finalReceipt.terminalFinality,
     processTreeState: finalReceipt.processTreeState,
     leaseState: finalReceipt.leaseState,
@@ -205,28 +364,32 @@ export async function createQualifiedPiJsonProcess(
       );
     };
 
+    let runtimeSnapshot: QualifiedPiRuntimeSnapshot | undefined;
     const host = createLocalManagedProcessHost({ leaseManager, now });
     const sessionId = managedProcessSessionIdSchema.parse(`process_pi-${suffix}`);
     const operationId = operationIdSchema.parse(`op_pi-start-${suffix}`);
-    const processRequest = managedProcessStartRequestSchema.parse({
-      schemaVersion: "hpi-process-start.v1",
-      operationId,
-      operationFingerprint: sha256(`hpi-qualified-pi-start\0${suffix}`),
-      sessionId,
-      executable: request.plan.executable,
-      argv: [...request.plan.arguments, "--mode", "json", "--no-session", request.prompt],
-      cwd: request.plan.cwd,
-      environment: { ...inheritedEnvironment(), ...request.plan.environment },
-      timeoutMs: request.timeoutMs,
-      maxOutputBytes: request.maximumOutputBytes,
-      // The qualified-process lease is held by this adapter for the entire
-      // process session. The managed process host still proves OS containment
-      // and terminal finality; it does not own this outer workspace slot.
-      leases: [],
-    });
-
     let releaseNeeded = true;
     try {
+      runtimeSnapshot = await prepareQualifiedPiRuntimeSnapshot(
+        options.leaseRoot,
+        request.plan.environment,
+      );
+      const processRequest = managedProcessStartRequestSchema.parse({
+        schemaVersion: "hpi-process-start.v1",
+        operationId,
+        operationFingerprint: sha256(`hpi-qualified-pi-start\0${suffix}`),
+        sessionId,
+        executable: request.plan.executable,
+        argv: [...request.plan.arguments, "--mode", "json", "--no-session", request.prompt],
+        cwd: request.plan.cwd,
+        environment: { ...inheritedEnvironment(), ...runtimeSnapshot.environment },
+        timeoutMs: request.timeoutMs,
+        maxOutputBytes: request.maximumOutputBytes,
+        // The qualified-process lease is held by this adapter for the entire
+        // process session. The managed process host still proves OS containment
+        // and terminal finality; it does not own this outer workspace slot.
+        leases: [],
+      });
       const started = await host.start(processRequest);
       const final = await host.awaitFinal(started.receipt.sessionId);
       const output = await readManagedOutput(host, sessionId, request.maximumOutputBytes);
@@ -248,6 +411,9 @@ export async function createQualifiedPiJsonProcess(
     } finally {
       if (releaseNeeded) {
         await release().catch(() => undefined);
+      }
+      if (runtimeSnapshot !== undefined) {
+        await removeQualifiedPiRuntimeSnapshot(runtimeSnapshot);
       }
     }
   };

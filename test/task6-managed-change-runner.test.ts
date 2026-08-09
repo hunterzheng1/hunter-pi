@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EngineHost } from "@hunter-pi/engine-contracts";
 import * as managedChangeModule from "@hunter-pi/managed-change";
 import { Task6PiEngineHost } from "@hunter-pi/pi-host";
+import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 
 const fingerprintA = `sha256:${"a".repeat(64)}` as const;
@@ -152,6 +153,7 @@ function createHost(
         stderrDigest: fingerprintB,
         capturedBytes,
         outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
       };
     },
     now: () => "2026-08-04T00:00:10.000Z",

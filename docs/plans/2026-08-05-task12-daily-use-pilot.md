@@ -108,3 +108,20 @@ bundled Pi TUI without a model request; `/hunter-status` returned
 `TuiSmoke=DETECTED Acknowledgement=MANUAL Provider=NOT_PROVEN`. A following `hpi doctor --json` returned
 `overallStatus=DETECTED` with `interactive_tui=DETECTED`. This closes the exact-artifact local TUI smoke
 gate, but the ten-task real-project pilot and its daily-use acceptance remain `NOT_PROVEN`.
+
+## Provider usage accounting prerequisite (2026-08-10)
+
+The production capture coordinator cannot accept guessed Provider counts. The qualified Pi JSON adapter now
+accounts only assistant `message_end` events from a stream ending in `agent_end`, validates both token and
+cost component totals, aggregates Provider-reported cost into conservative integer minor units, and exposes
+the result through provider-neutral Engine resource usage. Its one-use runtime snapshot disables Provider
+transport retry, Agent auto-retry, and automatic compaction. The unqualified historical Task 6 process path
+remains `NOT_PROVEN`; repeated messages inside `agent_end` are ignored to prevent double counting. Missing,
+malformed, inconsistent, incomplete, truncated, or overflowing usage also remains `NOT_PROVEN`.
+
+Real-project `hpi-managed-change.v3` Evidence now carries that exact per-Run usage, cross-checks Provider and
+resource-accounting totals, binds finite token and cost budgets in addition to the existing
+turn/operation/command/output limits, and refuses a fixback request after an unaccounted or unreserved first
+Attempt. Missing accounting or an exceeded budget produces `STOP`. This is a capture prerequisite, not the
+real pilot: the append-only capture session and ten-task Windows Archive are still required before daily-use
+acceptance can become `GO`.

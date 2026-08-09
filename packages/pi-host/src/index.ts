@@ -64,6 +64,12 @@ export {
 } from "./product-launcher.js";
 export { LfOnlyNdjsonDecoder } from "./ndjson.js";
 export {
+  piProviderUsageReasonSchema,
+  piProviderUsageSchema,
+  type PiProviderUsage,
+  type PiProviderUsageReason,
+} from "./provider-usage.js";
+export {
   QualifiedPiProcessBlockedError,
   createQualifiedPiJsonProcess,
   type QualifiedPiJsonProcessOptions,

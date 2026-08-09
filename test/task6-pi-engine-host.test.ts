@@ -15,6 +15,13 @@ import { createTemporaryTestDirectory } from "./support/temporary-test-directory
 const fingerprintA = `sha256:${"a".repeat(64)}` as const;
 const fingerprintB = `sha256:${"b".repeat(64)}` as const;
 const observedAt = "2026-08-04T00:00:00.000Z";
+const providerUsagePass = {
+  status: "PASS" as const,
+  requestCount: 1,
+  tokenCount: 165,
+  costMinorUnits: 1,
+  reasons: [] as const,
+};
 const cleanupRoots: string[] = [];
 
 afterEach(async () => {
@@ -47,6 +54,13 @@ interface ProcessResult {
   readonly stderrDigest: string;
   readonly capturedBytes: number;
   readonly outputTruncated: boolean;
+  readonly providerUsage: {
+    readonly status: "PASS" | "NOT_PROVEN";
+    readonly requestCount: number | null;
+    readonly tokenCount: number | null;
+    readonly costMinorUnits: number | null;
+    readonly reasons: readonly string[];
+  };
   readonly containment?: "WINDOWS_JOB_OBJECT" | "LINUX_SUBREAPER_PROCESS_TREE" | "TEST_CONTAINED";
   readonly terminalFinality?: "FINAL" | "NOT_PROVEN";
   readonly processTreeState?: "EMPTY" | "ACTIVE" | "NOT_PROVEN";
@@ -72,7 +86,12 @@ interface Task6Host {
     readonly cursor: number;
     readonly kind: string;
     readonly summary?: string;
-    readonly resourceUsage?: { readonly outputBytes?: number };
+    readonly resourceUsage?: {
+      readonly outputBytes?: number;
+      readonly externalOperations?: number;
+      readonly tokens?: number;
+      readonly costMinorUnits?: number;
+    };
   }>;
 }
 
@@ -120,6 +139,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
           stderrDigest: fingerprintB,
           capturedBytes: 128,
           outputTruncated: false,
+          providerUsage: providerUsagePass,
         };
       },
       now: () => observedAt,
@@ -194,6 +214,11 @@ describe("Task 6 fixed Pi Engine Host", () => {
       "PROCESS_EXITED",
     ]);
     expect(observations[0]?.resourceUsage).toEqual({ outputBytes: 128 });
+    expect(observations[1]?.resourceUsage).toEqual({
+      externalOperations: 1,
+      tokens: 165,
+      costMinorUnits: 1,
+    });
     expect(JSON.stringify({ firstReceipt, observations })).not.toContain(prompt);
   });
 
@@ -220,6 +245,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
           stderrDigest: fingerprintB,
           capturedBytes: 16,
           outputTruncated: false,
+          providerUsage: providerUsagePass,
           containment: "TEST_CONTAINED" as const,
           terminalFinality: "FINAL" as const,
           processTreeState: "EMPTY" as const,
@@ -286,6 +312,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
           stderrDigest: fingerprintB,
           capturedBytes: 16,
           outputTruncated: false,
+          providerUsage: providerUsagePass,
         }),
       now: () => observedAt,
       processTimeoutMs: 30_000,
@@ -363,6 +390,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
           stderrDigest: fingerprintB,
           capturedBytes: 16,
           outputTruncated: false,
+          providerUsage: providerUsagePass,
         };
       },
       now: () => observedAt,

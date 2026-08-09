@@ -165,7 +165,10 @@ const productSourceSchema = z.strictObject({
   state: z.literal("CLEAN"),
 });
 
-const resourceAccountingSchema = z.strictObject({
+const safePositiveIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const safeNonnegativeIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+const resourceAccountingV2Schema = z.strictObject({
   status: z.enum(["PASS", "NOT_PROVEN", "EXCEEDED"]),
   budgets: z.strictObject({
     maxAgentTurns: z.number().int().positive(),
@@ -190,78 +193,237 @@ const resourceAccountingSchema = z.strictObject({
   unprovenReasons: z.array(z.string().min(1)),
 });
 
-export const realManagedChangeEvidenceSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-managed-change.v2"),
+const resourceAccountingSchema = z.strictObject({
+  status: z.enum(["PASS", "NOT_PROVEN", "EXCEEDED"]),
+  budgets: z.strictObject({
+    maxAgentTurns: safePositiveIntegerSchema,
+    maxExternalOperations: safePositiveIntegerSchema,
+    maxCommands: safePositiveIntegerSchema,
+    maxOutputBytes: safePositiveIntegerSchema,
+    maxTokens: safePositiveIntegerSchema,
+    maxCostMinorUnits: safePositiveIntegerSchema,
+  }),
+  captureLimits: z.strictObject({
+    engine: safePositiveIntegerSchema,
+    verification: safePositiveIntegerSchema,
+  }),
+  capturedOutputBytes: z.strictObject({
+    engine: safeNonnegativeIntegerSchema.optional(),
+    verification: safeNonnegativeIntegerSchema,
+  }),
+  consumed: z.strictObject({
+    agentTurns: safeNonnegativeIntegerSchema,
+    externalOperations: safeNonnegativeIntegerSchema,
+    commands: safeNonnegativeIntegerSchema,
+    outputBytes: safeNonnegativeIntegerSchema.optional(),
+    tokens: safeNonnegativeIntegerSchema.optional(),
+    costMinorUnits: safeNonnegativeIntegerSchema.optional(),
+  }),
+  unprovenReasons: z.array(z.string().min(1)),
+});
+
+const providerUsageEvidenceSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("PASS"),
+    requestCount: safeNonnegativeIntegerSchema,
+    tokenCount: safeNonnegativeIntegerSchema,
+    costMinorUnits: safeNonnegativeIntegerSchema,
+    reasons: z.tuple([]),
+  }),
+  z.strictObject({
+    status: z.literal("NOT_PROVEN"),
+    requestCount: z.null(),
+    tokenCount: z.null(),
+    costMinorUnits: z.null(),
+    reasons: z.tuple([z.literal("ENGINE_PROVIDER_USAGE_MISSING")]),
+  }),
+]);
+
+const engineReleaseEvidenceSchema = z.strictObject({
+  packageName: terminalSafeTextSchema.max(256),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
+});
+const providerEvidenceV2Schema = z.strictObject({
+  id: terminalSafeTextSchema.max(128),
+  authStatus: z.enum(["DETECTED", "BLOCKED"]),
+  requestStatus: z.enum(["DETECTED", "BLOCKED", "NOT_PROVEN"]),
+  promptFingerprint: fingerprintSchema,
+});
+const providerEvidenceSchema = providerEvidenceV2Schema.extend({
+  usage: providerUsageEvidenceSchema,
+});
+const repositoryEvidenceSchema = z.strictObject({
+  scope: z.literal("EXPLICIT_OPERATOR_SELECTED"),
+  branch: terminalSafeTextSchema.max(512),
+  baseCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  workspaceFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  target: realManagedChangeTargetSchema,
+});
+const planEvidenceSchema = z.strictObject({
+  planRevisionId: z.string().regex(/^plan_[A-Za-z0-9][A-Za-z0-9.-]*$/u),
+  planFingerprint: fingerprintSchema,
+  allowedPaths: z.array(projectPathSchema),
+  checkId: z.string().regex(/^check_[A-Za-z0-9][A-Za-z0-9.-]*$/u),
+  checkDefinitionFingerprint: fingerprintSchema,
+});
+const writerLeaseEvidenceSchema = z.strictObject({
+  leaseId: writerLeaseIdSchema,
+  workspaceId: workspaceIdSchema,
+  resourceSetFingerprint: fingerprintSchema,
+  acquireOutcome: z.literal("ACQUIRED"),
+  releaseOutcome: z.literal("RELEASED"),
+});
+const reviewEvidenceSchema = z.strictObject({
+  changedPaths: z.array(projectPathSchema),
+  allowedPaths: z.array(projectPathSchema),
+  baseCommitUnchanged: z.boolean(),
+  agentReturned: z.boolean(),
+  findings: z.array(reviewFindingSchema),
+});
+const finalSummaryEvidenceSchema = z.strictObject({
+  attempts: z.array(z.string().min(1)),
+  checks: z.array(z.string().min(1)),
+  blockingFindings: z.array(z.string().min(1)),
+  unresolvedRisks: z.array(z.string().min(1)),
+});
+const scorecardEvidenceSharedShape = {
+  zeroFalseReady: z.boolean(),
+  sourceLoss: z.boolean(),
+  secretLeak: z.boolean(),
+  failedAttemptPreserved: z.boolean(),
+  fixbackPass: z.boolean(),
+  changedPathsWithinScope: z.boolean(),
+  agentReturnObserved: z.boolean(),
+  summaryComplete: z.boolean(),
+  resourceBudgetReconciled: z.boolean(),
+  overheadWithinLimit: z.boolean(),
+} as const;
+const scorecardEvidenceV2Schema = z.strictObject({
+  ...scorecardEvidenceSharedShape,
+  overheadMs: z.number().int().nonnegative(),
+});
+const scorecardEvidenceSchema = z.strictObject({
+  ...scorecardEvidenceSharedShape,
+  overheadMs: safeNonnegativeIntegerSchema,
+});
+const cleanupEvidenceSchema = z.strictObject({
+  status: z.literal("NOT_APPLICABLE"),
+  targetWorkingTree: z.enum(["PRESERVED_CHANGED", "PRESERVED_CLEAN"]),
+});
+const realManagedChangeEvidenceSharedShape = {
   observedAt: z.iso.datetime({ offset: true }),
   taskResult: z.enum(["GO", "REVISE", "STOP"]),
   productSource: productSourceSchema,
-  engineRelease: z.strictObject({
-    packageName: terminalSafeTextSchema.max(256),
-    version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
-  }),
-  provider: z.strictObject({
-    id: terminalSafeTextSchema.max(128),
-    authStatus: z.enum(["DETECTED", "BLOCKED"]),
-    requestStatus: z.enum(["DETECTED", "BLOCKED", "NOT_PROVEN"]),
-    promptFingerprint: fingerprintSchema,
-  }),
-  repository: z.strictObject({
-    scope: z.literal("EXPLICIT_OPERATOR_SELECTED"),
-    branch: terminalSafeTextSchema.max(512),
-    baseCommit: z.string().regex(/^[a-f0-9]{40}$/u),
-    workspaceFingerprint: fingerprintSchema,
-    sourceFingerprint: fingerprintSchema,
-    target: realManagedChangeTargetSchema,
-  }),
-  plan: z.strictObject({
-    planRevisionId: z.string().regex(/^plan_[A-Za-z0-9][A-Za-z0-9.-]*$/u),
-    planFingerprint: fingerprintSchema,
-    allowedPaths: z.array(projectPathSchema),
-    checkId: z.string().regex(/^check_[A-Za-z0-9][A-Za-z0-9.-]*$/u),
-    checkDefinitionFingerprint: fingerprintSchema,
-  }),
-  writerLease: z.strictObject({
-    leaseId: writerLeaseIdSchema,
-    workspaceId: workspaceIdSchema,
-    resourceSetFingerprint: fingerprintSchema,
-    acquireOutcome: z.literal("ACQUIRED"),
-    releaseOutcome: z.literal("RELEASED"),
-  }),
+  engineRelease: engineReleaseEvidenceSchema,
+  repository: repositoryEvidenceSchema,
+  plan: planEvidenceSchema,
+  writerLease: writerLeaseEvidenceSchema,
   projection: runProjectionSchema,
   evidence: z.array(evidenceEnvelopeSchema).min(1),
-  review: z.strictObject({
-    changedPaths: z.array(projectPathSchema),
-    allowedPaths: z.array(projectPathSchema),
-    baseCommitUnchanged: z.boolean(),
-    agentReturned: z.boolean(),
-    findings: z.array(reviewFindingSchema),
-  }),
-  resourceAccounting: resourceAccountingSchema,
-  finalSummary: z.strictObject({
-    attempts: z.array(z.string().min(1)),
-    checks: z.array(z.string().min(1)),
-    blockingFindings: z.array(z.string().min(1)),
-    unresolvedRisks: z.array(z.string().min(1)),
-  }),
-  scorecard: z.strictObject({
-    zeroFalseReady: z.boolean(),
-    sourceLoss: z.boolean(),
-    secretLeak: z.boolean(),
-    failedAttemptPreserved: z.boolean(),
-    fixbackPass: z.boolean(),
-    changedPathsWithinScope: z.boolean(),
-    agentReturnObserved: z.boolean(),
-    summaryComplete: z.boolean(),
-    resourceBudgetReconciled: z.boolean(),
-    overheadMs: z.number().int().nonnegative(),
-    overheadWithinLimit: z.boolean(),
-  }),
-  cleanup: z.strictObject({
-    status: z.literal("NOT_APPLICABLE"),
-    targetWorkingTree: z.enum(["PRESERVED_CHANGED", "PRESERVED_CLEAN"]),
-  }),
+  review: reviewEvidenceSchema,
+  finalSummary: finalSummaryEvidenceSchema,
+  cleanup: cleanupEvidenceSchema,
   remoteCi: z.literal("PENDING"),
+} as const;
+
+/** Historical strict parser retained for replaying the immutable v2 contract. */
+export const realManagedChangeEvidenceV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-managed-change.v2"),
+  ...realManagedChangeEvidenceSharedShape,
+  provider: providerEvidenceV2Schema,
+  resourceAccounting: resourceAccountingV2Schema,
+  scorecard: scorecardEvidenceV2Schema,
 });
+export type RealManagedChangeEvidenceV2 = z.infer<typeof realManagedChangeEvidenceV2Schema>;
+
+/** Current evidence contract with exact Provider request, token, and cost accounting. */
+export const realManagedChangeEvidenceSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-managed-change.v3"),
+    ...realManagedChangeEvidenceSharedShape,
+    provider: providerEvidenceSchema,
+    resourceAccounting: resourceAccountingSchema,
+    scorecard: scorecardEvidenceSchema,
+  })
+  .superRefine((evidence, context) => {
+    const usage = evidence.provider.usage;
+    const accounting = evidence.resourceAccounting;
+    if (usage.status === "PASS") {
+      if (usage.requestCount === 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["provider", "usage", "requestCount"],
+          message: "accounted Provider usage must include at least one request",
+        });
+      }
+      if (evidence.provider.requestStatus !== "DETECTED") {
+        context.addIssue({
+          code: "custom",
+          path: ["provider", "requestStatus"],
+          message: "accounted Provider usage requires a detected request",
+        });
+      }
+      if (accounting.consumed.tokens !== usage.tokenCount) {
+        context.addIssue({
+          code: "custom",
+          path: ["resourceAccounting", "consumed", "tokens"],
+          message: "consumed tokens must equal the accounted Provider total",
+        });
+      }
+      if (accounting.consumed.costMinorUnits !== usage.costMinorUnits) {
+        context.addIssue({
+          code: "custom",
+          path: ["resourceAccounting", "consumed", "costMinorUnits"],
+          message: "consumed cost must equal the accounted Provider total",
+        });
+      }
+      if (accounting.unprovenReasons.includes("ENGINE_PROVIDER_USAGE_MISSING")) {
+        context.addIssue({
+          code: "custom",
+          path: ["resourceAccounting", "unprovenReasons"],
+          message: "accounted Provider usage cannot also be marked missing",
+        });
+      }
+      if (
+        (usage.tokenCount > accounting.budgets.maxTokens ||
+          usage.costMinorUnits > accounting.budgets.maxCostMinorUnits) &&
+        accounting.status !== "EXCEEDED"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["resourceAccounting", "status"],
+          message: "Provider usage above a declared budget must be marked EXCEEDED",
+        });
+      }
+      return;
+    }
+
+    if (evidence.provider.requestStatus !== "NOT_PROVEN") {
+      context.addIssue({
+        code: "custom",
+        path: ["provider", "requestStatus"],
+        message: "unaccounted Provider usage requires a NOT_PROVEN request status",
+      });
+    }
+    if (
+      accounting.consumed.tokens !== undefined ||
+      accounting.consumed.costMinorUnits !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["resourceAccounting", "consumed"],
+        message: "unaccounted Provider usage cannot publish partial token or cost totals",
+      });
+    }
+    if (!accounting.unprovenReasons.includes("ENGINE_PROVIDER_USAGE_MISSING")) {
+      context.addIssue({
+        code: "custom",
+        path: ["resourceAccounting", "unprovenReasons"],
+        message: "unaccounted Provider usage must remain explicit in resource accounting",
+      });
+    }
+  });
 export type RealManagedChangeEvidence = z.infer<typeof realManagedChangeEvidenceSchema>;
 
 export type RealManagedChangeReasonCode =
@@ -291,7 +453,10 @@ const resourceBudgets = Object.freeze({
   maxExternalOperations: 6,
   maxCommands: 2,
   maxOutputBytes: 262_144,
+  maxTokens: 200_000,
+  maxCostMinorUnits: 1_000,
 });
+const fixbackProviderReserve = Object.freeze({ tokens: 100_000, costMinorUnits: 500 });
 const outputCaptureLimits = Object.freeze({ engine: 229_376, verification: 16_384 });
 const runTimeoutMs = 300_000;
 
@@ -707,6 +872,49 @@ interface AgentRunResult {
   readonly closeReceipt: Awaited<ReturnType<EngineHost["close"]>>;
   readonly observations: readonly EngineObservation[];
   readonly evidence: EvidenceEnvelope;
+}
+
+interface ObservedProviderUsage {
+  readonly requestCount: number;
+  readonly tokenCount: number;
+  readonly costMinorUnits: number;
+}
+
+function sumSafeNonnegativeIntegers(values: readonly number[]): number | undefined {
+  let total = 0;
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || value < 0) return undefined;
+    total += value;
+    if (!Number.isSafeInteger(total)) return undefined;
+  }
+  return total;
+}
+
+function observedProviderUsage(
+  observations: readonly EngineObservation[],
+): ObservedProviderUsage | undefined {
+  const agentReturns = observations.filter((candidate) => candidate.kind === "AGENT_RETURNED");
+  if (agentReturns.length !== 1) return undefined;
+  const observation = agentReturns[0];
+  const usage = observation?.resourceUsage;
+  if (
+    usage?.externalOperations === undefined ||
+    usage.tokens === undefined ||
+    usage.costMinorUnits === undefined ||
+    !Number.isSafeInteger(usage.externalOperations) ||
+    usage.externalOperations <= 0 ||
+    !Number.isSafeInteger(usage.tokens) ||
+    usage.tokens < 0 ||
+    !Number.isSafeInteger(usage.costMinorUnits) ||
+    usage.costMinorUnits < 0
+  ) {
+    return undefined;
+  }
+  return {
+    requestCount: usage.externalOperations,
+    tokenCount: usage.tokens,
+    costMinorUnits: usage.costMinorUnits,
+  };
 }
 
 async function runAgent(options: {
@@ -1135,7 +1343,13 @@ export async function runRealManagedChange(
       receipt: firstVerification.receipt,
     });
 
-    if (firstVerification.receipt.outcome === "FAIL") {
+    const firstProviderUsage = observedProviderUsage(firstAgent.observations);
+    const fixbackProviderReserveAvailable =
+      firstProviderUsage !== undefined &&
+      firstProviderUsage.tokenCount <= resourceBudgets.maxTokens - fixbackProviderReserve.tokens &&
+      firstProviderUsage.costMinorUnits <=
+        resourceBudgets.maxCostMinorUnits - fixbackProviderReserve.costMinorUnits;
+    if (firstVerification.receipt.outcome === "FAIL" && fixbackProviderReserveAvailable) {
       const attempt2Id = attemptIdSchema.parse("att_real-2");
       await kernel.dispatch({
         schemaVersion: "1.0.0",
@@ -1155,6 +1369,8 @@ export async function runRealManagedChange(
             (total, observation) => total + (observation.resourceUsage?.outputBytes ?? 0),
             firstVerification.receipt.output.capturedBytes,
           ),
+          tokens: firstProviderUsage.tokenCount,
+          costMinorUnits: firstProviderUsage.costMinorUnits,
         },
         userInputRequired: false,
         workspaceDriftDetected: false,
@@ -1243,13 +1459,56 @@ export async function runRealManagedChange(
     );
     const consumedOutputBytes =
       engineOutputBytes === undefined ? undefined : engineOutputBytes + verificationOutputBytes;
-    const unprovenReasons = engineOutputMeasured ? [] : ["ENGINE_OUTPUT_BYTES_MISSING"];
+    const agentProviderUsages = allAgentRuns.map((agent) =>
+      observedProviderUsage(agent.observations),
+    );
+    const completeProviderUsages = agentProviderUsages.filter(
+      (usage): usage is ObservedProviderUsage => usage !== undefined,
+    );
+    const providerUsageObservationsMeasured =
+      completeProviderUsages.length === agentProviderUsages.length;
+    const providerRequestCount = providerUsageObservationsMeasured
+      ? sumSafeNonnegativeIntegers(completeProviderUsages.map((usage) => usage.requestCount))
+      : undefined;
+    const providerTokenCount = providerUsageObservationsMeasured
+      ? sumSafeNonnegativeIntegers(completeProviderUsages.map((usage) => usage.tokenCount))
+      : undefined;
+    const providerCostMinorUnits = providerUsageObservationsMeasured
+      ? sumSafeNonnegativeIntegers(completeProviderUsages.map((usage) => usage.costMinorUnits))
+      : undefined;
+    const providerUsageMeasured =
+      providerUsageObservationsMeasured &&
+      providerRequestCount !== undefined &&
+      providerTokenCount !== undefined &&
+      providerCostMinorUnits !== undefined;
+    const unprovenReasons = [
+      ...(engineOutputMeasured ? [] : ["ENGINE_OUTPUT_BYTES_MISSING"]),
+      ...(providerUsageMeasured ? [] : ["ENGINE_PROVIDER_USAGE_MISSING"]),
+    ];
     const budgetExceeded =
       (consumedOutputBytes !== undefined && consumedOutputBytes > resourceBudgets.maxOutputBytes) ||
       (engineOutputBytes !== undefined && engineOutputBytes > outputCaptureLimits.engine) ||
+      (providerTokenCount !== undefined && providerTokenCount > resourceBudgets.maxTokens) ||
+      (providerCostMinorUnits !== undefined &&
+        providerCostMinorUnits > resourceBudgets.maxCostMinorUnits) ||
       verificationReceipts.some(
         (receipt) => receipt.output.capturedBytes > outputCaptureLimits.verification,
       );
+    const providerUsage = providerUsageMeasured
+      ? ({
+          status: "PASS" as const,
+          requestCount: providerRequestCount,
+          tokenCount: providerTokenCount,
+          costMinorUnits: providerCostMinorUnits,
+          reasons: [] as const,
+        } as const)
+      : ({
+          status: "NOT_PROVEN" as const,
+          requestCount: null,
+          tokenCount: null,
+          costMinorUnits: null,
+          reasons: ["ENGINE_PROVIDER_USAGE_MISSING"] as const,
+        } as const);
     const resourceAccounting = {
       status: budgetExceeded
         ? ("EXCEEDED" as const)
@@ -1267,6 +1526,8 @@ export async function runRealManagedChange(
         externalOperations: allAgentRuns.length * 3,
         commands: verificationReceipts.length,
         ...(consumedOutputBytes === undefined ? {} : { outputBytes: consumedOutputBytes }),
+        ...(providerTokenCount === undefined ? {} : { tokens: providerTokenCount }),
+        ...(providerCostMinorUnits === undefined ? {} : { costMinorUnits: providerCostMinorUnits }),
       },
       unprovenReasons,
     };
@@ -1416,7 +1677,7 @@ export async function runRealManagedChange(
     const releasedWriterLease = await writerLease.release();
     writerLeaseReleased = true;
     const portableBeforeScore = {
-      schemaVersion: "hpi-managed-change.v2" as const,
+      schemaVersion: "hpi-managed-change.v3" as const,
       observedAt: now(),
       taskResult: "STOP" as const,
       productSource: options.productSource,
@@ -1425,10 +1686,13 @@ export async function runRealManagedChange(
         id: options.providerId,
         authStatus: "DETECTED" as const,
         requestStatus:
-          latestAttempt.sendReceipt.outcome === "APPLIED"
+          latestAttempt.sendReceipt.outcome === "APPLIED" &&
+          providerUsage.status === "PASS" &&
+          providerUsage.requestCount > 0
             ? ("DETECTED" as const)
             : ("NOT_PROVEN" as const),
         promptFingerprint: sha256(prompt),
+        usage: providerUsage,
       },
       repository: {
         scope: "EXPLICIT_OPERATOR_SELECTED" as const,

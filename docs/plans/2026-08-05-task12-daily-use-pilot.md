@@ -98,3 +98,13 @@ The verifier now resolves the Windows npm CLI through Node, and a blocked/failed
 structured `STOP` artifact without appending a Review Receipt after a terminal Run. Focused unit and CLI
 regression tests pass. These fixes improve the real-project entry point but do not change the Task 12
 disposition: the complete daily-use pilot remains `NOT_PROVEN`.
+
+## Final merged-main Windows artifact smoke (2026-08-09)
+
+The clean portable artifact from merged main `098569aaf4594d3281af8426d5896cc41787dba2` reported
+`sourceState=CLEAN`, Pi Engine `0.83.0`, and `update status=READY`. A real terminal smoke launched the
+bundled Pi TUI without a model request; `/hunter-status` returned
+`HunterStatus=DETECTED Command=/hunter-status`, the operator exited cleanly, and the manual receipt was
+`TuiSmoke=DETECTED Acknowledgement=MANUAL Provider=NOT_PROVEN`. A following `hpi doctor --json` returned
+`overallStatus=DETECTED` with `interactive_tui=DETECTED`. This closes the exact-artifact local TUI smoke
+gate, but the ten-task real-project pilot and its daily-use acceptance remain `NOT_PROVEN`.

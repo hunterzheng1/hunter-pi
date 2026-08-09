@@ -4,12 +4,13 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 
 ## Status
 
-- Baseline date: 2026-08-08
-- Product status: **TASK_9_COMPLETE_WITHIN_RECORDED_BOUNDS / TASK_10_COMPLETE_WITH_HOSTED_EVIDENCE / TASK_11_COMPLETE_WITH_HOSTED_EVIDENCE / TASK_12_POLICY_ONLY / TASK_12_REAL_PILOT_NOT_PROVEN**
-- Current `main`: `2972fa4bbb579b79f93e6ea61370ccb763deaa1e`; exact merge-head main CI [`31272146162`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31272146162) passed all six required Windows/Ubuntu quality, portable artifact, containment, and Evidence jobs.
-- Current implementation: Tasks 1–11 and the Task 12 plan/evaluator/CLI are merged on `main` within their recorded provider-neutral, disposable-fixture, and unsigned developer-preview bounds. Task 11's exact PR CI [`31270421168`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31270421168) and merged-head main CI are green; the Task 12 target-preparation and real-project binding work remains provider-neutral and does not create a pilot Archive or change the real-pilot disposition.
-- Completion audit: **DAILY_USE_NOT_PROVEN** — [the 2026-08-08 requirement-by-requirement audit](validation/2026-08-08-daily-use-completion-audit.md) records the earlier boundary snapshot and the 2026-08-09 addenda; Task 12 authority hardening is implemented, while the separately authorized real pilot remains open
-- Next gate: close Task 12 only through its separately authorized real-use pilot; no daily-use GO is claimed before the final immutable pilot Archive exists
+- Baseline date: 2026-08-09
+- Product status: **TASK_9_COMPLETE_WITHIN_RECORDED_BOUNDS / TASK_10_COMPLETE_WITH_HOSTED_EVIDENCE / TASK_11_COMPLETE_WITH_HOSTED_EVIDENCE / TASK_12_PRODUCTION_CAPTURE_BOUNDARY_COMPLETE / TASK_12_REAL_PILOT_NOT_PROVEN**
+- Current `main`: `87f65ff472ede5e2cd8f56547af85a3bc02707da`; exact merge-head main CI [`31287350105`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31287350105) passed all six required Windows/Ubuntu quality, portable artifact, containment, and Evidence jobs.
+- Current implementation: Tasks 1–11 and the Task 12 plan/evaluator/CLI plus its production capture finalizer are merged on `main` within their recorded provider-neutral, disposable-fixture, and unsigned developer-preview bounds. The finalizer turns only a separately authorized Windows runtime observation into trusted live Evidence; it does not create a pilot Archive or change the real-pilot disposition.
+- Completion audit: **DAILY_USE_NOT_PROVEN** — [the 2026-08-08 requirement-by-requirement audit](validation/2026-08-08-daily-use-completion-audit.md) records the earlier boundary snapshot and current addenda; Task 12 authority and capture boundaries are implemented, while the separately authorized real pilot remains open.
+- Current verification: the merged head passes local `npm run verify` (61 files / 553 tests), Windows Task 9 and Task 10 platform probes, Windows x64 portable packaging, clean launcher startup, and `update status=READY`. The finalizer and these checks prove the developer-preview boundary, not real-project daily-use acceptance.
+- Next gate: close Task 12 only through its separately authorized real-use pilot; no daily-use GO is claimed before the final immutable pilot Archive exists.
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)

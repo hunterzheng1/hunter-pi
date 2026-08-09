@@ -10,6 +10,7 @@ export const vitestResourcePolicy = {
   cleanupMaxRetries: 5,
   cleanupRetryDelayMs: 100,
   fileParallelism: false,
+  managedProcessIntegrationTimeoutMs: 60_000,
   maxWorkers: 1,
   testTimeoutMs: 30_000,
   temporaryRootPrefix: "hunter-pi-vitest-",

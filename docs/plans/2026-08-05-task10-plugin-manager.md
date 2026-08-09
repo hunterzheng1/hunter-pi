@@ -103,3 +103,13 @@ remain `PENDING` until CI actually runs. The optional installed-artifact smoke a
 same exact public npm install on Windows, confirmed `UNKNOWN_NOT_EXECUTED` quarantine, removed the
 validated managed snapshot/binding, and retained journal history. That networked local observation
 is deliberately not run or promoted as hosted platform Evidence.
+
+## Hosted closure addendum (2026-08-09)
+
+The historical `PENDING` wording above is retained as the emission-time snapshot. The exact
+merged-head main run [`31265986035`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31265986035)
+subsequently passed the Windows/Ubuntu quality jobs, Task 10 package-safety platform receipts,
+and the exact cross-platform comparator. Task 10 is therefore complete within the declared
+resource-only boundary. Public Git and lifecycle-attack installation remain `NOT_RUN`; executable
+extension compatibility, dependency-closure qualification, and OS containment against same-authority
+mutation remain unclaimed.

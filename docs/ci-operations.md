@@ -45,6 +45,25 @@ inspection into a high-frequency API poller.
 
    The `/rate_limit` endpoint does not consume REST quota.
 
+   For a completed or in-progress run, prefer the repository observer:
+
+   ```powershell
+   npm run ci:observe -- <RUN_ID> --head <EXACT_HEAD_SHA>
+   npm run ci:observe -- <RUN_ID> --head <EXACT_HEAD_SHA> --once
+   ```
+
+   It performs the quota check before each single `gh run view`, defaults to a
+   120-second interval, rejects intervals below 60 seconds or above one hour, refuses a second
+   observer for the same run, and never downloads logs. A normal observer waits
+   at least one minute after a rate-limit response, honors the reported reset
+   time when available, and applies bounded exponential backoff. `--once`
+   returns `2` instead of waiting when a run is pending or the quota is
+   unavailable. A successful exit also requires a completed run, a matching
+   optional head SHA, and every returned job to have a successful completed
+   conclusion.
+   The observer is a local control-plane aid; it does not alter the workflow
+   or rewrite any hosted receipt.
+
 2. Observe one run ID at a time. Query `gh run view <RUN_ID> --json status,conclusion,jobs`
    no more frequently than once every 60–120 seconds.
    Do not use the default 3-second `gh run watch`; if watching is necessary,

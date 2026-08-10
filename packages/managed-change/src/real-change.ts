@@ -609,16 +609,16 @@ export class RealManagedChangeBlockedError extends Error {
   }
 }
 
+const outputCaptureLimits = Object.freeze({ engine: 229_376, verification: 16_384 });
 const resourceBudgets = Object.freeze({
   maxAgentTurns: 2,
   maxExternalOperations: 6,
   maxCommands: 2,
-  maxOutputBytes: 262_144,
+  maxOutputBytes: 2 * outputCaptureLimits.engine + 2 * outputCaptureLimits.verification,
   maxTokens: 200_000,
   maxCostMinorUnits: 1_000,
 });
 const fixbackProviderReserve = Object.freeze({ tokens: 100_000, costMinorUnits: 500 });
-const outputCaptureLimits = Object.freeze({ engine: 229_376, verification: 16_384 });
 const runTimeoutMs = 300_000;
 const maximumWorkingTreeInspectionLimits = Object.freeze({
   maximumHashedBytes: 8 * 1_024 * 1_024 * 1_024,
@@ -2674,6 +2674,10 @@ export async function runRealManagedChange(
     );
     const consumedOutputBytes =
       engineOutputBytes === undefined ? undefined : engineOutputBytes + verificationOutputBytes;
+    const engineCaptureLimitExceeded = engineOutputObservations.some((observation) => {
+      const outputBytes = observation.resourceUsage?.outputBytes;
+      return outputBytes !== undefined && outputBytes > outputCaptureLimits.engine;
+    });
     const agentProviderUsages = allAgentRuns.map((agent) =>
       observedProviderUsage(agent.observations),
     );
@@ -2701,8 +2705,11 @@ export async function runRealManagedChange(
       ...(providerUsageMeasured ? [] : ["ENGINE_PROVIDER_USAGE_MISSING"]),
     ];
     const budgetExceeded =
+      allAgentRuns.length > resourceBudgets.maxAgentTurns ||
+      allAgentRuns.length * 3 > resourceBudgets.maxExternalOperations ||
+      verificationReceipts.length > resourceBudgets.maxCommands ||
       (consumedOutputBytes !== undefined && consumedOutputBytes > resourceBudgets.maxOutputBytes) ||
-      (engineOutputBytes !== undefined && engineOutputBytes > outputCaptureLimits.engine) ||
+      engineCaptureLimitExceeded ||
       (providerTokenCount !== undefined && providerTokenCount > resourceBudgets.maxTokens) ||
       (providerCostMinorUnits !== undefined &&
         providerCostMinorUnits > resourceBudgets.maxCostMinorUnits) ||

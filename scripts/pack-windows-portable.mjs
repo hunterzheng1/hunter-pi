@@ -266,7 +266,7 @@ try {
     "await physicalFile(nodePath);",
     "await physicalFile(cliPath);",
     "const child = spawn(nodePath, [cliPath, ...process.argv.slice(2)], {",
-    "  cwd: versionDirectory,",
+    "  cwd: process.cwd(),",
     "  env: { ...process.env, HUNTER_PI_PORTABLE_ROOT: root },",
     "  shell: false,",
     '  stdio: "inherit",',

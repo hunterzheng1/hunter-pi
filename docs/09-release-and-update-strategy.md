@@ -82,6 +82,7 @@ Publish or pack an exact CLI artifact that depends on or bundles the qualified P
 Provide a Windows x64 installer or portable artifact. The current Task 11 implementation selects a portable directory as the first usable shape; installer technology remains an open decision. The artifact must:
 
 - expose `hpi` predictably;
+- preserve the operator's current working directory when the portable launcher starts the packaged CLI, including after the complete installation directory is copied outside the source repository;
 - pin the Node 24 runtime and exact CLI dependency tree;
 - select one active release through a Hunter-owned atomic pointer;
 - keep releases side-by-side so a failed update can return to the previous one;

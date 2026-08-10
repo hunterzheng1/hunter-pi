@@ -24,6 +24,7 @@ import {
 } from "@hunter-pi/domain";
 import {
   assertRunProjectionIntegrity,
+  recoveryEvidenceRequestSchema,
   replayWorkflowEvents,
   runProjectionSchema,
   workflowEventSchema,
@@ -655,6 +656,7 @@ const archiveOperationLocks = new Map<string, Promise<void>>();
 function checkpointHasUnreconciledState(
   projection: RunProjection,
   checkpoint: RunProjection["checkpoints"][number],
+  evidence?: readonly EvidenceEnvelope[],
 ): boolean {
   const carriesExternalState =
     checkpoint.activeOperationReceiptIds.length > 0 ||
@@ -663,19 +665,24 @@ function checkpointHasUnreconciledState(
     checkpoint.processReferences.length > 0 ||
     checkpoint.engine.sessionReference !== undefined;
   if (!carriesExternalState) return false;
-  const recoveryAttempt = projection.attempts.find(
+  const recoveryAttempts = projection.attempts.filter(
     (attempt) => attempt.recoveryCheckpointId === checkpoint.checkpointId,
   );
-  const finality = projection.attemptFinalityReceipts.find(
+  const finalities = projection.attemptFinalityReceipts.filter(
     (receipt) =>
       receipt.attemptId === checkpoint.attemptId &&
       receipt.checkpointId === checkpoint.checkpointId,
   );
+  const recoveryAttempt = recoveryAttempts.length === 1 ? recoveryAttempts[0] : undefined;
+  const finality = finalities.length === 1 ? finalities[0] : undefined;
   const sameIdentities = (left: readonly unknown[], right: readonly unknown[]): boolean => {
-    const leftSet = new Set(left.map((value) => JSON.stringify(value)));
-    const rightSet = new Set(right.map((value) => JSON.stringify(value)));
+    const leftSet = new Set(left.map((value) => canonicalJson(value)));
+    const rightSet = new Set(right.map((value) => canonicalJson(value)));
     return (
-      leftSet.size === rightSet.size && [...leftSet].every((identity) => rightSet.has(identity))
+      left.length === right.length &&
+      leftSet.size === left.length &&
+      rightSet.size === right.length &&
+      [...leftSet].every((identity) => rightSet.has(identity))
     );
   };
   const recoveryEvidenceBound =
@@ -689,22 +696,114 @@ function checkpointHasUnreconciledState(
         ) === true,
     );
   const exactFinality =
-    finality?.workspaceId === checkpoint.workspaceId &&
+    finality?.runId === checkpoint.runId &&
+    finality.attemptId === checkpoint.attemptId &&
+    finality.checkpointId === checkpoint.checkpointId &&
+    finality.workspaceId === checkpoint.workspaceId &&
     finality.workspaceFingerprint === checkpoint.workspaceFingerprint &&
     finality.sourceFingerprint === checkpoint.sourceFingerprint &&
     sameIdentities(finality.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) &&
     sameIdentities(
       finality.processFinalities.map(({ processReference }) => processReference),
       checkpoint.processReferences,
-    );
-  return !(
+    ) &&
+    Date.parse(finality.observedAt) >= Date.parse(checkpoint.createdAt);
+  const exactProjectionRecovery =
     checkpoint.attemptId !== undefined &&
     recoveryAttempt?.previousAttemptId === checkpoint.attemptId &&
     recoveryAttempt.recoveryOperationId !== undefined &&
     recoveryAttempt.recoveryOperationFingerprint !== undefined &&
     recoveryEvidenceBound &&
-    exactFinality
+    exactFinality;
+  if (!exactProjectionRecovery) return true;
+
+  // Imported projections are read-only derivatives of an Archive package that was already checked
+  // with its Evidence. The projection schema has no Evidence field, so it can only repeat the exact
+  // projection/finality guard here without pretending to re-prove the recovery payload.
+  if (evidence === undefined) return false;
+
+  const recoveryEvidenceIds = recoveryAttempt.failureEvidenceIds;
+  if (recoveryEvidenceIds?.length !== 1) return true;
+  const matchingEvidence = evidence.filter(
+    (envelope) => envelope.evidenceId === recoveryEvidenceIds[0],
   );
+  if (matchingEvidence.length !== 1) return true;
+  const recoveryEvidence = matchingEvidence[0];
+  if (
+    recoveryEvidence?.kind !== "observation" ||
+    recoveryEvidence.scope.runId !== checkpoint.runId ||
+    recoveryEvidence.scope.attemptId !== checkpoint.attemptId ||
+    recoveryEvidence.sourceFingerprint !== checkpoint.sourceFingerprint ||
+    recoveryEvidence.capture.retentionStatus !== "RETAINED" ||
+    recoveryEvidence.capture.truncated ||
+    recoveryEvidence.capture.capturedText === undefined
+  ) {
+    return true;
+  }
+
+  let parsedRecoveryEvidence: unknown;
+  try {
+    parsedRecoveryEvidence = JSON.parse(recoveryEvidence.capture.capturedText);
+  } catch {
+    return true;
+  }
+  const recoveryEvidenceResult = recoveryEvidenceRequestSchema.safeParse(parsedRecoveryEvidence);
+  if (!recoveryEvidenceResult.success) return true;
+  const recoveryFacts = recoveryEvidenceResult.data;
+  const canonicalRecoveryFacts = canonicalJson(recoveryFacts);
+  const recoveryFingerprint = sha256Fingerprint(canonicalRecoveryFacts);
+  if (
+    recoveryEvidence.capture.capturedText !== canonicalRecoveryFacts ||
+    recoveryEvidence.contentHash !== recoveryFingerprint ||
+    recoveryAttempt.precedingFailureFingerprint !== recoveryFingerprint ||
+    recoveryEvidence.createdAt !== recoveryFacts.createdAt ||
+    recoveryFacts.runId !== checkpoint.runId ||
+    recoveryFacts.checkpointId !== checkpoint.checkpointId ||
+    recoveryFacts.attemptId !== checkpoint.attemptId ||
+    recoveryFacts.sourceFingerprint !== checkpoint.sourceFingerprint ||
+    Date.parse(recoveryFacts.createdAt) < Date.parse(checkpoint.createdAt)
+  ) {
+    return true;
+  }
+
+  const reconciliation = recoveryFacts.reconciliation;
+  const expectedDistributionIdentity = {
+    kind: "DISTRIBUTION_RELEASE" as const,
+    distributionReleaseId: checkpoint.distributionReleaseId,
+  };
+  const expectedWorkspaceIdentity = {
+    kind: "WORKSPACE" as const,
+    workspaceId: checkpoint.workspaceId,
+    repositoryFingerprint: checkpoint.repositoryFingerprint,
+    workspaceFingerprint: checkpoint.workspaceFingerprint,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+  };
+  const expectedEngineIdentity = {
+    kind: "ENGINE" as const,
+    engineReleaseId: checkpoint.engine.engineReleaseId,
+    engineReleaseFingerprint: checkpoint.engine.engineReleaseFingerprint,
+    ...(checkpoint.engine.sessionReference === undefined
+      ? {}
+      : { sessionReference: checkpoint.engine.sessionReference }),
+  };
+  const operationsAreTerminal =
+    sameIdentities(
+      reconciliation.operations.map(({ operationId }) => operationId),
+      checkpoint.unknownOperationIds,
+    ) && reconciliation.operations.every((receipt) => receipt.outcome !== "UNKNOWN");
+  const exactRecoveryFacts =
+    canonicalJson(reconciliation.distributionIdentity) ===
+      canonicalJson(expectedDistributionIdentity) &&
+    canonicalJson(reconciliation.workspaceIdentity) === canonicalJson(expectedWorkspaceIdentity) &&
+    canonicalJson(reconciliation.engineIdentity) === canonicalJson(expectedEngineIdentity) &&
+    sameIdentities(
+      reconciliation.activeOperationReceiptIds,
+      checkpoint.activeOperationReceiptIds,
+    ) &&
+    sameIdentities(reconciliation.unknownOperationIds, checkpoint.unknownOperationIds) &&
+    operationsAreTerminal &&
+    canonicalJson(reconciliation.attemptFinalityReceipt) === canonicalJson(finality);
+  return !exactRecoveryFacts;
 }
 
 async function withArchiveOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -756,7 +855,7 @@ export function assertPortableArchive(archive: ArchivePackage): void {
     ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
   );
   const projectionHasLiveCheckpointState = archive.projection.checkpoints.some((checkpoint) =>
-    checkpointHasUnreconciledState(archive.projection, checkpoint),
+    checkpointHasUnreconciledState(archive.projection, checkpoint, archive.evidence),
   );
   if (
     projectionHasLiveAttempt ||
@@ -989,7 +1088,7 @@ function packageFor(request: z.infer<typeof archiveFinalizeRequestSchema>): Arch
     )
     .map((attempt) => attempt.attemptId);
   const unresolvedCheckpoints = request.projection.checkpoints.filter((checkpoint) =>
-    checkpointHasUnreconciledState(request.projection, checkpoint),
+    checkpointHasUnreconciledState(request.projection, checkpoint, request.evidence),
   );
   const activeOperationReceiptIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.activeOperationReceiptIds,

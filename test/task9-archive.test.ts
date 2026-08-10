@@ -11,11 +11,14 @@ import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  attemptFinalityReceiptSchema,
   attemptFinalityReceiptIdSchema,
   attemptIdSchema,
   checkpointIdSchema,
   checkpointSchema,
   observationIdSchema,
+  operationIdSchema,
+  operationReconciliationReceiptSchema,
   planRevisionSchema,
   runSchema,
   verificationReceiptSchema,
@@ -36,6 +39,7 @@ import {
 import {
   DurableWorkflowKernel,
   InMemoryWorkflowKernel,
+  recoveryEvidenceRequestSchema,
   type RunProjection,
 } from "@hunter-pi/workflow-kernel";
 import { FileWorkflowEventStore } from "@hunter-pi/evidence";
@@ -359,6 +363,332 @@ async function createTerminalProjection(
   };
 }
 
+type RecoveryEvidenceFacts = ReturnType<typeof recoveryEvidenceRequestSchema.parse>;
+
+async function createRecoveredTerminalProjection(
+  root: string,
+  options: {
+    readonly bindRecoveryEvidence?: boolean;
+    readonly transformRecoveryEvidence?: (facts: RecoveryEvidenceFacts) => unknown;
+  } = {},
+): Promise<{
+  readonly projection: RunProjection;
+  readonly events: Awaited<ReturnType<FileWorkflowEventStore["read"]>>;
+  readonly evidence: readonly ReturnType<typeof createPortableEvidenceEnvelope>[];
+}> {
+  const fixture = createWorkflowDomainFixture({ suffix: "archive-portability-recovery" });
+  const planRevision = planRevisionSchema.parse({
+    ...fixture.planRevision,
+    loopPolicy: { ...fixture.planRevision.loopPolicy, maxIterations: 3 },
+  });
+  const run = runSchema.parse({ ...fixture.run });
+  const eventStore = new FileWorkflowEventStore({ stateRoot: join(root, "workflow") });
+  const kernel = new DurableWorkflowKernel(eventStore);
+  const originalAttemptId = attemptIdSchema.parse("att_archive-portability-original");
+  const recoveredAttemptId = attemptIdSchema.parse("att_archive-portability-recovered");
+  const recoveredAt = "2026-08-03T00:00:01.000Z";
+  const endedAt = "2026-08-03T00:00:02.000Z";
+
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "CREATE_RUN",
+    change: fixture.change,
+    planRevision,
+    run,
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "START_ATTEMPT",
+    runId: run.runId,
+    attemptId: originalAttemptId,
+    startedAt: fixtureTimestamp,
+  });
+  const beforeCheckpoint = await kernel.project(run.runId);
+  const checkpoint = checkpointSchema.parse({
+    schemaVersion: "1.0.0",
+    checkpointId: checkpointIdSchema.parse("checkpoint_archive-portability-recovery"),
+    runId: run.runId,
+    attemptId: originalAttemptId,
+    planRevisionId: planRevision.planRevisionId,
+    distributionReleaseId: "release_archive-portability-recovery",
+    workspaceId: planRevision.workspaceId,
+    repositoryFingerprint: fixtureFingerprint,
+    workspaceFingerprint: planRevision.workspaceFingerprint,
+    sourceFingerprint: planRevision.sourceFingerprint,
+    eventCursor: beforeCheckpoint.eventCursor,
+    createdAt: fixtureTimestamp,
+    engine: {
+      engineReleaseId: "engine-release_archive-portability-recovery",
+      engineReleaseFingerprint: fixtureFingerprint,
+      sessionReference: {
+        namespace: "pi-session",
+        reference: "session_archive-portability-recovery",
+      },
+      resumeCapability: "SUPPORTED",
+    },
+    activeOperationReceiptIds: [
+      "opreceipt_archive-portability-a",
+      "opreceipt_archive-portability-b",
+    ],
+    unknownOperationIds: ["op_archive-portability-a", "op_archive-portability-b"],
+    heldWriterLeaseIds: ["lease_archive-portability-recovery"],
+    processReferences: [
+      { namespace: "process", reference: "process_archive-portability-recovery" },
+    ],
+    remainingResourceBudgets: planRevision.loopPolicy.resourceBudgets,
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_CHECKPOINT",
+    checkpoint,
+  });
+
+  const originalFinalityEvidence = createPortableEvidenceEnvelope({
+    schemaVersion: "1.0.0",
+    evidenceId: "evidence_archive-portability-original-finality",
+    kind: "checkpoint",
+    scope: { runId: run.runId, attemptId: originalAttemptId },
+    createdAt: recoveredAt,
+    sourceFingerprint: planRevision.sourceFingerprint,
+    summary: "The interrupted Attempt has exact process and Writer Lease finality.",
+    contentClass: "SUMMARY",
+    content: "The recorded process tree is empty and the exact Writer Lease is released.",
+  });
+  const originalFinality = attemptFinalityReceiptSchema.parse({
+    schemaVersion: "1.0.0",
+    attemptFinalityReceiptId: "finality_archive-portability-original",
+    runId: run.runId,
+    attemptId: originalAttemptId,
+    checkpointId: checkpoint.checkpointId,
+    workspaceId: checkpoint.workspaceId,
+    workspaceFingerprint: checkpoint.workspaceFingerprint,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+    processFinalities: checkpoint.processReferences.map((processReference) => ({
+      processReference,
+      finalReceiptFingerprint: fixtureFingerprint,
+      processTreeState: "EMPTY",
+      outputState: "CLOSED",
+      leaseState: "RELEASED",
+      terminalFinality: "FINAL",
+    })),
+    releasedWriterLeaseIds: checkpoint.heldWriterLeaseIds,
+    terminalFinality: "FINAL",
+    evidenceIds: [originalFinalityEvidence.evidenceId],
+    observedAt: recoveredAt,
+  });
+  const operationReconciliations = checkpoint.unknownOperationIds.map((operationId, index) =>
+    operationReconciliationReceiptSchema.parse({
+      schemaVersion: "1.0.0",
+      reconciliationReceiptId: `reconcile_archive-portability-${index === 0 ? "a" : "b"}`,
+      operationId,
+      fingerprint: fixtureFingerprint,
+      previousOutcome: "UNKNOWN",
+      outcome: "NOOP",
+      observedEffects: ["operation-state-reconciled"],
+      observedAt: recoveredAt,
+    }),
+  );
+  const exactRecoveryEvidence = recoveryEvidenceRequestSchema.parse({
+    schemaVersion: "hpi-recovery-evidence.v1",
+    runId: run.runId,
+    checkpointId: checkpoint.checkpointId,
+    attemptId: originalAttemptId,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+    createdAt: recoveredAt,
+    reconciliation: {
+      schemaVersion: "1.0.0",
+      distributionRelease: "PASS",
+      distributionIdentity: {
+        kind: "DISTRIBUTION_RELEASE",
+        distributionReleaseId: checkpoint.distributionReleaseId,
+      },
+      workspace: "PASS",
+      workspaceIdentity: {
+        kind: "WORKSPACE",
+        workspaceId: checkpoint.workspaceId,
+        repositoryFingerprint: checkpoint.repositoryFingerprint,
+        workspaceFingerprint: checkpoint.workspaceFingerprint,
+        sourceFingerprint: checkpoint.sourceFingerprint,
+      },
+      activeOperationReceiptIds: checkpoint.activeOperationReceiptIds,
+      unknownOperationIds: checkpoint.unknownOperationIds,
+      operations: operationReconciliations,
+      attemptFinality: "PASS",
+      attemptFinalityReceipt: originalFinality,
+      engine: "PASS",
+      engineIdentity: {
+        kind: "ENGINE",
+        engineReleaseId: checkpoint.engine.engineReleaseId,
+        engineReleaseFingerprint: checkpoint.engine.engineReleaseFingerprint,
+        sessionReference: checkpoint.engine.sessionReference,
+      },
+    },
+  });
+  const recoveryEvidenceText = canonicalJson(
+    options.transformRecoveryEvidence?.(exactRecoveryEvidence) ?? exactRecoveryEvidence,
+  );
+  const recoveryEvidence = createPortableEvidenceEnvelope({
+    schemaVersion: "1.0.0",
+    evidenceId: "evidence_archive-portability-recovery",
+    kind: "observation",
+    scope: { runId: run.runId, attemptId: originalAttemptId },
+    createdAt: recoveredAt,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+    summary: "The interrupted Attempt was reconciled before same-Run recovery.",
+    contentClass: "SUMMARY",
+    content: recoveryEvidenceText,
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_OBSERVATION",
+    observation: {
+      schemaVersion: "1.0.0",
+      observationId: observationIdSchema.parse("obs_archive-portability-recovery-exit"),
+      runId: run.runId,
+      attemptId: originalAttemptId,
+      kind: "PROCESS_EXITED",
+      observedAt: recoveredAt,
+      evidenceIds: [recoveryEvidence.evidenceId],
+    },
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_ATTEMPT_FINALITY",
+    receipt: originalFinality,
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECOVER_ATTEMPT",
+    runId: run.runId,
+    previousAttemptId: originalAttemptId,
+    attemptId: recoveredAttemptId,
+    checkpointId: checkpoint.checkpointId,
+    operationId: operationIdSchema.parse("op_archive-portability-recovery"),
+    operationFingerprint: fixtureFingerprint,
+    failureEvidenceIds: [recoveryEvidence.evidenceId],
+    failureFingerprint:
+      options.bindRecoveryEvidence === false
+        ? fixtureFingerprint
+        : sha256Fingerprint(recoveryEvidenceText),
+    reason: "Recovery after exact external-state reconciliation",
+    elapsedMs: 1,
+    consumedResources: { externalOperations: 1 },
+    userInputRequired: false,
+    workspaceDriftDetected: false,
+    startedAt: recoveredAt,
+  });
+
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_OBSERVATION",
+    observation: {
+      schemaVersion: "1.0.0",
+      observationId: observationIdSchema.parse("obs_archive-portability-recovered-exit"),
+      runId: run.runId,
+      attemptId: recoveredAttemptId,
+      kind: "PROCESS_EXITED",
+      observedAt: endedAt,
+      evidenceIds: [],
+    },
+  });
+  const beforeRecoveredCheckpoint = await kernel.project(run.runId);
+  const recoveredAttempt = beforeRecoveredCheckpoint.attempts.at(-1);
+  if (recoveredAttempt?.attemptId !== recoveredAttemptId) {
+    throw new Error("Archive recovery fixture did not create the expected recovery Attempt");
+  }
+  const recoveredCheckpoint = checkpointSchema.parse({
+    schemaVersion: "1.0.0",
+    checkpointId: checkpointIdSchema.parse("checkpoint_archive-portability-recovered-final"),
+    runId: run.runId,
+    attemptId: recoveredAttemptId,
+    planRevisionId: planRevision.planRevisionId,
+    distributionReleaseId: checkpoint.distributionReleaseId,
+    workspaceId: planRevision.workspaceId,
+    repositoryFingerprint: fixtureFingerprint,
+    workspaceFingerprint: planRevision.workspaceFingerprint,
+    sourceFingerprint: planRevision.sourceFingerprint,
+    eventCursor: beforeRecoveredCheckpoint.eventCursor,
+    createdAt: endedAt,
+    engine: {
+      engineReleaseId: checkpoint.engine.engineReleaseId,
+      engineReleaseFingerprint: checkpoint.engine.engineReleaseFingerprint,
+      resumeCapability: "UNSUPPORTED",
+    },
+    activeOperationReceiptIds: [],
+    unknownOperationIds: [],
+    heldWriterLeaseIds: [],
+    processReferences: [],
+    remainingResourceBudgets: recoveredAttempt.remainingResourceBudgets,
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_CHECKPOINT",
+    checkpoint: recoveredCheckpoint,
+  });
+  const recoveredFinalityEvidence = createPortableEvidenceEnvelope({
+    schemaVersion: "1.0.0",
+    evidenceId: "evidence_archive-portability-recovered-finality",
+    kind: "checkpoint",
+    scope: { runId: run.runId, attemptId: recoveredAttemptId },
+    createdAt: endedAt,
+    sourceFingerprint: planRevision.sourceFingerprint,
+    summary: "The recovery Attempt has exact empty terminal finality.",
+    contentClass: "SUMMARY",
+    content: "No managed process or Writer Lease remains after the recovery Attempt.",
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "RECORD_ATTEMPT_FINALITY",
+    receipt: {
+      schemaVersion: "1.0.0",
+      attemptFinalityReceiptId: attemptFinalityReceiptIdSchema.parse(
+        "finality_archive-portability-recovered",
+      ),
+      runId: run.runId,
+      attemptId: recoveredAttemptId,
+      checkpointId: recoveredCheckpoint.checkpointId,
+      workspaceId: recoveredCheckpoint.workspaceId,
+      workspaceFingerprint: recoveredCheckpoint.workspaceFingerprint,
+      sourceFingerprint: recoveredCheckpoint.sourceFingerprint,
+      processFinalities: [],
+      releasedWriterLeaseIds: [],
+      terminalFinality: "FINAL",
+      evidenceIds: [recoveredFinalityEvidence.evidenceId],
+      observedAt: endedAt,
+    },
+  });
+  await kernel.dispatch({
+    schemaVersion: "1.0.0",
+    type: "CANCEL_RUN",
+    runId: run.runId,
+    reason: "ARCHIVE_PORTABILITY_RECOVERY_FIXTURE_COMPLETE",
+    endedAt,
+  });
+
+  return {
+    projection: await kernel.project(run.runId),
+    events: await eventStore.read(run.runId),
+    evidence: [originalFinalityEvidence, recoveryEvidence, recoveredFinalityEvidence],
+  };
+}
+
+function recoveryFinalizeRequest(
+  fixture: Awaited<ReturnType<typeof createRecoveredTerminalProjection>>,
+) {
+  return {
+    schemaVersion: "hpi-archive-finalize.v1" as const,
+    operationId: "op_archive-portability-finalize" as const,
+    operationFingerprint: fixtureFingerprint,
+    archiveId: "archive_task9-portability-recovery" as const,
+    distributionReleaseId: "release_archive-portability-recovery" as const,
+    projection: fixture.projection,
+    events: [...fixture.events],
+    evidence: [...fixture.evidence],
+    recoveryLimits: { maxAttempts: 3, maxElapsedMs: 60_000 },
+    archivedAt: "2026-08-03T00:00:02.000Z",
+  };
+}
+
 async function createPortableArchiveFixture(
   root: string,
   archiveId: string,
@@ -437,6 +767,150 @@ describe("Task 9 Run Archive", () => {
 
     expect(manifest.outcome).toBe(expected);
     await expect(store.read(manifest.archiveId)).resolves.toEqual(manifest);
+  });
+
+  const incompleteRecoveryEvidenceCases: readonly [
+    string,
+    (facts: RecoveryEvidenceFacts) => unknown,
+  ][] = [
+    [
+      "one active Operation Receipt",
+      (facts) => ({
+        ...facts,
+        reconciliation: {
+          ...facts.reconciliation,
+          activeOperationReceiptIds: facts.reconciliation.activeOperationReceiptIds.slice(0, 1),
+        },
+      }),
+    ],
+    [
+      "one unknown operation identity",
+      (facts) => ({
+        ...facts,
+        reconciliation: {
+          ...facts.reconciliation,
+          unknownOperationIds: facts.reconciliation.unknownOperationIds.slice(0, 1),
+        },
+      }),
+    ],
+    [
+      "one unknown operation terminal Receipt",
+      (facts) => ({
+        ...facts,
+        reconciliation: {
+          ...facts.reconciliation,
+          operations: facts.reconciliation.operations.slice(0, 1),
+        },
+      }),
+    ],
+    [
+      "one unknown operation terminal outcome",
+      (facts) => ({
+        ...facts,
+        reconciliation: {
+          ...facts.reconciliation,
+          operations: facts.reconciliation.operations.map((receipt, index) =>
+            index === 0 ? receipt : { ...receipt, outcome: "UNKNOWN", observedEffects: [] },
+          ),
+        },
+      }),
+    ],
+    [
+      "the exact Engine session reference",
+      (facts) => ({
+        ...facts,
+        reconciliation: {
+          ...facts.reconciliation,
+          engineIdentity: {
+            ...facts.reconciliation.engineIdentity,
+            sessionReference: {
+              namespace: "pi-session",
+              reference: "session_archive-portability-other",
+            },
+          },
+        },
+      }),
+    ],
+  ];
+
+  it.each(incompleteRecoveryEvidenceCases)(
+    "fails portable Archive finalization when recovery Evidence omits %s",
+    async (_label, transformRecoveryEvidence) => {
+      const root = await createTemporaryTestDirectory(
+        tmpdir(),
+        "hunter-pi-task9-archive-unreconciled-",
+      );
+      const fixture = await createRecoveredTerminalProjection(join(root, "fixture"), {
+        transformRecoveryEvidence,
+      });
+      const store = new FileRunArchiveStore({
+        stateRoot: join(root, "archives"),
+        kernel: new InMemoryWorkflowKernel([fixture.events]),
+      });
+
+      await expect(store.finalize(recoveryFinalizeRequest(fixture))).rejects.toThrow(
+        /portable Archive|unreconciled|live workflow state/u,
+      );
+    },
+  );
+
+  it("fails portable Archive finalization when recovery Evidence is not hash-bound to the recovery Attempt", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-archive-unbound-recovery-",
+    );
+    const fixture = await createRecoveredTerminalProjection(join(root, "fixture"), {
+      bindRecoveryEvidence: false,
+    });
+    const store = new FileRunArchiveStore({
+      stateRoot: join(root, "archives"),
+      kernel: new InMemoryWorkflowKernel([fixture.events]),
+    });
+
+    await expect(store.finalize(recoveryFinalizeRequest(fixture))).rejects.toThrow(
+      /portable Archive|unreconciled|live workflow state/u,
+    );
+  });
+
+  it("keeps an exactly reconciled interruption portable through finalization and clean-store import", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task9-archive-reconciled-recovery-",
+    );
+    const fixture = await createRecoveredTerminalProjection(join(root, "fixture"));
+    const source = new FileRunArchiveStore({
+      stateRoot: join(root, "source"),
+      kernel: new InMemoryWorkflowKernel([fixture.events]),
+    });
+    const manifest = await source.finalize(recoveryFinalizeRequest(fixture));
+    const archive = await source.readCanonicalPackage(manifest.archiveId);
+
+    expect(archive.portability).toMatchObject({
+      activeOperationReceiptIds: [],
+      unknownOperationIds: [],
+      heldWriterLeaseIds: [],
+      processReferences: [],
+    });
+    const destination = new FileRunArchiveStore({ stateRoot: join(root, "destination") });
+    const importReceipt = await destination.import({
+      schemaVersion: "hpi-archive-import.v1",
+      operationId: "op_archive-portability-import",
+      operationFingerprint: `sha256:${"e".repeat(64)}`,
+      archive,
+    });
+    const imported = await destination.projectImported({
+      schemaVersion: "hpi-imported-archive-projection-request.v1",
+      operationId: importReceipt.operationId,
+      operationFingerprint: importReceipt.operationFingerprint,
+      archiveId: importReceipt.archiveId,
+      artifactFingerprint: importReceipt.artifactFingerprint,
+    });
+
+    expect(imported.archiveProjection.attempts.at(1)).toMatchObject({
+      recoveryCheckpointId: "checkpoint_archive-portability-recovery",
+      previousAttemptId: "att_archive-portability-original",
+    });
+    expect(imported.workflowAuthority).toBe("NONE");
   });
 
   it("finalizes a terminal Run and replays the exact finalization idempotently", async () => {

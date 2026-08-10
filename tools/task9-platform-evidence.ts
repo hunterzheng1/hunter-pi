@@ -17,7 +17,7 @@ export const TASK9_CONTRACT_TEST_FILES = [
 export const TASK9_CONTRACT_TEST_COUNTS = {
   "test/atomic-write.test.ts": 21,
   "test/file-lease-manager.test.ts": 13,
-  "test/task9-archive.test.ts": 27,
+  "test/task9-archive.test.ts": 34,
   "test/task9-recovery.test.ts": 11,
   "test/task9-checkpoint.test.ts": 2,
   "test/task9-cancellation.test.ts": 3,

@@ -1243,6 +1243,132 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("fails closed before the Provider operation when ignored content exceeds the hash-byte budget", async () => {
+    const { root, repository } = await createRepository();
+    await writeFile(join(repository, "ignored-private.txt"), Buffer.alloc(2_048, "x"));
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    let providerOperationStarted = false;
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Bound ignored-content hashing",
+      goal: "Reject an ignored-content snapshot that exceeds its explicit byte budget.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: createMutationHost(undefined, () => {
+          providerOperationStarted = true;
+        }),
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+        workingTreeInspectionLimits: {
+          maximumHashedBytes: 1_024,
+          maximumElapsedMs: 30_000,
+        },
+      }),
+    ).rejects.toThrow(/WORKING_TREE_INSPECTION_BUDGET_EXCEEDED/u);
+    expect(providerOperationStarted).toBe(false);
+  });
+
+  it("fails closed before the Provider operation when ignored-content inspection exceeds its elapsed budget", async () => {
+    const { root, repository } = await createRepository();
+    await writeFile(join(repository, "ignored-private.txt"), "bounded\n", "utf8");
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    let providerOperationStarted = false;
+    const monotonicSamples = [0, 0, 2];
+    let monotonicSampleIndex = 0;
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Bound ignored-content inspection time",
+      goal: "Reject an ignored-content snapshot that exceeds its explicit elapsed budget.",
+      nonGoals: [],
+      constraints: [],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    await expect(
+      runRealManagedChange({
+        repository,
+        request,
+        engineHost: createMutationHost(undefined, () => {
+          providerOperationStarted = true;
+        }),
+        providerAuthConfigured: true,
+        productSource: { commit: "c".repeat(40), state: "CLEAN" },
+        engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+        providerId: "openai-codex",
+        environmentFingerprint: fingerprintA,
+        writerLeaseManager: writerLease.manager,
+        writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+        monotonicNow: () => {
+          const sample = monotonicSamples.at(monotonicSampleIndex) ?? 2;
+          monotonicSampleIndex += 1;
+          return sample;
+        },
+        workingTreeInspectionLimits: {
+          maximumHashedBytes: 1_024 * 1_024,
+          maximumElapsedMs: 1,
+        },
+      }),
+    ).rejects.toThrow(/WORKING_TREE_INSPECTION_BUDGET_EXCEEDED/u);
+    expect(providerOperationStarted).toBe(false);
+  });
+
+  it("returns STOP when the Agent switches to another branch at the frozen commit", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject final target-reference drift",
+      goal: "Keep the final repository bound to the explicitly selected branch.",
+      nonGoals: [],
+      constraints: ["The selected target reference must not change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(() => {
+        runGit(repository, ["checkout", "--quiet", "-b", "same-commit-drift"]);
+        return Promise.resolve();
+      }),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.projection.change.lifecycle).not.toBe("READY");
+    expect(artifact.review.baseCommitUnchanged).toBe(true);
+    expect(artifact.review.findings).toMatchObject([
+      { severity: "P0", scope: "workspace-target-reference-drift" },
+    ]);
+  });
+
   it("returns STOP when a passing Verification command mutates an allowed path", async () => {
     const { root, repository } = await createRepository();
     await writeFile(

@@ -491,6 +491,7 @@ export type RealManagedChangeReasonCode =
   | "UNSUPPORTED_PROJECT_PATH"
   | "WORKSPACE_DRIFT"
   | "WORKSPACE_BUSY"
+  | "WORKING_TREE_INSPECTION_BUDGET_EXCEEDED"
   | "TARGET_IDENTITY_MISMATCH"
   | "INTERRUPTION_NOT_PROVEN"
   | "EXTERNAL_FILTER_CONFIGURED";
@@ -516,6 +517,22 @@ const resourceBudgets = Object.freeze({
 const fixbackProviderReserve = Object.freeze({ tokens: 100_000, costMinorUnits: 500 });
 const outputCaptureLimits = Object.freeze({ engine: 229_376, verification: 16_384 });
 const runTimeoutMs = 300_000;
+const maximumWorkingTreeInspectionLimits = Object.freeze({
+  maximumHashedBytes: 8 * 1_024 * 1_024 * 1_024,
+  maximumElapsedMs: 120_000,
+});
+const workingTreeInspectionLimitsSchema = z.strictObject({
+  maximumHashedBytes: safePositiveIntegerSchema.max(
+    maximumWorkingTreeInspectionLimits.maximumHashedBytes,
+  ),
+  maximumElapsedMs: safePositiveIntegerSchema.max(
+    maximumWorkingTreeInspectionLimits.maximumElapsedMs,
+  ),
+});
+export type RealManagedChangeWorkingTreeInspectionLimits = z.infer<
+  typeof workingTreeInspectionLimitsSchema
+>;
+type WorkingTreeInspectionLimits = RealManagedChangeWorkingTreeInspectionLimits;
 
 function sha256(value: string | Buffer): Fingerprint {
   return fingerprintSchema.parse(`sha256:${createHash("sha256").update(value).digest("hex")}`);
@@ -635,6 +652,8 @@ interface GitRepositorySnapshot {
   readonly workingTreeStateFingerprint: Fingerprint;
   readonly ignoredContent: IgnoredContentSnapshot;
   readonly digestCache: WorkingTreeDigestCache;
+  readonly inspectionLimits: WorkingTreeInspectionLimits;
+  readonly inspectionMonotonicNow: () => number;
   readonly workspaceFingerprint: Fingerprint;
   readonly sourceFingerprint: Fingerprint;
   readonly pilotRepositoryFingerprint: Fingerprint;
@@ -659,6 +678,68 @@ type WorkingTreeDigestCache = Map<
   { readonly statSignature: string; readonly digest: Fingerprint }
 >;
 
+interface WorkingTreeInspectionBudget {
+  readonly maximumHashedBytes: bigint;
+  readonly maximumElapsedMs: number;
+  readonly startedAt: number;
+  readonly monotonicNow: () => number;
+  readonly abortController: AbortController;
+  hashedBytes: bigint;
+}
+
+function workingTreeInspectionBudgetExceeded(message: string): RealManagedChangeBlockedError {
+  return new RealManagedChangeBlockedError("WORKING_TREE_INSPECTION_BUDGET_EXCEEDED", message);
+}
+
+function remainingWorkingTreeInspectionMs(budget: WorkingTreeInspectionBudget): number {
+  const elapsedMs = budget.monotonicNow() - budget.startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > budget.maximumElapsedMs) {
+    budget.abortController.abort();
+    throw workingTreeInspectionBudgetExceeded(
+      "the working-tree inspection exceeds the finite elapsed-time budget",
+    );
+  }
+  return budget.maximumElapsedMs - elapsedMs;
+}
+
+async function withinWorkingTreeInspectionDeadline<T>(
+  budget: WorkingTreeInspectionBudget,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const remainingMs = remainingWorkingTreeInspectionMs(budget);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(
+      () => {
+        budget.abortController.abort();
+        reject(
+          workingTreeInspectionBudgetExceeded(
+            "the working-tree inspection exceeds the finite elapsed-time budget",
+          ),
+        );
+      },
+      Math.max(1, Math.ceil(remainingMs)),
+    );
+  });
+  try {
+    return await Promise.race([operation(), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function reserveWorkingTreeInspectionBytes(
+  budget: WorkingTreeInspectionBudget,
+  bytes: bigint,
+): void {
+  if (budget.hashedBytes + bytes > budget.maximumHashedBytes) {
+    throw workingTreeInspectionBudgetExceeded(
+      "the working-tree content exceeds the finite inspection byte budget",
+    );
+  }
+  budget.hashedBytes += bytes;
+}
+
 function missingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
@@ -667,7 +748,9 @@ async function snapshotWorkingTreePath(
   repository: string,
   path: string,
   digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
 ): Promise<WorkingTreeContentEntry> {
+  remainingWorkingTreeInspectionMs(inspectionBudget);
   const absolutePath = resolve(repository, path);
   if (!absolutePath.startsWith(`${repository}${sep}`)) {
     throw new RealManagedChangeBlockedError(
@@ -679,13 +762,17 @@ async function snapshotWorkingTreePath(
     if (missingFile(error)) return undefined;
     throw error;
   });
+  remainingWorkingTreeInspectionMs(inspectionBudget);
   if (before === undefined) {
     digestCache.delete(absolutePath);
     return { path, kind: "MISSING" };
   }
   if (before.isSymbolicLink()) {
     const target = await readlink(absolutePath);
+    remainingWorkingTreeInspectionMs(inspectionBudget);
+    reserveWorkingTreeInspectionBytes(inspectionBudget, BigInt(Buffer.byteLength(target, "utf8")));
     const after = await lstat(absolutePath, { bigint: true });
+    remainingWorkingTreeInspectionMs(inspectionBudget);
     if (
       !after.isSymbolicLink() ||
       before.dev !== after.dev ||
@@ -721,11 +808,18 @@ async function snapshotWorkingTreePath(
   const cached = digestCache.get(absolutePath);
   let digest = cached?.statSignature === statSignature ? cached.digest : undefined;
   if (digest === undefined) {
+    reserveWorkingTreeInspectionBytes(inspectionBudget, before.size);
     const hash = createHash("sha256");
-    for await (const chunk of createReadStream(absolutePath)) hash.update(chunk as Buffer);
+    for await (const chunk of createReadStream(absolutePath, {
+      signal: inspectionBudget.abortController.signal,
+    })) {
+      remainingWorkingTreeInspectionMs(inspectionBudget);
+      hash.update(chunk as Buffer);
+    }
     digest = fingerprintSchema.parse(`sha256:${hash.digest("hex")}`);
   }
   const after = await lstat(absolutePath, { bigint: true });
+  remainingWorkingTreeInspectionMs(inspectionBudget);
   if (
     !after.isFile() ||
     before.dev !== after.dev ||
@@ -752,24 +846,33 @@ async function snapshotPaths(
   repository: string,
   paths: readonly string[],
   digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
 ): Promise<readonly WorkingTreeContentEntry[]> {
-  const entries: (WorkingTreeContentEntry | undefined)[] = Array.from({ length: paths.length });
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(16, paths.length) }, async () => {
-    while (nextIndex < paths.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const path = paths[index];
-      if (path !== undefined) {
-        entries[index] = await snapshotWorkingTreePath(repository, path, digestCache);
+  return withinWorkingTreeInspectionDeadline(inspectionBudget, async () => {
+    const entries: (WorkingTreeContentEntry | undefined)[] = Array.from({ length: paths.length });
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(16, paths.length) }, async () => {
+      while (nextIndex < paths.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const path = paths[index];
+        if (path !== undefined) {
+          entries[index] = await snapshotWorkingTreePath(
+            repository,
+            path,
+            digestCache,
+            inspectionBudget,
+          );
+        }
       }
+    });
+    await Promise.all(workers);
+    remainingWorkingTreeInspectionMs(inspectionBudget);
+    if (entries.some((entry) => entry === undefined)) {
+      throw new Error("working-tree snapshot did not inspect every bounded path");
     }
+    return entries.filter((entry): entry is WorkingTreeContentEntry => entry !== undefined);
   });
-  await Promise.all(workers);
-  if (entries.some((entry) => entry === undefined)) {
-    throw new Error("working-tree snapshot did not inspect every bounded path");
-  }
-  return entries.filter((entry): entry is WorkingTreeContentEntry => entry !== undefined);
 }
 
 function exactGitPaths(raw: string): readonly string[] {
@@ -798,11 +901,12 @@ function exactGitPaths(raw: string): readonly string[] {
 async function inspectIgnoredContent(
   repository: string,
   digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
 ): Promise<IgnoredContentSnapshot> {
   const paths = exactGitPaths(
     runGit(repository, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
   );
-  const entries = await snapshotPaths(repository, paths, digestCache);
+  const entries = await snapshotPaths(repository, paths, digestCache, inspectionBudget);
   return {
     fingerprint: sha256(
       JSON.stringify({ schemaVersion: "hpi-ignored-content-snapshot.v1", entries }),
@@ -816,8 +920,14 @@ async function fingerprintWorkingTreeState(
   status: string,
   ignoredContent: IgnoredContentSnapshot,
   digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
 ): Promise<Fingerprint> {
-  const entries = await snapshotPaths(repository, parseChangedPaths(status).paths, digestCache);
+  const entries = await snapshotPaths(
+    repository,
+    parseChangedPaths(status).paths,
+    digestCache,
+    inspectionBudget,
+  );
   return sha256(
     JSON.stringify({
       schemaVersion: "hpi-real-working-tree-state.v1",
@@ -842,10 +952,20 @@ function changedIgnoredPaths(
 async function inspectGitRepository(
   repositoryInput: string,
   existingDigestCache?: WorkingTreeDigestCache,
+  inspectionLimits: WorkingTreeInspectionLimits = maximumWorkingTreeInspectionLimits,
+  inspectionMonotonicNow: () => number = () => performance.now(),
 ): Promise<GitRepositorySnapshot> {
   const digestCache: WorkingTreeDigestCache =
     existingDigestCache ??
     new Map<string, { readonly statSignature: string; readonly digest: Fingerprint }>();
+  const inspectionBudget: WorkingTreeInspectionBudget = {
+    maximumHashedBytes: BigInt(inspectionLimits.maximumHashedBytes),
+    maximumElapsedMs: inspectionLimits.maximumElapsedMs,
+    startedAt: inspectionMonotonicNow(),
+    monotonicNow: inspectionMonotonicNow,
+    abortController: new AbortController(),
+    hashedBytes: 0n,
+  };
   const resolved = resolve(repositoryInput);
   const status = await lstat(resolved).catch(() => undefined);
   if (status === undefined || !status.isDirectory() || status.isSymbolicLink()) {
@@ -899,12 +1019,13 @@ async function inspectGitRepository(
     "-z",
     "--untracked-files=all",
   ]);
-  const ignoredContent = await inspectIgnoredContent(repository, digestCache);
+  const ignoredContent = await inspectIgnoredContent(repository, digestCache, inspectionBudget);
   const workingTreeStateFingerprint = await fingerprintWorkingTreeState(
     repository,
     workspaceStatus,
     ignoredContent,
     digestCache,
+    inspectionBudget,
   );
   const pilotRepositoryFingerprint = pilotTargetFingerprint({
     schemaVersion: "hpi-pilot-repository-identity.v1",
@@ -938,6 +1059,8 @@ async function inspectGitRepository(
     workingTreeStateFingerprint,
     ignoredContent,
     digestCache,
+    inspectionLimits,
+    inspectionMonotonicNow,
     sourceFingerprint,
     workspaceFingerprint,
     pilotRepositoryFingerprint,
@@ -987,7 +1110,12 @@ async function assertTargetReadyForAgent(
   target: RealManagedChangeTarget,
   allowDirty: boolean,
 ): Promise<void> {
-  const current = await inspectGitRepository(baseline.repository, baseline.digestCache);
+  const current = await inspectGitRepository(
+    baseline.repository,
+    baseline.digestCache,
+    baseline.inspectionLimits,
+    baseline.inspectionMonotonicNow,
+  );
   assertTargetIdentity(target, current);
   assertWorkspaceBaseline(baseline, current, allowDirty);
 }
@@ -997,7 +1125,12 @@ async function assertExactWorkspaceState(
   target: RealManagedChangeTarget,
   expectedWorkingTreeStateFingerprint: Fingerprint,
 ): Promise<void> {
-  const current = await inspectGitRepository(baseline.repository, baseline.digestCache);
+  const current = await inspectGitRepository(
+    baseline.repository,
+    baseline.digestCache,
+    baseline.inspectionLimits,
+    baseline.inspectionMonotonicNow,
+  );
   assertTargetIdentity(target, current);
   if (
     current.baseCommit !== baseline.baseCommit ||
@@ -1427,6 +1560,8 @@ async function recoverInterruptedManagedAttempt(options: {
   const interruptedWorkspace = await inspectGitRepository(
     options.repository.repository,
     options.repository.digestCache,
+    options.repository.inspectionLimits,
+    options.repository.inspectionMonotonicNow,
   );
   assertTargetIdentity(options.target, interruptedWorkspace);
   if (
@@ -1708,6 +1843,7 @@ export interface RunRealManagedChangeOptions {
   };
   readonly now?: () => string;
   readonly monotonicNow?: () => number;
+  readonly workingTreeInspectionLimits?: RealManagedChangeWorkingTreeInspectionLimits;
 }
 
 export async function runRealManagedChange(
@@ -1720,6 +1856,9 @@ export async function runRealManagedChange(
       : realPilotInterruptionSchema.parse(options.pilotInterruption);
   const now = options.now ?? (() => new Date().toISOString());
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  const workingTreeInspectionLimits = workingTreeInspectionLimitsSchema.parse(
+    options.workingTreeInspectionLimits ?? maximumWorkingTreeInspectionLimits,
+  );
   const overheadStartedAt = monotonicNow();
   if (!options.providerAuthConfigured) {
     throw new RealManagedChangeBlockedError(
@@ -1736,7 +1875,12 @@ export async function runRealManagedChange(
       "the Managed Change requires an exact clean stamped Hunter Pi product",
     );
   }
-  const snapshot = await inspectGitRepository(options.repository);
+  const snapshot = await inspectGitRepository(
+    options.repository,
+    undefined,
+    workingTreeInspectionLimits,
+    monotonicNow,
+  );
   assertTargetIdentity(inputRequest.target, snapshot);
   if (snapshot.status.length > 0) {
     throw new RealManagedChangeBlockedError(
@@ -1885,7 +2029,12 @@ export async function runRealManagedChange(
   });
   let activeWriterLeaseReleased = false;
   try {
-    const lockedSnapshot = await inspectGitRepository(snapshot.repository, snapshot.digestCache);
+    const lockedSnapshot = await inspectGitRepository(
+      snapshot.repository,
+      snapshot.digestCache,
+      snapshot.inspectionLimits,
+      snapshot.inspectionMonotonicNow,
+    );
     assertTargetIdentity(inputRequest.target, lockedSnapshot);
     if (
       lockedSnapshot.status.length > 0 ||
@@ -1996,6 +2145,8 @@ export async function runRealManagedChange(
       const beforeFirstVerification = await inspectGitRepository(
         snapshot.repository,
         snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
       );
       const firstVerification = await runDeclaredCommandVerification({
         planRevision: plan,
@@ -2013,6 +2164,8 @@ export async function runRealManagedChange(
       const afterFirstVerification = await inspectGitRepository(
         snapshot.repository,
         snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
       );
       const firstVerificationPreservedWorkspace =
         afterFirstVerification.workingTreeStateFingerprint ===
@@ -2119,6 +2272,8 @@ export async function runRealManagedChange(
       const beforeSecondVerification = await inspectGitRepository(
         snapshot.repository,
         snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
       );
       const secondVerification = await runDeclaredCommandVerification({
         planRevision: plan,
@@ -2136,6 +2291,8 @@ export async function runRealManagedChange(
       const afterSecondVerification = await inspectGitRepository(
         snapshot.repository,
         snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
       );
       verificationWorkspacePreservation.push(
         afterSecondVerification.workingTreeStateFingerprint ===
@@ -2169,7 +2326,12 @@ export async function runRealManagedChange(
     if (latestAttempt === undefined || latestVerification === undefined) {
       throw new Error("Managed Change did not produce a final Agent and Verification pair");
     }
-    const after = await inspectGitRepository(snapshot.repository, snapshot.digestCache);
+    const after = await inspectGitRepository(
+      snapshot.repository,
+      snapshot.digestCache,
+      snapshot.inspectionLimits,
+      snapshot.inspectionMonotonicNow,
+    );
     const parsedStatus = parseChangedPaths(after.status);
     const verificationPreservedWorkspace =
       verificationWorkspacePreservation.length === verificationReceipts.length &&
@@ -2184,6 +2346,10 @@ export async function runRealManagedChange(
       request.allowedPaths.includes(path),
     );
     const baseCommitUnchanged = after.baseCommit === snapshot.baseCommit;
+    const targetReferenceUnchanged =
+      after.branch === snapshot.branch &&
+      after.pilotTargetReferenceFingerprint === snapshot.pilotTargetReferenceFingerprint &&
+      after.pilotTargetReferenceFingerprint === inputRequest.target.targetReferenceFingerprint;
     const agentReturned =
       latestAttempt.sendReceipt.outcome === "APPLIED" &&
       latestAttempt.observations.some((observation) => observation.kind === "AGENT_RETURNED");
@@ -2326,6 +2492,18 @@ export async function runRealManagedChange(
             },
           ]
         : []),
+      ...(!targetReferenceUnchanged
+        ? [
+            {
+              severity: "P0" as const,
+              scope: "workspace-target-reference-drift",
+              rationale:
+                "The final repository branch no longer matches the frozen target-reference identity.",
+              evidenceIds: [reviewEvidenceId],
+              confidence: 1,
+            },
+          ]
+        : []),
       ...(reviewedChangedPaths.length === 0
         ? [
             {
@@ -2376,6 +2554,7 @@ export async function runRealManagedChange(
           changedPaths: reviewedChangedPaths,
           allowedPaths: request.allowedPaths,
           baseCommitUnchanged,
+          targetReferenceUnchanged,
           verificationPreservedWorkspace,
           findings,
           resourceAccounting,
@@ -2552,6 +2731,7 @@ export async function runRealManagedChange(
       reviewedChangedPaths.length > 0 &&
       changedPathsWithinScope &&
       baseCommitUnchanged &&
+      targetReferenceUnchanged &&
       agentReturned &&
       resourceAccounting.status === "PASS" &&
       !sourceLoss &&

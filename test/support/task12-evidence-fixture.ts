@@ -20,6 +20,7 @@ export function completePilotEvidence(
     if (target === undefined) throw new Error("fixture target missing");
     const binding = {
       taskId: task.taskId,
+      targetId: task.targetId,
       repositoryFingerprint: target.repositoryFingerprint,
       targetReferenceFingerprint: target.targetReferenceFingerprint,
       sourceFingerprint: task.sourceFingerprint,
@@ -45,6 +46,7 @@ export function completePilotEvidence(
   const taskIndexById = new Map(plan.tasks.map((task, index) => [task.taskId, index]));
   const bindingFor = (oracle: (typeof taskOracles)[number]) => ({
     taskId: oracle.taskId,
+    targetId: oracle.targetId,
     repositoryFingerprint: oracle.repositoryFingerprint,
     targetReferenceFingerprint: oracle.targetReferenceFingerprint,
     sourceFingerprint: oracle.sourceFingerprint,
@@ -242,7 +244,7 @@ export function completePilotEvidence(
         engineReleaseFingerprint: fixtureFingerprint,
       },
     },
-    pairedComparators: [0, 5, 6].map((taskIndex) => {
+    pairedComparators: [0, 3, 6].map((taskIndex) => {
       const oracle = taskOracles[taskIndex];
       if (oracle === undefined) throw new Error("fixture comparator task missing");
       return {

@@ -23,6 +23,7 @@ import {
 
 import {
   task6PiProcessResultSchema,
+  type Task6PiProcessRunner,
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "./task6-engine-host.js";
@@ -417,7 +418,7 @@ async function readManagedOutput(
 
 export async function createQualifiedPiJsonProcess(
   options: QualifiedPiJsonProcessOptions,
-): Promise<(request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>> {
+): Promise<Task6PiProcessRunner> {
   await mkdir(options.leaseRoot, { recursive: true });
   const now = options.now ?? (() => new Date().toISOString());
   const leaseManager = await createFileLeaseManager({
@@ -429,10 +430,11 @@ export async function createQualifiedPiJsonProcess(
   );
   let invocation = 0;
 
-  return async (request: Task6PiProcessRequest): Promise<Task6PiProcessResult> => {
+  return async (request, boundary): Promise<Task6PiProcessResult> => {
     invocation += 1;
     const suffix = shortFingerprint(
       JSON.stringify({
+        ownerFingerprint,
         invocation,
         cwd: request.plan.cwd,
         executable: request.plan.executable,
@@ -552,6 +554,7 @@ export async function createQualifiedPiJsonProcess(
         // and terminal finality; it does not own this outer workspace slot.
         leases: [],
       });
+      await boundary?.beforeExternalOperation();
       const started = await host.start(processRequest);
       let cancellationRequested = false;
       const finalPromise = host.awaitFinal(started.receipt.sessionId).then((final) => {

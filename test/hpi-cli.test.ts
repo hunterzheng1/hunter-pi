@@ -362,7 +362,7 @@ describe("hpi command", () => {
       0,
     );
     const plan = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
-    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v3" });
+    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v4" });
     expect(plan["planFingerprint"]).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan)).not.toContain(root);
   });

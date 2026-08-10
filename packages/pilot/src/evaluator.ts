@@ -200,6 +200,7 @@ function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | nu
           oracle === undefined ||
           repositoryFingerprint === undefined ||
           targetReferenceFingerprint === undefined ||
+          oracle.targetId !== task.targetId ||
           oracle.repositoryFingerprint !== repositoryFingerprint ||
           oracle.targetReferenceFingerprint !== targetReferenceFingerprint ||
           oracle.sourceFingerprint !== task.sourceFingerprint ||

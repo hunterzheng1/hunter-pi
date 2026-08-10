@@ -93,6 +93,8 @@ export {
   task6PiProcessResultSchema,
   type Task6PiEngineHostOptions,
   type Task6PiProcessRequest,
+  type Task6PiProcessBoundary,
+  type Task6PiProcessRunner,
   type Task6PiProcessResult,
 } from "./task6-engine-host.js";
 export {

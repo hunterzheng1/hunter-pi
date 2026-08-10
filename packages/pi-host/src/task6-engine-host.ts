@@ -27,6 +27,7 @@ import {
   type EngineHost,
   type EngineInput,
   type EngineObservation,
+  type EngineExternalOperationBoundary,
   type EventCursor,
   type InterruptRequest,
   type ProbeRequest,
@@ -90,9 +91,16 @@ export interface Task6PiProcessRequest {
     | "AFTER_AGENT_END_POWER_LOSS_SIMULATION";
 }
 
+export type Task6PiProcessBoundary = EngineExternalOperationBoundary;
+
+export type Task6PiProcessRunner = (
+  request: Task6PiProcessRequest,
+  boundary?: Task6PiProcessBoundary,
+) => Promise<Task6PiProcessResult>;
+
 export interface Task6PiEngineHostOptions {
   readonly launchPlanForWorkspace: (workspace: string) => Promise<PiLaunchPlan>;
-  readonly runProcess?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly runProcess?: Task6PiProcessRunner;
   readonly now?: () => string;
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
@@ -164,7 +172,9 @@ export class PiOperationReplayConflictError extends Error {
 
 export async function runTask6PiJsonProcess(
   request: Task6PiProcessRequest,
+  boundary?: Task6PiProcessBoundary,
 ): Promise<Task6PiProcessResult> {
+  await boundary?.beforeExternalOperation();
   return new Promise((resolvePromise) => {
     const child = spawn(
       request.plan.executable,
@@ -260,6 +270,7 @@ export class Task6PiEngineHost implements EngineHost {
   readonly #requireQualifiedProcess: boolean;
   readonly #forcedInterruption: Task6PiEngineHostOptions["forcedInterruption"];
   #forcedInterruptionConsumed = false;
+  #forcedInterruptionClaimedBy: OperationId | undefined;
   readonly #operations = new Map<OperationId, StoredOperation>();
   readonly #pendingOperations = new Map<OperationId, PendingOperation>();
   readonly #handles = new Map<string, HandleState>();
@@ -358,7 +369,11 @@ export class Task6PiEngineHost implements EngineHost {
     });
   }
 
-  public async send(handle: EngineHandle, input: EngineInput): Promise<OperationReceipt> {
+  public async send(
+    handle: EngineHandle,
+    input: EngineInput,
+    boundary?: EngineExternalOperationBoundary,
+  ): Promise<OperationReceipt> {
     const state = this.#requireHandle(handle);
     const parsed = engineInputSchema.parse(input);
     this.#validateOperationBoundary(
@@ -388,15 +403,41 @@ export class Task6PiEngineHost implements EngineHost {
     );
     if (pending !== undefined) return pending;
 
-    const execution = (async (): Promise<OperationReceipt> => {
+    let externalOperationMayHaveStarted = false;
+    const execute = async (): Promise<OperationReceipt> => {
       const deadlineRemaining = Date.parse(parsed.deadline) - Date.parse(this.#now());
       const forcedInterruption =
-        this.#forcedInterruption !== undefined && !this.#forcedInterruptionConsumed
+        this.#forcedInterruption !== undefined &&
+        !this.#forcedInterruptionConsumed &&
+        (this.#forcedInterruptionClaimedBy === undefined ||
+          this.#forcedInterruptionClaimedBy === parsed.operationId)
           ? this.#forcedInterruption
           : undefined;
-      if (forcedInterruption !== undefined) this.#forcedInterruptionConsumed = true;
-      const processResult = task6PiProcessResultSchema.parse(
-        await this.#runProcess({
+      if (forcedInterruption !== undefined) {
+        this.#forcedInterruptionClaimedBy = parsed.operationId;
+      }
+      const consumeForcedInterruption = (): void => {
+        if (
+          forcedInterruption !== undefined &&
+          this.#forcedInterruptionClaimedBy === parsed.operationId
+        ) {
+          this.#forcedInterruptionConsumed = true;
+          this.#forcedInterruptionClaimedBy = undefined;
+        }
+      };
+      let processBoundaryAuthorization: Promise<void> | undefined;
+      const processBoundary: Task6PiProcessBoundary = {
+        beforeExternalOperation: () => {
+          processBoundaryAuthorization ??= (async () => {
+            await boundary?.beforeExternalOperation();
+            externalOperationMayHaveStarted = true;
+            consumeForcedInterruption();
+          })();
+          return processBoundaryAuthorization;
+        },
+      };
+      const rawProcessResult = await this.#runProcess(
+        {
           plan: state.launchPlan,
           prompt: parsed.content,
           timeoutMs: Math.max(
@@ -409,8 +450,15 @@ export class Task6PiEngineHost implements EngineHost {
           ),
           maximumOutputBytes: this.#maximumOutputBytes,
           ...(forcedInterruption === undefined ? {} : { forcedInterruption }),
-        }),
+        },
+        processBoundary,
       );
+      // A custom runner that returns without invoking the mandatory boundary still proves that
+      // its operation ran. Preserve replay safety even though higher layers will reject the
+      // missing caller authorization.
+      externalOperationMayHaveStarted = true;
+      consumeForcedInterruption();
+      const processResult = task6PiProcessResultSchema.parse(rawProcessResult);
       const observations: EngineObservation[] = [
         engineObservationSchema.parse({
           schemaVersion: "1.0.0",
@@ -506,16 +554,38 @@ export class Task6PiEngineHost implements EngineHost {
         ];
       }
       return receipt;
-    })();
+    };
+    const execution = Promise.withResolvers<OperationReceipt>();
     this.#pendingOperations.set(parsed.operationId, {
       fingerprint: parsed.fingerprint,
       payloadSignature,
-      receipt: execution,
+      receipt: execution.promise,
+    });
+    void execute().then(execution.resolve, (error: unknown) => {
+      try {
+        if (externalOperationMayHaveStarted) {
+          if (!this.#operations.has(parsed.operationId)) {
+            this.#storeReceipt(
+              parsed.operationId,
+              parsed.fingerprint,
+              payloadSignature,
+              "UNKNOWN",
+              [],
+            );
+          }
+        } else if (this.#forcedInterruptionClaimedBy === parsed.operationId) {
+          this.#forcedInterruptionClaimedBy = undefined;
+        }
+      } catch (tombstoneError: unknown) {
+        execution.reject(tombstoneError);
+        return;
+      }
+      execution.reject(error);
     });
     try {
-      return await execution;
+      return await execution.promise;
     } finally {
-      if (this.#pendingOperations.get(parsed.operationId)?.receipt === execution) {
+      if (this.#pendingOperations.get(parsed.operationId)?.receipt === execution.promise) {
         this.#pendingOperations.delete(parsed.operationId);
       }
     }

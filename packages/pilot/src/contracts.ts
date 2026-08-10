@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { fingerprintSchema, timestampSchema } from "@hunter-pi/domain";
+import { checkIdSchema, fingerprintSchema, timestampSchema } from "@hunter-pi/domain";
 
 import { pilotFingerprint } from "./serialization.js";
 
@@ -113,6 +113,7 @@ export const pilotPreflightReasonSchema = z.enum([
   "PILOT_PLAN_UPDATE_CANDIDATES_INVALID",
   "PILOT_PLAN_PAIRED_TASKS_INVALID",
   "PILOT_PLAN_INTERRUPTION_TASKS_INVALID",
+  "PILOT_PLAN_FIXBACK_TASK_INVALID",
   "PILOT_PLAN_FIELDS_INVALID",
   "PILOT_PLAN_SCHEMA_INVALID",
   "PILOT_PLAN_COMPILATION_FAILED",
@@ -209,8 +210,14 @@ const pilotPlanBodyShape = {
   interruptionTasks: z.array(pilotPlanInterruptionTaskSchema).length(3),
 } as const;
 
+const pilotPlanCurrentBodyShape = {
+  ...pilotPlanBodyShape,
+  deliberateFixbackTaskId: stableIdSchema,
+} as const;
+
 function validatePilotPlanBodyBase(
   body:
+    | z.infer<z.ZodObject<typeof pilotPlanCurrentBodyShape>>
     | z.infer<z.ZodObject<typeof pilotPlanBodyShape>>
     | z.infer<z.ZodObject<typeof pilotPlanV2BodyShape>>,
   context: z.RefinementCtx,
@@ -404,7 +411,48 @@ function validatePilotPlanBody(
   }
 }
 
+function validateCurrentPilotPlanBody(
+  body: z.infer<z.ZodObject<typeof pilotPlanCurrentBodyShape>>,
+  context: z.RefinementCtx,
+): void {
+  validatePilotPlanBody(body, context);
+  const fixbackTask = body.tasks.find((task) => task.taskId === body.deliberateFixbackTaskId);
+  const interruptionTaskIds = new Set(body.interruptionTasks.map((item) => item.taskId));
+  if (body.tasks.some((task) => task.acceptanceCheckIds.length !== 1)) {
+    context.addIssue({
+      code: "custom",
+      path: ["tasks"],
+      message: "each current pilot task must bind exactly one acceptance check",
+    });
+  }
+  if (
+    body.acceptanceChecks.some((check) => !checkIdSchema.safeParse(check.checkId).success) ||
+    body.tasks.some((task) =>
+      task.acceptanceCheckIds.some((checkId) => !checkIdSchema.safeParse(checkId).success),
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["acceptanceChecks"],
+      message: "current pilot acceptance checks must use canonical Workflow check identities",
+    });
+  }
+  if (
+    fixbackTask?.mode !== "MANAGED" ||
+    interruptionTaskIds.has(body.deliberateFixbackTaskId) ||
+    !body.pairedTaskIds.includes(body.deliberateFixbackTaskId)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["deliberateFixbackTaskId"],
+      message:
+        "pilot must freeze one paired Managed fixback task that is distinct from interruption tasks",
+    });
+  }
+}
+
 type PilotPlanBody = z.infer<z.ZodObject<typeof pilotPlanBodyShape>>;
+type PilotPlanCurrentBody = z.infer<z.ZodObject<typeof pilotPlanCurrentBodyShape>>;
 type PilotPlanV2Body = z.infer<z.ZodObject<typeof pilotPlanV2BodyShape>>;
 
 export const pilotPlanInputV2Schema = z
@@ -450,7 +498,7 @@ export const pilotExecutionPlanV2Schema = z
     }
   });
 
-export const pilotPlanInputSchema = z
+export const pilotPlanInputV3Schema = z
   .strictObject({
     schemaVersion: z.literal("hpi-pilot-plan-input.v3"),
     ...pilotPlanBodyShape,
@@ -458,9 +506,8 @@ export const pilotPlanInputSchema = z
   .superRefine((input, context) => {
     validatePilotPlanBody(input, context);
   });
-export type PilotPlanInput = z.infer<typeof pilotPlanInputSchema>;
 
-export const pilotExecutionPlanSchema = z
+export const pilotExecutionPlanV3Schema = z
   .strictObject({
     schemaVersion: z.literal("hpi-pilot-execution-plan.v3"),
     ...pilotPlanBodyShape,
@@ -486,6 +533,52 @@ export const pilotExecutionPlanSchema = z
       interruptionTasks: plan.interruptionTasks,
     };
     validatePilotPlanBody(body, context);
+    if (pilotFingerprint(body) !== plan.planFingerprint) {
+      context.addIssue({
+        code: "custom",
+        path: ["planFingerprint"],
+        message: "pilot execution plan fingerprint does not match its frozen body",
+      });
+    }
+  });
+
+export const pilotPlanInputSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-plan-input.v4"),
+    ...pilotPlanCurrentBodyShape,
+  })
+  .superRefine((input, context) => {
+    validateCurrentPilotPlanBody(input, context);
+  });
+export type PilotPlanInput = z.infer<typeof pilotPlanInputSchema>;
+
+export const pilotExecutionPlanSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-execution-plan.v4"),
+    ...pilotPlanCurrentBodyShape,
+    planFingerprint: fingerprintSchema,
+  })
+  .superRefine((plan, context) => {
+    const body: PilotPlanCurrentBody = {
+      platform: plan.platform,
+      architecture: plan.architecture,
+      sourceFingerprint: plan.sourceFingerprint,
+      artifactFingerprint: plan.artifactFingerprint,
+      engineReleaseFingerprint: plan.engineReleaseFingerprint,
+      machineProfile: plan.machineProfile,
+      comparatorConfigurationFingerprint: plan.comparatorConfigurationFingerprint,
+      workflowFactChecklistFingerprint: plan.workflowFactChecklistFingerprint,
+      acceptanceChecks: plan.acceptanceChecks,
+      operatorScope: plan.operatorScope,
+      repositoryTargets: plan.repositoryTargets,
+      tasks: plan.tasks,
+      pluginFixtures: plan.pluginFixtures,
+      updateCandidates: plan.updateCandidates,
+      pairedTaskIds: plan.pairedTaskIds,
+      interruptionTasks: plan.interruptionTasks,
+      deliberateFixbackTaskId: plan.deliberateFixbackTaskId,
+    };
+    validateCurrentPilotPlanBody(body, context);
     if (pilotFingerprint(body) !== plan.planFingerprint) {
       context.addIssue({
         code: "custom",
@@ -1002,6 +1095,7 @@ export type PilotEvidenceV6 = z.infer<typeof pilotEvidenceV6Schema>;
 
 const pilotResolvedTaskBindingShape = {
   taskId: stableIdSchema,
+  targetId: stableIdSchema,
   repositoryFingerprint: fingerprintSchema,
   targetReferenceFingerprint: fingerprintSchema,
   sourceFingerprint: fingerprintSchema,
@@ -1231,6 +1325,7 @@ function sameResolvedTaskBinding(
 ): boolean {
   return (
     left.taskId === right.taskId &&
+    left.targetId === right.targetId &&
     left.repositoryFingerprint === right.repositoryFingerprint &&
     left.targetReferenceFingerprint === right.targetReferenceFingerprint &&
     left.sourceFingerprint === right.sourceFingerprint &&

@@ -70,6 +70,10 @@ interface ProcessResult {
   readonly interruption?: "FORCED_PROCESS_KILL_AFTER_AGENT_END";
 }
 
+interface ExternalOperationBoundary {
+  readonly beforeExternalOperation: () => Promise<void>;
+}
+
 interface Task6Host {
   probe(request: unknown): Promise<{
     readonly results: readonly {
@@ -81,7 +85,7 @@ interface Task6Host {
     readonly handle: { readonly engineHandleId: string; readonly attemptId: string };
     readonly operationReceipt: unknown;
   }>;
-  send(handle: unknown, input: unknown): Promise<unknown>;
+  send(handle: unknown, input: unknown, boundary?: ExternalOperationBoundary): Promise<unknown>;
   reconcile(request: unknown): Promise<unknown>;
   observe(
     handle: unknown,
@@ -101,7 +105,10 @@ interface Task6Host {
 
 type Task6HostConstructor = new (options: {
   readonly launchPlanForWorkspace: (workspace: string) => Promise<PiLaunchPlan>;
-  readonly runProcess: (request: ProcessRequest) => Promise<ProcessResult>;
+  readonly runProcess: (
+    request: ProcessRequest,
+    boundary?: ExternalOperationBoundary,
+  ) => Promise<ProcessResult>;
   readonly now: () => string;
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
@@ -123,6 +130,7 @@ describe("Task 6 fixed Pi Engine Host", () => {
     const resultPath = join(root, "result.txt");
     await writeFile(resultPath, "NOT_READY\n", "utf8");
     let processRuns = 0;
+    let authorizations = 0;
     const host = new Host({
       launchPlanForWorkspace: (workspace) =>
         Promise.resolve({
@@ -131,8 +139,10 @@ describe("Task 6 fixed Pi Engine Host", () => {
           cwd: workspace,
           environment: { HUNTER_PI_MODE: "MANAGED" },
         }),
-      runProcess: async (request) => {
+      runProcess: async (request, boundary) => {
         processRuns += 1;
+        expect(boundary).toBeDefined();
+        await boundary?.beforeExternalOperation();
         await writeFile(join(request.plan.cwd, "result.txt"), "READY\n", "utf8");
         return {
           exitCode: 0,
@@ -205,10 +215,20 @@ describe("Task 6 fixed Pi Engine Host", () => {
       kind: "USER_INPUT",
       content: prompt,
     });
-    const firstReceipt = await host.send(start.handle, input);
-    const replayedReceipt = await host.send(start.handle, input);
+    const firstReceipt = await host.send(start.handle, input, {
+      beforeExternalOperation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+    });
+    const replayedReceipt = await host.send(start.handle, input, {
+      beforeExternalOperation: () => {
+        throw new Error("a replay must not re-authorize the external operation");
+      },
+    });
     expect(replayedReceipt).toEqual(firstReceipt);
     expect(processRuns).toBe(1);
+    expect(authorizations).toBe(1);
     expect(await readFile(resultPath, "utf8")).toBe("READY\n");
 
     const observations = [];
@@ -375,6 +395,247 @@ describe("Task 6 fixed Pi Engine Host", () => {
       outcome: "APPLIED",
       observedEffects: ["qualified-agent-operation-returned-before-forced-process-finality"],
     });
+  });
+
+  it("does not consume a forced interruption when pre-send authorization rejects", async () => {
+    const Host = requireHostConstructor();
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-auth-retry-");
+    cleanupRoots.push(root);
+    const forcedInterruptions: ProcessRequest["forcedInterruption"][] = [];
+    const host = new Host({
+      launchPlanForWorkspace: (workspace) =>
+        Promise.resolve({
+          executable: process.execPath,
+          arguments: [],
+          cwd: workspace,
+          environment: {},
+        }),
+      runProcess: async (request, boundary) => {
+        forcedInterruptions.push(request.forcedInterruption);
+        await boundary?.beforeExternalOperation();
+        return {
+          exitCode: 1,
+          timedOut: false,
+          framingValid: true,
+          eventTypes: ["message_end"],
+          recordCount: 1,
+          stdoutDigest: fingerprintA,
+          stderrDigest: fingerprintB,
+          capturedBytes: 16,
+          outputTruncated: false,
+          providerUsage: providerUsagePass,
+          interruption: "FORCED_PROCESS_KILL_AFTER_AGENT_END" as const,
+          containment:
+            process.platform === "win32"
+              ? ("WINDOWS_JOB_OBJECT" as const)
+              : ("LINUX_SUBREAPER_PROCESS_TREE" as const),
+          terminalFinality: "FINAL" as const,
+          processTreeState: "EMPTY" as const,
+          leaseState: "RELEASED" as const,
+        };
+      },
+      now: () => observedAt,
+      processTimeoutMs: 30_000,
+      maximumOutputBytes: 262_144,
+      requireQualifiedProcess: true,
+      forcedInterruption: "AFTER_AGENT_END",
+    });
+    const start = await host.start({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-auth-retry-start",
+      fingerprint: fingerprintA,
+      expectedTarget: { namespace: "workspace", reference: root },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      runId: "run_task6-auth-retry",
+      attemptId: "att_task6-auth-retry",
+      planRevisionId: "plan_task6-auth-retry",
+      workspaceReference: root,
+    });
+    const input = engineInputSchema.parse({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-auth-retry-send",
+      fingerprint: fingerprintB,
+      expectedTarget: { namespace: "engine-handle", reference: start.handle.engineHandleId },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      kind: "USER_INPUT",
+      content: "authorization retry fixture",
+    });
+
+    await expect(
+      host.send(start.handle, input, {
+        beforeExternalOperation: () => Promise.reject(new Error("authorization unavailable")),
+      }),
+    ).rejects.toThrow("authorization unavailable");
+    await expect(
+      host.send(start.handle, input, {
+        beforeExternalOperation: () => Promise.resolve(),
+      }),
+    ).resolves.toMatchObject({ outcome: "UNKNOWN" });
+    expect(forcedInterruptions).toEqual(["AFTER_AGENT_END", "AFTER_AGENT_END"]);
+  });
+
+  it("stores an UNKNOWN tombstone when the process runner fails after authorization", async () => {
+    const Host = requireHostConstructor();
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-post-boundary-");
+    cleanupRoots.push(root);
+    let processRuns = 0;
+    let authorizations = 0;
+    const host = new Host({
+      launchPlanForWorkspace: (workspace) =>
+        Promise.resolve({
+          executable: process.execPath,
+          arguments: [],
+          cwd: workspace,
+          environment: {},
+        }),
+      runProcess: async (_request, boundary) => {
+        processRuns += 1;
+        await boundary?.beforeExternalOperation();
+        throw new Error("the process lost its final receipt after Provider authorization");
+      },
+      now: () => observedAt,
+      processTimeoutMs: 30_000,
+      maximumOutputBytes: 262_144,
+    });
+    const start = await host.start({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-post-boundary-start",
+      fingerprint: fingerprintA,
+      expectedTarget: { namespace: "workspace", reference: root },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      runId: "run_task6-post-boundary",
+      attemptId: "att_task6-post-boundary",
+      planRevisionId: "plan_task6-post-boundary",
+      workspaceReference: root,
+    });
+    const input = engineInputSchema.parse({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-post-boundary-send",
+      fingerprint: fingerprintB,
+      expectedTarget: { namespace: "engine-handle", reference: start.handle.engineHandleId },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      kind: "USER_INPUT",
+      content: "post-boundary failure fixture",
+    });
+    const boundary = {
+      beforeExternalOperation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+    };
+
+    await expect(host.send(start.handle, input, boundary)).rejects.toThrow(
+      "lost its final receipt",
+    );
+    await expect(host.send(start.handle, input, boundary)).resolves.toMatchObject({
+      outcome: "UNKNOWN",
+    });
+    await expect(
+      host.reconcile(
+        reconcileOperationRequestSchema.parse({
+          schemaVersion: "1.0.0",
+          operationId: input.operationId,
+          fingerprint: input.fingerprint,
+        }),
+      ),
+    ).resolves.toMatchObject({ previousOutcome: "UNKNOWN", outcome: "UNKNOWN" });
+    expect(processRuns).toBe(1);
+    expect(authorizations).toBe(1);
+  });
+
+  it("coalesces an exact send that re-enters from the authorization callback", async () => {
+    const Host = requireHostConstructor();
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-reentrant-send-");
+    cleanupRoots.push(root);
+    let processRuns = 0;
+    let replayAuthorizations = 0;
+    const forcedInterruptions: ProcessRequest["forcedInterruption"][] = [];
+    const host = new Host({
+      launchPlanForWorkspace: (workspace) =>
+        Promise.resolve({
+          executable: process.execPath,
+          arguments: [],
+          cwd: workspace,
+          environment: {},
+        }),
+      runProcess: async (request, boundary) => {
+        processRuns += 1;
+        forcedInterruptions.push(request.forcedInterruption);
+        await boundary?.beforeExternalOperation();
+        return {
+          exitCode: 1,
+          timedOut: false,
+          framingValid: true,
+          eventTypes: ["message_end"],
+          recordCount: 1,
+          stdoutDigest: fingerprintA,
+          stderrDigest: fingerprintB,
+          capturedBytes: 16,
+          outputTruncated: false,
+          providerUsage: providerUsagePass,
+          interruption: "FORCED_PROCESS_KILL_AFTER_AGENT_END" as const,
+          containment:
+            process.platform === "win32"
+              ? ("WINDOWS_JOB_OBJECT" as const)
+              : ("LINUX_SUBREAPER_PROCESS_TREE" as const),
+          terminalFinality: "FINAL" as const,
+          processTreeState: "EMPTY" as const,
+          leaseState: "RELEASED" as const,
+        };
+      },
+      now: () => observedAt,
+      processTimeoutMs: 30_000,
+      maximumOutputBytes: 262_144,
+      requireQualifiedProcess: true,
+      forcedInterruption: "AFTER_AGENT_END",
+    });
+    const start = await host.start({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-reentrant-start",
+      fingerprint: fingerprintA,
+      expectedTarget: { namespace: "workspace", reference: root },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      runId: "run_task6-reentrant",
+      attemptId: "att_task6-reentrant",
+      planRevisionId: "plan_task6-reentrant",
+      workspaceReference: root,
+    });
+    const input = engineInputSchema.parse({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-reentrant-send",
+      fingerprint: fingerprintB,
+      expectedTarget: { namespace: "engine-handle", reference: start.handle.engineHandleId },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      kind: "USER_INPUT",
+      content: "re-entrant authorization fixture",
+    });
+    let replay: Promise<unknown> | undefined;
+
+    const first = host.send(start.handle, input, {
+      beforeExternalOperation: () => {
+        replay = host.send(start.handle, input, {
+          beforeExternalOperation: () => {
+            replayAuthorizations += 1;
+            return Promise.resolve();
+          },
+        });
+        return Promise.resolve();
+      },
+    });
+    const firstReceipt = await first;
+    if (replay === undefined) throw new Error("the authorization callback did not re-enter send");
+    const replayReceipt = await replay;
+
+    expect(replayReceipt).toEqual(firstReceipt);
+    expect(processRuns).toBe(1);
+    expect(replayAuthorizations).toBe(0);
+    expect(forcedInterruptions).toEqual(["AFTER_AGENT_END"]);
   });
 
   it("rejects operation replay with a different payload even when the caller reuses the fingerprint", async () => {

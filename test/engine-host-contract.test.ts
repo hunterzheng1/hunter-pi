@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   capabilityReceiptSchema,
@@ -265,9 +265,153 @@ describe("provider-neutral Engine Host contract", () => {
       kind: "CONTROL_MESSAGE",
       content: "continue",
     });
-    const first = await host.send(started.handle, input);
+    let externalAuthorizations = 0;
+    const first = await host.send(started.handle, input, {
+      beforeExternalOperation: () => {
+        externalAuthorizations += 1;
+        return Promise.resolve();
+      },
+    });
     first.observedEffects[0] = "corrupted by a caller";
 
-    expect((await host.send(started.handle, input)).observedEffects).toEqual(["input-recorded"]);
+    expect(
+      (
+        await host.send(started.handle, input, {
+          beforeExternalOperation: () => {
+            throw new Error("an exact replay must not reauthorize the external operation");
+          },
+        })
+      ).observedEffects,
+    ).toEqual(["input-recorded"]);
+    expect(externalAuthorizations).toBe(1);
+  });
+
+  it("coalesces concurrent Fake sends before authorizing one external operation", async () => {
+    const host = new FakeEngineHost({ now: () => timestamp });
+    const started = await host.start(
+      startAttemptRequestSchema.parse({
+        ...operationBoundary(
+          "op_start-concurrent-authorization",
+          fingerprint("c"),
+          workspaceTargetNamespace,
+          "fixture:concurrent-authorization",
+        ),
+        runId: "run_concurrent-authorization",
+        attemptId: "att_concurrent-authorization",
+        planRevisionId: "plan_concurrent-authorization",
+        workspaceReference: "fixture:concurrent-authorization",
+      }),
+    );
+    const input = engineInputSchema.parse({
+      ...operationBoundary(
+        "op_send-concurrent-authorization",
+        fingerprint("d"),
+        engineHandleTargetNamespace,
+        started.handle.engineHandleId,
+      ),
+      kind: "CONTROL_MESSAGE",
+      content: "continue once",
+    });
+    let releaseAuthorization!: () => void;
+    const authorizationGate = new Promise<void>((resolve) => {
+      releaseAuthorization = resolve;
+    });
+    const beforeExternalOperation = vi.fn(() => authorizationGate);
+
+    const first = host.send(started.handle, input, { beforeExternalOperation });
+    const concurrentReplay = host.send(started.handle, input, { beforeExternalOperation });
+    releaseAuthorization();
+
+    const [firstReceipt, replayedReceipt] = await Promise.all([first, concurrentReplay]);
+    expect(replayedReceipt).toEqual(firstReceipt);
+    expect(beforeExternalOperation).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces an exact Fake send that re-enters from the authorization callback", async () => {
+    const host = new FakeEngineHost({ now: () => timestamp });
+    const started = await host.start(
+      startAttemptRequestSchema.parse({
+        ...operationBoundary(
+          "op_start-reentrant-authorization",
+          fingerprint("e"),
+          workspaceTargetNamespace,
+          "fixture:reentrant-authorization",
+        ),
+        runId: "run_reentrant-authorization",
+        attemptId: "att_reentrant-authorization",
+        planRevisionId: "plan_reentrant-authorization",
+        workspaceReference: "fixture:reentrant-authorization",
+      }),
+    );
+    const input = engineInputSchema.parse({
+      ...operationBoundary(
+        "op_send-reentrant-authorization",
+        fingerprint("f"),
+        engineHandleTargetNamespace,
+        started.handle.engineHandleId,
+      ),
+      kind: "CONTROL_MESSAGE",
+      content: "continue exactly once",
+    });
+    let replay: Promise<OperationReceipt> | undefined;
+    let replayAuthorizations = 0;
+
+    const first = host.send(started.handle, input, {
+      beforeExternalOperation: () => {
+        replay = host.send(started.handle, input, {
+          beforeExternalOperation: () => {
+            replayAuthorizations += 1;
+            return Promise.resolve();
+          },
+        });
+        return Promise.resolve();
+      },
+    });
+    const firstReceipt = await first;
+    if (replay === undefined) throw new Error("the authorization callback did not re-enter send");
+    const replayReceipt = await replay;
+
+    expect(replayReceipt).toEqual(firstReceipt);
+    expect(replayAuthorizations).toBe(0);
+  });
+
+  it("clears a failed Fake send authorization before a later exact retry", async () => {
+    const host = new FakeEngineHost({ now: () => timestamp });
+    const started = await host.start(
+      startAttemptRequestSchema.parse({
+        ...operationBoundary(
+          "op_start-failed-authorization",
+          fingerprint("1"),
+          workspaceTargetNamespace,
+          "fixture:failed-authorization",
+        ),
+        runId: "run_failed-authorization",
+        attemptId: "att_failed-authorization",
+        planRevisionId: "plan_failed-authorization",
+        workspaceReference: "fixture:failed-authorization",
+      }),
+    );
+    const input = engineInputSchema.parse({
+      ...operationBoundary(
+        "op_send-failed-authorization",
+        fingerprint("2"),
+        engineHandleTargetNamespace,
+        started.handle.engineHandleId,
+      ),
+      kind: "CONTROL_MESSAGE",
+      content: "retry after authorization recovers",
+    });
+
+    await expect(
+      host.send(started.handle, input, {
+        beforeExternalOperation: () => Promise.reject(new Error("authorization unavailable")),
+      }),
+    ).rejects.toThrow("authorization unavailable");
+
+    const retryAuthorization = vi.fn(() => Promise.resolve());
+    await expect(
+      host.send(started.handle, input, { beforeExternalOperation: retryAuthorization }),
+    ).resolves.toMatchObject({ observedEffects: ["input-recorded"] });
+    expect(retryAuthorization).toHaveBeenCalledOnce();
   });
 });

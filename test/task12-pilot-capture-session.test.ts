@@ -62,7 +62,7 @@ function quickCaptureFixture() {
     ...input,
     workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
     acceptanceChecks: input.acceptanceChecks.map((check) =>
-      check.checkId === "check-01"
+      check.checkId === "check_pilot-01"
         ? { ...check, definitionFingerprint: fingerprintRealManagedChangeCheckDefinition(request) }
         : check,
     ),
@@ -439,9 +439,10 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
     const { captureRoot, coordinator } = await createCoordinator(fixture.plan);
     let firstExecutionCount = 0;
     const interruptedRuntime = createPilotCaptureProductExecutionRuntime({
-      quickTask: () => {
+      quickTask: async (context) => {
         firstExecutionCount += 1;
-        return Promise.reject(new Error("simulated crash after Provider send"));
+        await context.authorizeProviderSend();
+        throw new Error("simulated crash after Provider send");
       },
     });
 
@@ -477,9 +478,10 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
 
     let retryExecutionCount = 0;
     const retryRuntime = createPilotCaptureProductExecutionRuntime({
-      quickTask: () => {
+      quickTask: async (context) => {
         retryExecutionCount += 1;
-        return Promise.resolve(fixture.receipt);
+        await context.authorizeProviderSend();
+        return fixture.receipt;
       },
     });
     await expect(coordinator.recordQuickTask(retryRuntime, fixture.request)).rejects.toMatchObject({
@@ -488,14 +490,38 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
     expect(retryExecutionCount).toBe(0);
   });
 
+  it("proves a durable Managed retry only while no Provider intent exists", async () => {
+    const { coordinator, plan } = await createCoordinator();
+    const proof = {
+      schemaVersion: "hpi-pilot-managed-provider-reservation.v1" as const,
+      sessionId,
+      operationId: "capture-operation-managed-retry-proof",
+      taskId: "pilot-task-02",
+      planFingerprint: plan.planFingerprint,
+    };
+
+    await expect(
+      coordinator.assertManagedProviderOperationRetryable(proof),
+    ).resolves.toBeUndefined();
+    await expect(coordinator.reserveManagedProviderOperation(proof)).resolves.toMatchObject({
+      requests: plan.operatorScope.maxProviderRequests,
+      tokens: plan.operatorScope.maxProviderTokens,
+      costMinor: plan.operatorScope.maxProviderCostMinor,
+    });
+    await expect(coordinator.assertManagedProviderOperationRetryable(proof)).rejects.toMatchObject({
+      code: "PROVIDER_USAGE_RECONCILIATION_REQUIRED",
+    });
+  });
+
   it("resolves a Provider intent only through its exact durable product event", async () => {
     const fixture = quickCaptureFixture();
     const { coordinator } = await createCoordinator(fixture.plan);
     let executionCount = 0;
     const runtime = createPilotCaptureProductExecutionRuntime({
-      quickTask: () => {
+      quickTask: async (context) => {
         executionCount += 1;
-        return Promise.resolve(fixture.receipt);
+        await context.authorizeProviderSend();
+        return fixture.receipt;
       },
     });
 
@@ -508,6 +534,33 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
       requests: fixture.receipt.providerRequestCount,
       tokens: fixture.receipt.providerTokenCount,
       costMinor: fixture.receipt.providerCostMinor,
+    });
+  });
+
+  it("keeps the capture session usable when local Quick preflight fails before Provider send", async () => {
+    const fixture = quickCaptureFixture();
+    const { captureRoot, coordinator } = await createCoordinator(fixture.plan);
+    const preflightFailureRuntime = createPilotCaptureProductExecutionRuntime({
+      quickTask: () => Promise.reject(new Error("local repository preflight failed")),
+    });
+
+    await expect(
+      coordinator.recordQuickTask(preflightFailureRuntime, fixture.request),
+    ).rejects.toMatchObject({ code: "OBSERVATION_INVALID" });
+    await expect(
+      readFile(
+        join(
+          captureRoot,
+          "sessions",
+          sessionId,
+          `provider-${fixture.request.operationId}.intent.json`,
+        ),
+        "utf8",
+      ),
+    ).rejects.toThrow();
+    await expect(coordinator.status(sessionId)).resolves.toMatchObject({
+      state: "COLLECTING",
+      providerUsage: { requests: 0, tokens: 0, costMinor: 0 },
     });
   });
 

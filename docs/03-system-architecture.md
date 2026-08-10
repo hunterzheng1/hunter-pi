@@ -87,13 +87,19 @@ Proposed capabilities:
 interface EngineHost {
   probe(request: ProbeRequest): Promise<CapabilityReceipt>;
   start(request: StartAttemptRequest): Promise<EngineHandle>;
-  send(handle: EngineHandle, input: EngineInput): Promise<OperationReceipt>;
+  send(
+    handle: EngineHandle,
+    input: EngineInput,
+    boundary?: EngineExternalOperationBoundary,
+  ): Promise<OperationReceipt>;
   observe(handle: EngineHandle, cursor?: EventCursor): AsyncIterable<EngineObservation>;
   interrupt(handle: EngineHandle, reason: InterruptReason): Promise<OperationReceipt>;
   checkpoint(handle: EngineHandle): Promise<EngineCheckpointReceipt>;
   close(handle: EngineHandle): Promise<OperationReceipt>;
 }
 ```
+
+`EngineExternalOperationBoundary` is an in-process callback, not a persisted workflow fact. Every process runner, including the default adapter, invokes it at most once for a new `send`, only after local validation and immediately before the external operation can begin. The Host installs the pending operation identity before any adapter or callback code runs, so concurrent and callback-reentrant identical sends share one authorization and one execution; exact operation replay does not invoke either again. Once authorization succeeds, any later exception before a final receipt stores an immutable `UNKNOWN` tombstone and requires reconciliation instead of permitting replay. This lets a caller durably reserve a finite external-operation budget without turning local lease, configuration-snapshot, or launch-plan failures into false post-send reconciliation locks. Each qualified process-runner instance includes its opaque owner identity in lease and process operation IDs. A clean pre-boundary rejection therefore releases its lease and a later CLI invocation reaches authorization with fresh IDs, while an unreleased lease still conflicts on the shared workspace resource. Current v4 pilot tasks bind exactly one acceptance check, and the path-free `targetId` is carried through the Engine-bound runtime, Managed receipt, resolved task Oracle, capture validation, and v7 Evidence rather than being inferred from matching fingerprints. A pilot Managed Run may resume only the exact observation-free state containing its first started Attempt and only after the durable capture session proves that no Provider intent exists for that operation; portable Plan Evidence fingerprints the retained projection. An equivalent-looking non-pilot state or a pilot state with unknown post-boundary usage fails closed because missing workflow observations do not prove that no Provider send occurred. A planned one-shot interruption remains armed when authorization rejects and is consumed only after that boundary succeeds.
 
 Interface rules:
 

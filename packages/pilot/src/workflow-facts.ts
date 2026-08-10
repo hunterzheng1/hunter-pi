@@ -1,29 +1,10 @@
-import { z } from "zod";
+import type { z } from "zod";
+
+import { realManagedChangeWorkflowFactIdSchema } from "@hunter-pi/managed-change";
 
 import { pilotFingerprint } from "./serialization.js";
 
-export const pilotWorkflowFactIdSchema = z.enum([
-  "TASK_IDENTITY",
-  "REPOSITORY_IDENTITY",
-  "TARGET_REFERENCE_IDENTITY",
-  "SOURCE_IDENTITY",
-  "TASK_DEFINITION",
-  "ACCEPTANCE_DEFINITION",
-  "EXECUTION_OBSERVATION",
-  "PROCESS_FINALITY",
-  "PROCESS_TREE_FINALITY",
-  "OUTPUT_FINALITY",
-  "WRITER_LEASE_FINALITY",
-  "PROVIDER_REQUEST_USAGE",
-  "PROVIDER_TOKEN_USAGE",
-  "PROVIDER_COST_USAGE",
-  "SOURCE_PRESERVATION",
-  "CHANGED_PATH_SCOPE",
-  "INDEPENDENT_ACCEPTANCE",
-  "ACCEPTANCE_WORKSPACE_PRESERVATION",
-  "SECRET_LEAKAGE_OBSERVATION",
-  "ATTEMPT_HISTORY",
-]);
+export const pilotWorkflowFactIdSchema = realManagedChangeWorkflowFactIdSchema;
 export type PilotWorkflowFactId = z.infer<typeof pilotWorkflowFactIdSchema>;
 
 export const pilotWorkflowFactDefinitions = Object.freeze(

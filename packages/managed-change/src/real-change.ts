@@ -26,6 +26,7 @@ import {
   runSchema,
   stepIdSchema,
   verificationReceiptIdSchema,
+  verificationOutcomeSchema,
   workspaceIdSchema,
   writerLeaseIdSchema,
   type EvidenceEnvelope,
@@ -69,6 +70,11 @@ import {
   type RunProjection,
   type WorkflowKernel,
 } from "@hunter-pi/workflow-kernel";
+
+import {
+  realManagedChangePilotExecutionFor,
+  type RealManagedChangeProviderReservation,
+} from "./pilot-execution-runtime.js";
 
 const terminalSafeTextSchema = z
   .string()
@@ -300,11 +306,105 @@ export type RealManagedChangeInterruptionKind = z.infer<
   typeof realManagedChangeInterruptionKindSchema
 >;
 
-export const realManagedChangeTaskReceiptSchema = realManagedChangeTaskReceiptV2Schema
+export const realManagedChangeTaskReceiptV3Schema = realManagedChangeTaskReceiptV2Schema
   .omit({ schemaVersion: true })
   .safeExtend({
     schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v3"),
     interruptionKind: realManagedChangeInterruptionKindSchema.nullable(),
+  });
+
+export const realManagedChangeWorkflowFactIdSchema = z.enum([
+  "TASK_IDENTITY",
+  "REPOSITORY_IDENTITY",
+  "TARGET_REFERENCE_IDENTITY",
+  "SOURCE_IDENTITY",
+  "TASK_DEFINITION",
+  "ACCEPTANCE_DEFINITION",
+  "EXECUTION_OBSERVATION",
+  "PROCESS_FINALITY",
+  "PROCESS_TREE_FINALITY",
+  "OUTPUT_FINALITY",
+  "WRITER_LEASE_FINALITY",
+  "PROVIDER_REQUEST_USAGE",
+  "PROVIDER_TOKEN_USAGE",
+  "PROVIDER_COST_USAGE",
+  "SOURCE_PRESERVATION",
+  "CHANGED_PATH_SCOPE",
+  "INDEPENDENT_ACCEPTANCE",
+  "ACCEPTANCE_WORKSPACE_PRESERVATION",
+  "SECRET_LEAKAGE_OBSERVATION",
+  "ATTEMPT_HISTORY",
+]);
+export type RealManagedChangeWorkflowFactId = z.infer<typeof realManagedChangeWorkflowFactIdSchema>;
+
+export const realManagedChangePilotRuntimeBindingSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-runtime-binding.v1"),
+  sourceFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  engineReleaseFingerprint: fingerprintSchema,
+  providerEndpointFingerprint: fingerprintSchema,
+  providerModelFingerprint: fingerprintSchema,
+  credentialScopeFingerprint: fingerprintSchema,
+});
+
+export const realManagedChangePilotExecutionBindingSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-real-managed-change-pilot-execution-binding.v1"),
+  planFingerprint: fingerprintSchema,
+  taskId: managedChangeTargetIdSchema,
+  targetId: managedChangeTargetIdSchema,
+  captureSessionId: managedChangeTargetIdSchema,
+  captureOperationId: managedChangeTargetIdSchema,
+  acceptanceCheckId: checkIdSchema,
+  runtimeBinding: realManagedChangePilotRuntimeBindingSchema,
+  workflowFactChecklistFingerprint: fingerprintSchema,
+  deliberateFixback: z.boolean(),
+});
+export type RealManagedChangePilotExecutionBinding = z.infer<
+  typeof realManagedChangePilotExecutionBindingSchema
+>;
+
+export const realManagedChangeVerificationHistoryEntrySchema = z.strictObject({
+  attemptId: attemptIdSchema,
+  verificationReceiptId: verificationReceiptIdSchema,
+  checkId: checkIdSchema,
+  outcome: verificationOutcomeSchema,
+  resultFingerprint: fingerprintSchema,
+});
+
+export const realManagedChangeTaskReceiptSchema = realManagedChangeTaskReceiptV3Schema
+  .omit({ schemaVersion: true })
+  .safeExtend({
+    schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v4"),
+    targetId: managedChangeTargetIdSchema,
+    pilotExecutionBinding: realManagedChangePilotExecutionBindingSchema.nullable(),
+    capturedWorkflowFactIds: z
+      .array(realManagedChangeWorkflowFactIdSchema)
+      .min(1)
+      .max(realManagedChangeWorkflowFactIdSchema.options.length),
+    verificationHistory: z.array(realManagedChangeVerificationHistoryEntrySchema).min(1).max(2),
+    failedAttemptPreserved: z.boolean(),
+    fixbackPass: z.boolean(),
+  })
+  .superRefine((receipt, context) => {
+    if (new Set(receipt.capturedWorkflowFactIds).size !== receipt.capturedWorkflowFactIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["capturedWorkflowFactIds"],
+        message: "captured Managed workflow fact identities must be unique",
+      });
+    }
+    if (
+      new Set(receipt.verificationHistory.map((entry) => entry.attemptId)).size !==
+        receipt.verificationHistory.length ||
+      new Set(receipt.verificationHistory.map((entry) => entry.verificationReceiptId)).size !==
+        receipt.verificationHistory.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["verificationHistory"],
+        message: "Managed Verification history identities must be unique",
+      });
+    }
   });
 export type RealManagedChangeTaskReceipt = z.infer<typeof realManagedChangeTaskReceiptSchema>;
 
@@ -494,6 +594,9 @@ export type RealManagedChangeReasonCode =
   | "WORKING_TREE_INSPECTION_BUDGET_EXCEEDED"
   | "TARGET_IDENTITY_MISMATCH"
   | "INTERRUPTION_NOT_PROVEN"
+  | "PILOT_RUNTIME_BINDING_REQUIRED"
+  | "PILOT_CAPTURE_SESSION_NOT_READY"
+  | "PILOT_PROVIDER_BUDGET_EXHAUSTED"
   | "EXTERNAL_FILTER_CONFIGURED";
 
 export class RealManagedChangeBlockedError extends Error {
@@ -1407,6 +1510,7 @@ async function runAgent(options: {
   readonly prompt: string;
   readonly now: () => string;
   readonly beforeStart: () => Promise<void>;
+  readonly beforeProviderSend?: () => Promise<RealManagedChangeProviderReservation>;
   readonly monotonicNow: () => number;
 }): Promise<AgentRunResult> {
   const capabilityReceipt = capabilityReceiptSchema.parse(
@@ -1470,8 +1574,26 @@ async function runAgent(options: {
   };
   let sendReceipt: Awaited<ReturnType<EngineHost["send"]>>;
   const runtimeStartedAt = options.monotonicNow();
+  let externalOperationAuthorized = options.beforeProviderSend === undefined;
   try {
-    sendReceipt = await options.engineHost.send(startReceipt.handle, engineInput);
+    sendReceipt = await options.engineHost.send(
+      startReceipt.handle,
+      engineInput,
+      options.beforeProviderSend === undefined
+        ? undefined
+        : {
+            beforeExternalOperation: async () => {
+              await options.beforeProviderSend?.();
+              externalOperationAuthorized = true;
+            },
+          },
+    );
+    if (!externalOperationAuthorized) {
+      throw new RealManagedChangeBlockedError(
+        "PILOT_RUNTIME_BINDING_REQUIRED",
+        "the Engine Host did not honor the required pre-send pilot authorization boundary",
+      );
+    }
   } catch (error: unknown) {
     try {
       await options.engineHost.close(startReceipt.handle, closeRequest);
@@ -1812,6 +1934,86 @@ function finalSummary(projection: RunProjection): RealManagedChangeEvidence["fin
   };
 }
 
+function assertExactDurablePreSendAttempt(options: {
+  readonly projection: RunProjection;
+  readonly change: z.infer<typeof managedChangeSchema>;
+  readonly plan: PlanRevision;
+  readonly run: Run;
+  readonly attemptId: AttemptId;
+}): void {
+  const { projection, change, plan, run, attemptId } = options;
+  const {
+    createdAt: existingChangeCreatedAt,
+    lifecycle: existingChangeLifecycle,
+    ...existingChange
+  } = projection.change;
+  const {
+    createdAt: expectedChangeCreatedAt,
+    lifecycle: expectedChangeLifecycle,
+    ...expectedChange
+  } = change;
+  const { createdAt: existingPlanCreatedAt, ...existingPlan } = projection.planRevision;
+  const { createdAt: expectedPlanCreatedAt, ...expectedPlan } = plan;
+  const {
+    startedAt: existingRunStartedAt,
+    lifecycle: existingRunLifecycle,
+    ...existingRun
+  } = projection.run;
+  const { startedAt: expectedRunStartedAt, lifecycle: expectedRunLifecycle, ...expectedRun } = run;
+  const attempt = projection.attempts[0];
+  const { startedAt: existingAttemptStartedAt, ...existingAttempt } = attempt ?? {
+    startedAt: "",
+  };
+  const expectedAttempt = {
+    schemaVersion: "1.0.0",
+    attemptId,
+    runId: run.runId,
+    planRevisionId: plan.planRevisionId,
+    sequence: 1,
+    elapsedMsAtStart: 0,
+    remainingResourceBudgets: plan.loopPolicy.resourceBudgets,
+    executionStatus: "RUNNING",
+    verificationStatus: "NOT_READY",
+  };
+  const expectedChecks = plan.checks.map((check) => ({
+    schemaVersion: "1.0.0",
+    checkId: check.checkId,
+    required: check.required,
+    status: "NOT_RUN",
+  }));
+  const exactPreSendState =
+    existingChangeCreatedAt.length > 0 &&
+    expectedChangeCreatedAt.length > 0 &&
+    existingPlanCreatedAt.length > 0 &&
+    expectedPlanCreatedAt.length > 0 &&
+    existingRunStartedAt.length > 0 &&
+    expectedRunStartedAt.length > 0 &&
+    existingAttemptStartedAt.length > 0 &&
+    existingChangeLifecycle === "RUNNING" &&
+    existingRunLifecycle === "RUNNING" &&
+    expectedChangeLifecycle === "PLANNED" &&
+    expectedRunLifecycle === "PLANNED" &&
+    canonicalJson(existingChange) === canonicalJson(expectedChange) &&
+    canonicalJson(existingPlan) === canonicalJson(expectedPlan) &&
+    canonicalJson(existingRun) === canonicalJson(expectedRun) &&
+    projection.attempts.length === 1 &&
+    canonicalJson(existingAttempt) === canonicalJson(expectedAttempt) &&
+    projection.observations.length === 0 &&
+    projection.attemptFinalityReceipts.length === 0 &&
+    projection.verificationReceipts.length === 0 &&
+    projection.humanReceipts.length === 0 &&
+    projection.reviewReceipts.length === 0 &&
+    projection.checkpoints.length === 0 &&
+    canonicalJson(projection.checks) === canonicalJson(expectedChecks) &&
+    projection.eventCursor === 2;
+  if (!exactPreSendState) {
+    throw new RealManagedChangeBlockedError(
+      "WORKSPACE_DRIFT",
+      "the existing durable Managed Run is not the exact retryable pre-send Attempt",
+    );
+  }
+}
+
 const realPilotInterruptionSchema = z.strictObject({
   runIdentity: z
     .string()
@@ -1841,6 +2043,7 @@ export interface RunRealManagedChangeOptions {
     readonly runIdentity: string;
     readonly forcedInterruption?: RealManagedChangeInterruptionKind;
   };
+  readonly pilotExecutionRuntime?: unknown;
   readonly now?: () => string;
   readonly monotonicNow?: () => number;
   readonly workingTreeInspectionLimits?: RealManagedChangeWorkingTreeInspectionLimits;
@@ -1854,6 +2057,55 @@ export async function runRealManagedChange(
     options.pilotInterruption === undefined
       ? undefined
       : realPilotInterruptionSchema.parse(options.pilotInterruption);
+  const pilotExecution =
+    options.pilotExecutionRuntime === undefined
+      ? undefined
+      : realManagedChangePilotExecutionFor(options.pilotExecutionRuntime, options.engineHost);
+  if (options.pilotExecutionRuntime !== undefined && pilotExecution === undefined) {
+    throw new RealManagedChangeBlockedError(
+      "PILOT_RUNTIME_BINDING_REQUIRED",
+      "pilot execution requires the bundled one-shot runtime bound to this exact Engine Host",
+    );
+  }
+  const pilotExecutionBinding =
+    pilotExecution === undefined
+      ? undefined
+      : realManagedChangePilotExecutionBindingSchema.parse(pilotExecution.binding);
+  if (
+    pilotExecutionBinding !== undefined &&
+    pilotExecutionBinding.targetId !== inputRequest.target.targetId
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "TARGET_IDENTITY_MISMATCH",
+      "the pilot execution binding does not match the request target identity",
+    );
+  }
+  let pilotProviderReservation: RealManagedChangeProviderReservation | undefined;
+  const beforePilotProviderSend =
+    pilotExecution === undefined
+      ? undefined
+      : async (): Promise<RealManagedChangeProviderReservation> => {
+          const reservation = await pilotExecution.beforeProviderSend();
+          if (
+            pilotProviderReservation !== undefined &&
+            (pilotProviderReservation.requests !== reservation.requests ||
+              pilotProviderReservation.tokens !== reservation.tokens ||
+              pilotProviderReservation.costMinor !== reservation.costMinor)
+          ) {
+            throw new RealManagedChangeBlockedError(
+              "PILOT_PROVIDER_BUDGET_EXHAUSTED",
+              "the durable pilot Provider reservation changed during one Managed Run",
+            );
+          }
+          pilotProviderReservation = reservation;
+          return reservation;
+        };
+  if (pilotExecutionBinding?.deliberateFixback === true && pilotInterruption !== undefined) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "a deliberate Verification fixback task cannot also be an interruption-recovery task",
+    );
+  }
   const now = options.now ?? (() => new Date().toISOString());
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
   const workingTreeInspectionLimits = workingTreeInspectionLimitsSchema.parse(
@@ -1922,6 +2174,17 @@ export async function runRealManagedChange(
         : {
             pilotRunIdentity: pilotInterruption.runIdentity,
           }),
+      ...(pilotExecutionBinding === undefined
+        ? {}
+        : {
+            pilotExecutionIdentity: {
+              planFingerprint: pilotExecutionBinding.planFingerprint,
+              taskId: pilotExecutionBinding.taskId,
+              captureSessionId: pilotExecutionBinding.captureSessionId,
+              captureOperationId: pilotExecutionBinding.captureOperationId,
+              acceptanceCheckId: pilotExecutionBinding.acceptanceCheckId,
+            },
+          }),
     }),
   );
   const createdAt = now();
@@ -1949,6 +2212,8 @@ export async function runRealManagedChange(
       maximumOutputBytes: outputCaptureLimits.verification,
     }),
   );
+  const realCheckId =
+    pilotExecutionBinding?.acceptanceCheckId ?? checkIdSchema.parse("check_real-command");
   const plan = planRevisionSchema.parse({
     schemaVersion: "1.0.0",
     planRevisionId: `plan_real-${suffix}`,
@@ -1985,7 +2250,7 @@ export async function runRealManagedChange(
     ],
     checks: [
       {
-        checkId: "check_real-command",
+        checkId: realCheckId,
         version: 1,
         label: request.check.label,
         kind: "command",
@@ -2059,27 +2324,44 @@ export async function runRealManagedChange(
       eventStore === undefined
         ? new InMemoryWorkflowKernel()
         : new DurableWorkflowKernel(eventStore);
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "CREATE_RUN",
-      change,
-      planRevision: plan,
-      run,
-    });
-
     const allEvidence: EvidenceEnvelope[] = [];
     const allAgentRuns: AgentRunResult[] = [];
     const verificationReceipts: VerificationReceipt[] = [];
     const verificationWorkspacePreservation: boolean[] = [];
     const verificationEvidence: EvidenceEnvelope[] = [];
     const attempt1Id = attemptIdSchema.parse("att_real-1");
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "START_ATTEMPT",
-      runId: run.runId,
-      attemptId: attempt1Id,
-      startedAt: now(),
-    });
+    const durableEvents = eventStore === undefined ? [] : await eventStore.read(run.runId);
+    if (durableEvents.length === 0) {
+      await kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "CREATE_RUN",
+        change,
+        planRevision: plan,
+        run,
+      });
+      await kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "START_ATTEMPT",
+        runId: run.runId,
+        attemptId: attempt1Id,
+        startedAt: now(),
+      });
+    } else {
+      if (pilotExecution === undefined) {
+        throw new RealManagedChangeBlockedError(
+          "WORKSPACE_DRIFT",
+          "an existing durable non-pilot Managed Run cannot prove that its Provider send was never issued",
+        );
+      }
+      assertExactDurablePreSendAttempt({
+        projection: await kernel.project(run.runId),
+        change,
+        plan,
+        run,
+        attemptId: attempt1Id,
+      });
+      await pilotExecution.assertDurablePreSendRetryable();
+    }
     await assertTargetReadyForAgent(snapshot, inputRequest.target, false);
     const firstAgent = await runAgent({
       engineHost: options.engineHost,
@@ -2092,6 +2374,9 @@ export async function runRealManagedChange(
       prompt,
       now,
       beforeStart: () => assertTargetReadyForAgent(snapshot, inputRequest.target, false),
+      ...(beforePilotProviderSend === undefined
+        ? {}
+        : { beforeProviderSend: beforePilotProviderSend }),
       monotonicNow,
     });
     allAgentRuns.push(firstAgent);
@@ -2152,7 +2437,7 @@ export async function runRealManagedChange(
         planRevision: plan,
         runId: run.runId,
         attemptId: attempt1Id,
-        checkId: checkIdSchema.parse("check_real-command"),
+        checkId: realCheckId,
         verificationReceiptId: verificationReceiptIdSchema.parse("verify_real-1"),
         evidenceId: evidenceIdSchema.parse("evidence_real-verify-1"),
         repository: snapshot.repository,
@@ -2243,6 +2528,21 @@ export async function runRealManagedChange(
         inputRequest.target,
         attempt2WorkingTreeStateFingerprint,
       );
+      if (pilotExecutionBinding !== undefined) {
+        const firstUsage = observedProviderUsage(firstAgent.observations);
+        if (
+          pilotProviderReservation === undefined ||
+          firstUsage === undefined ||
+          firstUsage.requestCount >= pilotProviderReservation.requests ||
+          firstUsage.tokenCount >= pilotProviderReservation.tokens ||
+          firstUsage.costMinorUnits >= pilotProviderReservation.costMinor
+        ) {
+          throw new RealManagedChangeBlockedError(
+            "PILOT_PROVIDER_BUDGET_EXHAUSTED",
+            "the frozen cumulative pilot Provider reservation does not permit another request",
+          );
+        }
+      }
       const secondAgent = await runAgent({
         engineHost: options.engineHost,
         kernel,
@@ -2259,6 +2559,9 @@ export async function runRealManagedChange(
             inputRequest.target,
             attempt2WorkingTreeStateFingerprint,
           ),
+        ...(beforePilotProviderSend === undefined
+          ? {}
+          : { beforeProviderSend: beforePilotProviderSend }),
         monotonicNow,
       });
       allAgentRuns.push(secondAgent);
@@ -2279,7 +2582,7 @@ export async function runRealManagedChange(
         planRevision: plan,
         runId: run.runId,
         attemptId: attempt2Id,
-        checkId: checkIdSchema.parse("check_real-command"),
+        checkId: realCheckId,
         verificationReceiptId: verificationReceiptIdSchema.parse("verify_real-2"),
         evidenceId: evidenceIdSchema.parse("evidence_real-verify-2"),
         repository: snapshot.repository,
@@ -2403,6 +2706,13 @@ export async function runRealManagedChange(
       (providerTokenCount !== undefined && providerTokenCount > resourceBudgets.maxTokens) ||
       (providerCostMinorUnits !== undefined &&
         providerCostMinorUnits > resourceBudgets.maxCostMinorUnits) ||
+      (pilotProviderReservation !== undefined &&
+        (providerRequestCount === undefined ||
+          providerTokenCount === undefined ||
+          providerCostMinorUnits === undefined ||
+          providerRequestCount > pilotProviderReservation.requests ||
+          providerTokenCount > pilotProviderReservation.tokens ||
+          providerCostMinorUnits > pilotProviderReservation.costMinor)) ||
       verificationReceipts.some(
         (receipt) => receipt.output.capturedBytes > outputCaptureLimits.verification,
       );
@@ -2632,6 +2942,14 @@ export async function runRealManagedChange(
         projection.attempts[1]?.previousAttemptId === checkpoint.attemptId &&
         projection.attempts[1]?.recoveryCheckpointId === checkpoint.checkpointId,
     );
+    const failedAttemptPreserved =
+      projection.attempts.length < 2 ||
+      (projection.attempts[0]?.verificationStatus === "FAILED" &&
+        projection.verificationReceipts[0]?.outcome === "FAIL") ||
+      interruptedAttemptHistoryPreserved;
+    const fixbackPass =
+      latestVerification.outcome === "PASS" &&
+      (projection.attempts.length === 1 || projection.attempts[1]?.verificationStatus === "PASSED");
     const portableBeforeScore = {
       schemaVersion: "hpi-managed-change.v3" as const,
       observedAt: now(),
@@ -2661,9 +2979,9 @@ export async function runRealManagedChange(
       },
       plan: {
         planRevisionId: plan.planRevisionId,
-        planFingerprint: sha256(JSON.stringify(plan)),
+        planFingerprint: sha256(JSON.stringify(projection.planRevision)),
         allowedPaths: request.allowedPaths,
-        checkId: "check_real-command",
+        checkId: realCheckId,
         checkDefinitionFingerprint,
       },
       writerLease: {
@@ -2692,15 +3010,8 @@ export async function runRealManagedChange(
             reviewedChangedPaths.length > 0),
         sourceLoss,
         secretLeak: false,
-        failedAttemptPreserved:
-          projection.attempts.length < 2 ||
-          (projection.attempts[0]?.verificationStatus === "FAILED" &&
-            projection.verificationReceipts[0]?.outcome === "FAIL") ||
-          interruptedAttemptHistoryPreserved,
-        fixbackPass:
-          latestVerification.outcome === "PASS" &&
-          (projection.attempts.length === 1 ||
-            projection.attempts[1]?.verificationStatus === "PASSED"),
+        failedAttemptPreserved,
+        fixbackPass,
         changedPathsWithinScope,
         agentReturnObserved: agentReturned,
         summaryComplete:
@@ -2738,9 +3049,68 @@ export async function runRealManagedChange(
       !secretLeak;
     const taskResult = correctnessPassed ? "GO" : "STOP";
     if (options.durableArchive !== undefined) {
+      const capturedWorkflowFactSignals: Readonly<
+        Record<RealManagedChangeWorkflowFactId, boolean>
+      > = {
+        TASK_IDENTITY: pilotExecutionBinding !== undefined,
+        REPOSITORY_IDENTITY: fingerprintSchema.safeParse(inputRequest.target.repositoryFingerprint)
+          .success,
+        TARGET_REFERENCE_IDENTITY: fingerprintSchema.safeParse(
+          inputRequest.target.targetReferenceFingerprint,
+        ).success,
+        SOURCE_IDENTITY: fingerprintSchema.safeParse(plan.sourceFingerprint).success,
+        TASK_DEFINITION: fingerprintSchema.safeParse(
+          fingerprintRealManagedChangeTaskDefinition(inputRequest),
+        ).success,
+        ACCEPTANCE_DEFINITION: fingerprintSchema.safeParse(checkDefinitionFingerprint).success,
+        EXECUTION_OBSERVATION:
+          allAgentRuns.length > 0 && allAgentRuns.every((agent) => agent.observations.length > 0),
+        PROCESS_FINALITY: allAgentRuns.every((agent) =>
+          agent.observations.some((observation) => observation.kind === "PROCESS_EXITED"),
+        ),
+        PROCESS_TREE_FINALITY: allAgentRuns.every((agent) =>
+          agent.observations.some(
+            (observation) =>
+              observation.kind === "OUTPUT_CAPTURED" &&
+              observation.summary?.includes("containment=NOT_PROVEN") === false,
+          ),
+        ),
+        OUTPUT_FINALITY:
+          engineOutputMeasured &&
+          allAgentRuns.every((agent) =>
+            agent.observations.some((observation) => observation.kind === "OUTPUT_CAPTURED"),
+          ),
+        WRITER_LEASE_FINALITY: releasedWriterLease.outcome === "RELEASED",
+        PROVIDER_REQUEST_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.requestCount),
+        PROVIDER_TOKEN_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.tokenCount),
+        PROVIDER_COST_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.costMinorUnits),
+        SOURCE_PRESERVATION: typeof sourceLoss === "boolean",
+        CHANGED_PATH_SCOPE: typeof changedPathsWithinScope === "boolean",
+        INDEPENDENT_ACCEPTANCE:
+          verificationReceipts.length > 0 &&
+          verificationReceipts.every(
+            (receipt) =>
+              receipt.verificationReceiptId.length > 0 && receipt.resultFingerprint.length > 0,
+          ),
+        ACCEPTANCE_WORKSPACE_PRESERVATION:
+          verificationWorkspacePreservation.length === verificationReceipts.length,
+        SECRET_LEAKAGE_OBSERVATION: typeof secretLeak === "boolean",
+        ATTEMPT_HISTORY:
+          projection.attempts.length > 0 &&
+          projection.attempts.every(
+            (attempt) => attempt.attemptId.length > 0 && attempt.executionStatus !== "PENDING",
+          ),
+      };
+      const capturedWorkflowFactIds = realManagedChangeWorkflowFactIdSchema.options.filter(
+        (factId) => capturedWorkflowFactSignals[factId],
+      );
       const taskReceipt = realManagedChangeTaskReceiptSchema.parse({
-        schemaVersion: "hpi-real-managed-change-task-receipt.v3",
+        schemaVersion: "hpi-real-managed-change-task-receipt.v4",
         runId: run.runId,
+        targetId: inputRequest.target.targetId,
         repositoryFingerprint: inputRequest.target.repositoryFingerprint,
         targetReferenceFingerprint: inputRequest.target.targetReferenceFingerprint,
         sourceFingerprint: plan.sourceFingerprint,
@@ -2753,6 +3123,17 @@ export async function runRealManagedChange(
         sourcePreserved: !sourceLoss,
         rawSecretLeakage: secretLeak,
         providerUsage,
+        pilotExecutionBinding: pilotExecutionBinding ?? null,
+        capturedWorkflowFactIds,
+        verificationHistory: verificationReceipts.map((receipt) => ({
+          attemptId: receipt.attemptId,
+          verificationReceiptId: receipt.verificationReceiptId,
+          checkId: receipt.checkId,
+          outcome: receipt.outcome,
+          resultFingerprint: receipt.resultFingerprint,
+        })),
+        failedAttemptPreserved,
+        fixbackPass,
         reviewP0P1Count: recordedReviewFindings.filter(
           (finding) => finding.severity === "P0" || finding.severity === "P1",
         ).length,

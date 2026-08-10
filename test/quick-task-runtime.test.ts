@@ -19,13 +19,17 @@ import {
   type PilotTaskResult,
   type PilotTaskOracle,
 } from "@hunter-pi/pilot";
-import type { Task6PiProcessResult } from "@hunter-pi/pi-host";
+import type { Task6PiProcessBoundary, Task6PiProcessResult } from "@hunter-pi/pi-host";
 import type { ProcessRunner } from "@hunter-pi/verification";
 
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
 import { fixtureFingerprint } from "./support/workflow-domain-fixture.js";
 
 const cleanupRoots: string[] = [];
+
+async function authorizeProviderSend(boundary?: Task6PiProcessBoundary): Promise<void> {
+  await boundary?.beforeExternalOperation();
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -104,6 +108,7 @@ async function createFixture(): Promise<{
   };
   const oracle: Extract<PilotTaskOracle, { readonly mode: "QUICK" }> = {
     taskId: "quick-task-01",
+    targetId: target.targetId,
     repositoryFingerprint: target.repositoryFingerprint,
     targetReferenceFingerprint: target.targetReferenceFingerprint,
     sourceFingerprint: target.sourceFingerprint,
@@ -184,6 +189,7 @@ function hunterResult(
 ): PilotTaskResult {
   return {
     taskId: oracle.taskId,
+    targetId: oracle.targetId,
     repositoryFingerprint: oracle.repositoryFingerprint,
     targetReferenceFingerprint: oracle.targetReferenceFingerprint,
     sourceFingerprint: oracle.sourceFingerprint,
@@ -227,13 +233,51 @@ function isolatedRawArguments(): string[] {
 }
 
 describe("product-derived Quick task runtime", () => {
+  it("does not authorize a Provider send when the process adapter fails local preflight", async () => {
+    const fixture = await createFixture();
+    const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
+    const runProcess = vi.fn(() =>
+      Promise.reject(new Error("local runtime snapshot preflight failed")),
+    );
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
+
+    await expect(
+      runPilotQuickTask({
+        taskId: fixture.oracle.taskId,
+        repository: fixture.repository,
+        request: fixture.request,
+        oracle: fixture.oracle,
+        launchPlan: {
+          executable: process.execPath,
+          arguments: ["pi-cli.js"],
+          cwd: fixture.repository,
+          environment: {},
+        },
+        runProcess,
+        commandRunner: passingCommandRunner(),
+        writerLeaseManager: leaseManager,
+        writerLeaseOwnerFingerprint: fixtureFingerprint,
+        environmentFingerprint: fixtureFingerprint,
+        runtimeConfigurationFingerprint: fixtureFingerprint,
+        beforeProviderSend,
+      }),
+    ).rejects.toThrow(/local runtime snapshot preflight failed/u);
+
+    expect(runProcess).toHaveBeenCalledOnce();
+    expect(beforeProviderSend).not.toHaveBeenCalled();
+  });
+
   it("returns one non-Run receipt only after scoped mutation and independent acceptance", async () => {
     const fixture = await createFixture();
     const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
-    const runProcess = vi.fn().mockImplementation(async () => {
-      await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
-      return qualifiedProcessResult();
-    });
+    const runProcess = vi
+      .fn()
+      .mockImplementation(async (_request: unknown, boundary?: Task6PiProcessBoundary) => {
+        await authorizeProviderSend(boundary);
+        await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
+        return qualifiedProcessResult();
+      });
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
     const times = [0, 1_000, 51_000, 60_000];
 
     const receipt = await runPilotQuickTask({
@@ -253,6 +297,7 @@ describe("product-derived Quick task runtime", () => {
       writerLeaseOwnerFingerprint: fixtureFingerprint,
       environmentFingerprint: fixtureFingerprint,
       runtimeConfigurationFingerprint: fixtureFingerprint,
+      beforeProviderSend,
       now: () => "2026-08-10T04:00:00.000Z",
       monotonicNow: () => times.shift() ?? 60_000,
     });
@@ -280,6 +325,7 @@ describe("product-derived Quick task runtime", () => {
     expect(receipt).not.toHaveProperty("attemptId");
     expect(receipt).not.toHaveProperty("terminalOutcome");
     expect(runProcess).toHaveBeenCalledOnce();
+    expect(beforeProviderSend).toHaveBeenCalledOnce();
   });
 
   it("records failed acceptance when the Agent mutates an undeclared path", async () => {
@@ -297,7 +343,8 @@ describe("product-derived Quick task runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "outside.txt"), "unsafe\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -306,6 +353,7 @@ describe("product-derived Quick task runtime", () => {
       writerLeaseOwnerFingerprint: fixtureFingerprint,
       environmentFingerprint: fixtureFingerprint,
       runtimeConfigurationFingerprint: fixtureFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(receipt.acceptanceObservation).toBe("FAIL");
@@ -345,7 +393,8 @@ describe("product-derived Quick task runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -354,6 +403,7 @@ describe("product-derived Quick task runtime", () => {
       writerLeaseOwnerFingerprint: fixtureFingerprint,
       environmentFingerprint: fixtureFingerprint,
       runtimeConfigurationFingerprint: fixtureFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(receipt.acceptanceObservation).toBe("FAIL");
@@ -393,7 +443,8 @@ describe("product-derived Quick task runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -402,6 +453,7 @@ describe("product-derived Quick task runtime", () => {
       writerLeaseOwnerFingerprint: fixtureFingerprint,
       environmentFingerprint: fixtureFingerprint,
       runtimeConfigurationFingerprint: fixtureFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(receipt.acceptanceObservation).toBe("FAIL");
@@ -411,6 +463,7 @@ describe("product-derived Quick task runtime", () => {
     const fixture = await createFixture();
     const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
     const runProcess = vi.fn();
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
 
     await expect(
       runPilotQuickTask({
@@ -433,13 +486,91 @@ describe("product-derived Quick task runtime", () => {
         writerLeaseOwnerFingerprint: fixtureFingerprint,
         environmentFingerprint: fixtureFingerprint,
         runtimeConfigurationFingerprint: fixtureFingerprint,
+        beforeProviderSend,
       }),
     ).rejects.toThrow(/frozen pilot binding/u);
     expect(runProcess).not.toHaveBeenCalled();
+    expect(beforeProviderSend).not.toHaveBeenCalled();
   });
 });
 
 describe("product-derived raw Pi comparator runtime", () => {
+  it("blocks a source-equivalent clone before any Provider process starts", async () => {
+    const fixture = await createFixture();
+    const aliasRepository = join(fixture.root, "alias-repository");
+    git(fixture.root, ["clone", "--branch", "main", fixture.repository, aliasRepository]);
+    const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
+    const runProcess = vi.fn(async (_request, boundary: Task6PiProcessBoundary | undefined) => {
+      await authorizeProviderSend(boundary);
+      await writeFile(join(aliasRepository, "result.txt"), "accepted\n", "utf8");
+      return qualifiedProcessResult();
+    });
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
+
+    await expect(
+      runPilotRawComparator({
+        taskId: fixture.oracle.taskId,
+        repository: aliasRepository,
+        request: fixture.request,
+        oracle: fixture.oracle,
+        hunterResult: hunterResult(fixture.oracle),
+        launchPlan: {
+          executable: process.execPath,
+          arguments: isolatedRawArguments(),
+          cwd: aliasRepository,
+          environment: {},
+        },
+        runProcess,
+        commandRunner: passingCommandRunner(),
+        writerLeaseManager: leaseManager,
+        writerLeaseOwnerFingerprint: fixtureFingerprint,
+        environmentFingerprint: fixtureFingerprint,
+        comparatorConfigurationFingerprint: fixtureFingerprint,
+        workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+        beforeProviderSend,
+      }),
+    ).rejects.toThrow(/frozen task and source/u);
+
+    expect(runProcess).not.toHaveBeenCalled();
+    expect(beforeProviderSend).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize a Provider send when raw Pi process preflight fails locally", async () => {
+    const fixture = await createFixture();
+    const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
+    const runProcess = vi.fn(() =>
+      Promise.reject(new Error("raw runtime snapshot preflight failed")),
+    );
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
+
+    await expect(
+      runPilotRawComparator({
+        taskId: fixture.oracle.taskId,
+        repository: fixture.repository,
+        request: fixture.request,
+        oracle: fixture.oracle,
+        hunterResult: hunterResult(fixture.oracle),
+        launchPlan: {
+          executable: process.execPath,
+          arguments: isolatedRawArguments(),
+          cwd: fixture.repository,
+          environment: {},
+        },
+        runProcess,
+        commandRunner: passingCommandRunner(),
+        writerLeaseManager: leaseManager,
+        writerLeaseOwnerFingerprint: fixtureFingerprint,
+        environmentFingerprint: fixtureFingerprint,
+        comparatorConfigurationFingerprint: fixtureFingerprint,
+        workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+        beforeProviderSend,
+      }),
+    ).rejects.toThrow(/raw runtime snapshot preflight failed/u);
+
+    expect(runProcess).toHaveBeenCalledOnce();
+    expect(beforeProviderSend).not.toHaveBeenCalled();
+  });
+
   it("captures an extension-free comparator from the same source and independent check", async () => {
     const fixture = await createFixture();
     const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
@@ -456,7 +587,8 @@ describe("product-derived raw Pi comparator runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -466,6 +598,7 @@ describe("product-derived raw Pi comparator runtime", () => {
       environmentFingerprint: fixtureFingerprint,
       comparatorConfigurationFingerprint: fixtureFingerprint,
       workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(comparator).toMatchObject({
@@ -504,7 +637,8 @@ describe("product-derived raw Pi comparator runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "wrong\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -514,6 +648,7 @@ describe("product-derived raw Pi comparator runtime", () => {
       environmentFingerprint: fixtureFingerprint,
       comparatorConfigurationFingerprint: fixtureFingerprint,
       workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(comparator).toMatchObject({
@@ -557,7 +692,8 @@ describe("product-derived raw Pi comparator runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -567,6 +703,7 @@ describe("product-derived raw Pi comparator runtime", () => {
       environmentFingerprint: fixtureFingerprint,
       comparatorConfigurationFingerprint: fixtureFingerprint,
       workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(comparator).toMatchObject({
@@ -610,7 +747,8 @@ describe("product-derived raw Pi comparator runtime", () => {
         cwd: fixture.repository,
         environment: {},
       },
-      runProcess: async () => {
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
         await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
         return qualifiedProcessResult();
       },
@@ -620,6 +758,7 @@ describe("product-derived raw Pi comparator runtime", () => {
       environmentFingerprint: fixtureFingerprint,
       comparatorConfigurationFingerprint: fixtureFingerprint,
       workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
     });
 
     expect(comparator).toMatchObject({
@@ -633,6 +772,7 @@ describe("product-derived raw Pi comparator runtime", () => {
     const fixture = await createFixture();
     const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
     const runProcess = vi.fn();
+    const beforeProviderSend = vi.fn(() => Promise.resolve());
 
     await expect(
       runPilotRawComparator({
@@ -654,9 +794,11 @@ describe("product-derived raw Pi comparator runtime", () => {
         environmentFingerprint: fixtureFingerprint,
         comparatorConfigurationFingerprint: fixtureFingerprint,
         workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+        beforeProviderSend,
       }),
     ).rejects.toThrow(/extension-free/u);
     expect(runProcess).not.toHaveBeenCalled();
+    expect(beforeProviderSend).not.toHaveBeenCalled();
   });
 
   it("blocks a raw launch missing any declared isolation surface", async () => {
@@ -686,6 +828,7 @@ describe("product-derived raw Pi comparator runtime", () => {
         environmentFingerprint: fixtureFingerprint,
         comparatorConfigurationFingerprint: fixtureFingerprint,
         workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+        beforeProviderSend: () => Promise.resolve(),
       }),
     ).rejects.toThrow(/extension-free/u);
     expect(runProcess).not.toHaveBeenCalled();

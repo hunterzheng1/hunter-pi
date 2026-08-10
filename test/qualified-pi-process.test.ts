@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   QualifiedPiProcessBlockedError,
@@ -63,6 +63,78 @@ async function runRecords(
 }
 
 describe("qualified Pi JSON process runner", () => {
+  it("does not spawn the default process when the external-operation boundary rejects", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-default-boundary-");
+    cleanupRoots.push(root);
+    const beforeExternalOperation = vi.fn(() => Promise.reject(new Error("authorization denied")));
+
+    await expect(
+      runTask6PiJsonProcess(
+        {
+          plan: {
+            executable: process.execPath,
+            arguments: [
+              "-e",
+              "require('node:fs').writeFileSync('spawned.txt', 'unexpected')",
+              "--",
+            ],
+            cwd: root,
+            environment: { HUNTER_PI_MODE: "MANAGED" },
+          },
+          prompt: "Do not send this input.",
+          timeoutMs: 30_000,
+          maximumOutputBytes: 32_768,
+        },
+        { beforeExternalOperation },
+      ),
+    ).rejects.toThrow("authorization denied");
+    await expect(readFile(join(root, "spawned.txt"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(beforeExternalOperation).toHaveBeenCalledOnce();
+  });
+
+  it("reaches authorization again from a new runner after a clean pre-boundary failure", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-qualified-retry-");
+    cleanupRoots.push(root);
+    const workspace = join(root, "workspace");
+    const leaseRoot = join(root, "leases");
+    await Promise.all([mkdir(workspace), mkdir(leaseRoot)]);
+    const request = {
+      plan: {
+        executable: process.execPath,
+        arguments: ["-e", "process.exit(0)", "--"],
+        cwd: workspace,
+        environment: { HUNTER_PI_MODE: "MANAGED" },
+      },
+      prompt: "Retry the bounded fixture operation.",
+      timeoutMs: 30_000,
+      maximumOutputBytes: 32_768,
+    };
+    const firstRunner = await createQualifiedPiJsonProcess({
+      leaseRoot,
+      now: () => "2026-08-06T00:00:10.000Z",
+    });
+
+    await expect(
+      firstRunner(request, {
+        beforeExternalOperation: () => Promise.reject(new Error("first authorization unavailable")),
+      }),
+    ).rejects.toThrow("first authorization unavailable");
+
+    const secondAuthorization = vi.fn(() =>
+      Promise.reject(new Error("second authorization reached")),
+    );
+    const secondRunner = await createQualifiedPiJsonProcess({
+      leaseRoot,
+      now: () => "2026-08-06T00:00:20.000Z",
+    });
+    await expect(
+      secondRunner(request, { beforeExternalOperation: secondAuthorization }),
+    ).rejects.toThrow("second authorization reached");
+    expect(secondAuthorization).toHaveBeenCalledOnce();
+  });
+
   it("does not trust Provider usage until hidden transport retries are proven disabled", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-unqualified-process-");
     cleanupRoots.push(root);
@@ -371,21 +443,27 @@ describe("qualified Pi JSON process runner", () => {
       maximumOutputBytes: 32_768,
     };
 
+    const beforeExternalOperation = vi.fn(() => Promise.resolve());
     let failure: unknown;
     try {
-      await runProcess(request);
+      await runProcess(request, { beforeExternalOperation });
     } catch (error) {
       failure = error;
     }
     expect(failure).toBeInstanceOf(QualifiedPiProcessBlockedError);
     expect(failure).toMatchObject({ reason: "RUNTIME_CONFIGURATION_NOT_PROVEN" });
     expect((failure as Error).message).not.toContain(root);
+    expect(beforeExternalOperation).not.toHaveBeenCalled();
 
-    const recovered = await runProcess({
-      ...request,
-      plan: { ...request.plan, environment: { HUNTER_PI_MODE: "MANAGED" } },
-    });
+    const recovered = await runProcess(
+      {
+        ...request,
+        plan: { ...request.plan, environment: { HUNTER_PI_MODE: "MANAGED" } },
+      },
+      { beforeExternalOperation },
+    );
     expect(recovered.providerUsage.status).toBe("PASS");
+    expect(beforeExternalOperation).toHaveBeenCalledOnce();
   });
 
   it("does not double count assistant messages repeated inside agent_end", async () => {

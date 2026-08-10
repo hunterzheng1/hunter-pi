@@ -23,7 +23,7 @@ import {
   realManagedChangeRequestSchema,
   type RealManagedChangeRequest,
 } from "@hunter-pi/managed-change";
-import type { PiLaunchPlan, Task6PiProcessRequest, Task6PiProcessResult } from "@hunter-pi/pi-host";
+import type { PiLaunchPlan, Task6PiProcessRunner } from "@hunter-pi/pi-host";
 import { observeControlledCommand, type ProcessRunner } from "@hunter-pi/verification";
 
 import {
@@ -52,12 +52,13 @@ export interface RunPilotQuickTaskOptions {
   readonly request: RealManagedChangeRequest;
   readonly oracle: Extract<PilotTaskOracle, { readonly mode: "QUICK" }>;
   readonly launchPlan: PiLaunchPlan;
-  readonly runProcess: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly runProcess: Task6PiProcessRunner;
   readonly commandRunner: ProcessRunner;
   readonly writerLeaseManager: LeaseManager;
   readonly writerLeaseOwnerFingerprint: Fingerprint;
   readonly environmentFingerprint: Fingerprint;
   readonly runtimeConfigurationFingerprint: Fingerprint;
+  readonly beforeProviderSend: () => Promise<void>;
   readonly now?: () => string;
   readonly monotonicNow?: () => number;
 }
@@ -240,6 +241,7 @@ function assertFrozenBinding(
   });
   if (
     taskId !== oracle.taskId ||
+    request.target.targetId !== oracle.targetId ||
     target.status !== "READY" ||
     request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
     request.target.sourceFingerprint !== oracle.sourceFingerprint ||
@@ -338,12 +340,26 @@ export async function runPilotQuickTask(
     const locked = await inspectRepository(before.repository);
     assertFrozenBinding(options.taskId, request, options.oracle, locked);
     const providerStarted = monotonicNow();
-    const processResult = await options.runProcess({
-      plan: options.launchPlan,
-      prompt: promptFor(request),
-      timeoutMs: 300_000,
-      maximumOutputBytes: 229_376,
-    });
+    const providerSendBoundary = { authorized: false };
+    const processResult = await options.runProcess(
+      {
+        plan: options.launchPlan,
+        prompt: promptFor(request),
+        timeoutMs: 300_000,
+        maximumOutputBytes: 229_376,
+      },
+      {
+        beforeExternalOperation: async () => {
+          await options.beforeProviderSend();
+          providerSendBoundary.authorized = true;
+        },
+      },
+    );
+    if (!providerSendBoundary.authorized) {
+      throw new PilotQuickTaskRuntimeError(
+        "the Quick process adapter did not honor the required pre-send authorization boundary",
+      );
+    }
     const providerRuntimeMs = Math.max(0, monotonicNow() - providerStarted);
     const processFinal =
       processResult.terminalFinality === "FINAL" &&
@@ -437,6 +453,7 @@ export async function runPilotQuickTask(
     return pilotQuickTaskReceiptSchema.parse({
       receiptId: `quick-receipt-${shortId(`${options.taskId}\0${processResult.stdoutDigest}`)}`,
       taskId: options.oracle.taskId,
+      targetId: options.oracle.targetId,
       repositoryFingerprint: options.oracle.repositoryFingerprint,
       targetReferenceFingerprint: options.oracle.targetReferenceFingerprint,
       sourceFingerprint: options.oracle.sourceFingerprint,

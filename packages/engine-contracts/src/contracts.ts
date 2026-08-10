@@ -179,10 +179,23 @@ export const engineObservationSchema = z.strictObject({
 });
 export type EngineObservation = z.infer<typeof engineObservationSchema>;
 
+/**
+ * A process adapter invokes this only after local validation and immediately
+ * before it can start an external operation. The callback must complete before
+ * that boundary is crossed.
+ */
+export interface EngineExternalOperationBoundary {
+  readonly beforeExternalOperation: () => Promise<void>;
+}
+
 export interface EngineHost {
   probe(request: ProbeRequest): Promise<CapabilityReceipt>;
   start(request: StartAttemptRequest): Promise<StartAttemptReceipt>;
-  send(handle: EngineHandle, input: EngineInput): Promise<OperationReceipt>;
+  send(
+    handle: EngineHandle,
+    input: EngineInput,
+    boundary?: EngineExternalOperationBoundary,
+  ): Promise<OperationReceipt>;
   observe(handle: EngineHandle, cursor?: EventCursor): AsyncIterable<EngineObservation>;
   interrupt(handle: EngineHandle, request: InterruptRequest): Promise<OperationReceipt>;
   checkpoint(handle: EngineHandle, request: CheckpointRequest): Promise<EngineCheckpointReceipt>;

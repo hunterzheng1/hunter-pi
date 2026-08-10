@@ -620,7 +620,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(updateMismatch.reasons.join(" ")).toMatch(/update|candidate/u);
   });
 
-  it("binds task observations to the frozen target reference and check definitions", () => {
+  it("binds task observations to the frozen target identity, reference, and check definitions", () => {
     const evidence = completeEvidence();
     const plan = completePilotExecutionPlan();
     const forged = {
@@ -629,6 +629,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         index === 0
           ? {
               ...oracle,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }
@@ -638,6 +639,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         index === 0
           ? {
               ...result,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }
@@ -647,6 +649,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         receipt.taskId === evidence.taskOracles[0]?.taskId
           ? {
               ...receipt,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }
@@ -656,6 +659,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         index === 0
           ? {
               ...comparator,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }

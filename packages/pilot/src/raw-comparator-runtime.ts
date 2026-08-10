@@ -22,7 +22,7 @@ import {
   realManagedChangeRequestSchema,
   type RealManagedChangeRequest,
 } from "@hunter-pi/managed-change";
-import type { PiLaunchPlan, Task6PiProcessRequest, Task6PiProcessResult } from "@hunter-pi/pi-host";
+import type { PiLaunchPlan, Task6PiProcessRunner } from "@hunter-pi/pi-host";
 import { observeControlledCommand, type ProcessRunner } from "@hunter-pi/verification";
 
 import {
@@ -73,13 +73,14 @@ export interface RunPilotRawComparatorOptions {
   readonly oracle: PilotTaskOracle;
   readonly hunterResult: PilotTaskResult;
   readonly launchPlan: PiLaunchPlan;
-  readonly runProcess: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly runProcess: Task6PiProcessRunner;
   readonly commandRunner: ProcessRunner;
   readonly writerLeaseManager: LeaseManager;
   readonly writerLeaseOwnerFingerprint: Fingerprint;
   readonly environmentFingerprint: Fingerprint;
   readonly comparatorConfigurationFingerprint: Fingerprint;
   readonly workflowFactChecklistFingerprint: Fingerprint;
+  readonly beforeProviderSend: () => Promise<void>;
   readonly now?: () => string;
 }
 
@@ -270,7 +271,9 @@ function assertFrozenBinding(
   });
   if (
     taskId !== oracle.taskId ||
+    request.target.targetId !== oracle.targetId ||
     equivalentSource.status !== "READY" ||
+    equivalentSource.repositoryFingerprint !== oracle.repositoryFingerprint ||
     equivalentSource.sourceFingerprint !== oracle.sourceFingerprint ||
     equivalentSource.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
     request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
@@ -401,12 +404,26 @@ export async function runPilotRawComparator(
   try {
     const locked = await inspectRepository(before.repository);
     assertFrozenBinding(options.taskId, request, options.oracle, locked);
-    const processResult = await options.runProcess({
-      plan: options.launchPlan,
-      prompt: promptFor(request),
-      timeoutMs: 300_000,
-      maximumOutputBytes: 229_376,
-    });
+    const providerSendBoundary = { authorized: false };
+    const processResult = await options.runProcess(
+      {
+        plan: options.launchPlan,
+        prompt: promptFor(request),
+        timeoutMs: 300_000,
+        maximumOutputBytes: 229_376,
+      },
+      {
+        beforeExternalOperation: async () => {
+          await options.beforeProviderSend();
+          providerSendBoundary.authorized = true;
+        },
+      },
+    );
+    if (!providerSendBoundary.authorized) {
+      throw new PilotRawComparatorRuntimeError(
+        "the raw Pi process adapter did not honor the required pre-send authorization boundary",
+      );
+    }
     if (
       processResult.terminalFinality !== "FINAL" ||
       processResult.processTreeState !== "EMPTY" ||
@@ -475,6 +492,7 @@ export async function runPilotRawComparator(
     }
     return pilotComparatorSchema.parse({
       taskId: options.oracle.taskId,
+      targetId: options.oracle.targetId,
       repositoryFingerprint: options.oracle.repositoryFingerprint,
       targetReferenceFingerprint: options.oracle.targetReferenceFingerprint,
       sourceFingerprint: options.oracle.sourceFingerprint,

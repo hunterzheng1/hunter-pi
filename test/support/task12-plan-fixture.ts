@@ -34,7 +34,7 @@ export function completePilotPlanInput(): PilotPlanInput {
     },
   ];
   return {
-    schemaVersion: "hpi-pilot-plan-input.v3",
+    schemaVersion: "hpi-pilot-plan-input.v4",
     platform: "win32",
     architecture: "x64",
     sourceFingerprint: firstSourceFingerprint,
@@ -61,7 +61,7 @@ export function completePilotPlanInput(): PilotPlanInput {
     comparatorConfigurationFingerprint: fixtureFingerprint,
     workflowFactChecklistFingerprint: `sha256:${"7".repeat(64)}`,
     acceptanceChecks: Array.from({ length: 10 }, (_, index) => ({
-      checkId: `check-${String(index + 1).padStart(2, "0")}`,
+      checkId: `check_pilot-${String(index + 1).padStart(2, "0")}`,
       definitionFingerprint: indexedFingerprint(index),
     })),
     operatorScope: {
@@ -92,7 +92,7 @@ export function completePilotPlanInput(): PilotPlanInput {
               expectedAcceptanceObservation: "PASS" as const,
             }
           : { mode: "MANAGED" as const, expectedOutcome: "READY" as const }),
-        acceptanceCheckIds: [`check-${String(index + 1).padStart(2, "0")}`],
+        acceptanceCheckIds: [`check_pilot-${String(index + 1).padStart(2, "0")}`],
       };
     }),
     pluginFixtures: [
@@ -122,7 +122,7 @@ export function completePilotPlanInput(): PilotPlanInput {
         qualificationFingerprint: `sha256:${"b".repeat(64)}`,
       },
     ],
-    pairedTaskIds: ["pilot-task-01", "pilot-task-06", "pilot-task-07"],
+    pairedTaskIds: ["pilot-task-01", "pilot-task-04", "pilot-task-07"],
     interruptionTasks: [
       {
         interruptionId: "pilot-interruption-1",
@@ -140,6 +140,7 @@ export function completePilotPlanInput(): PilotPlanInput {
         kind: "POWER_LOSS_SIMULATION",
       },
     ],
+    deliberateFixbackTaskId: "pilot-task-04",
   };
 }
 

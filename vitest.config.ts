@@ -23,6 +23,9 @@ export default defineConfig({
       "@hunter-pi/engine-contracts": fileURLToPath(
         new URL("./packages/engine-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/managed-change/internal-pilot-execution": fileURLToPath(
+        new URL("./packages/managed-change/src/pilot-execution-runtime.ts", import.meta.url),
+      ),
       "@hunter-pi/managed-change": fileURLToPath(
         new URL("./packages/managed-change/src/index.ts", import.meta.url),
       ),

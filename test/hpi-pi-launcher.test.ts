@@ -9,6 +9,7 @@ import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
   createPiLaunchPlan,
+  createRawPiLaunchPlan,
   createQuickSessionHeader,
   createQuickSessionProcessObservation,
   disableHpiPlugin,
@@ -139,6 +140,47 @@ describe("Hunter Pi launch planning", () => {
       PI_TELEMETRY: "0",
     });
     expect(Object.keys(plan.environment).join(" ")).not.toMatch(/token|cookie|secret|api.?key/iu);
+  });
+
+  it("builds a comparator launch with the same pinned Provider but no Hunter extension", async () => {
+    const fixture = await createFixture();
+
+    const plan = createRawPiLaunchPlan({
+      paths: fixture.paths,
+      configuration: fixture.configuration,
+      cwd: fixture.repository,
+      piCliPath: join(fixture.root, "pi-cli.js"),
+      providerAuthConfigured: true,
+      resolvedProviderDestination: managedDestination,
+      sessionTreeInspected: true,
+    });
+
+    expect(plan.arguments).toEqual(
+      expect.arrayContaining([
+        "--offline",
+        "--no-approve",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
+        "--provider",
+        "openai-codex",
+        "--model",
+        "openai-codex/gpt-5.6-sol",
+      ]),
+    );
+    expect(plan.arguments).not.toContain("--extension");
+    expect(plan.arguments).not.toContain(fixture.throwingPluginPath);
+    expect(plan.environment).toEqual({
+      PI_CODING_AGENT_DIR: fixture.paths.piAgentDirectory,
+      PI_CODING_AGENT_SESSION_DIR: fixture.paths.sessionDirectory,
+      PI_OFFLINE: "1",
+      PI_TELEMETRY: "0",
+    });
+    expect(Object.keys(plan.environment)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^HUNTER_PI_/u)]),
+    );
   });
 
   it("blocks unqualified user plugin activation and exposes honest header dimensions", async () => {

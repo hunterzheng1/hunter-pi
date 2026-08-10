@@ -118,6 +118,63 @@ describe("qualified Pi JSON process runner", () => {
     });
   });
 
+  it.each([
+    ["AFTER_AGENT_END_PROCESS_KILL", "FORCED_PROCESS_KILL_AFTER_AGENT_END", false],
+    [
+      "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION",
+      "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+      false,
+    ],
+    ["AFTER_AGENT_END_POWER_LOSS_SIMULATION", "POWER_LOSS_SIMULATION_AFTER_AGENT_END", true],
+  ] as const)(
+    "finalizes the qualified Pi tree for %s and retains exact usage",
+    async (forcedInterruption, expectedInterruption, expectedTimedOut) => {
+      const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-qualified-interrupt-");
+      cleanupRoots.push(root);
+      const workspace = join(root, "workspace");
+      const leaseRoot = join(root, "leases");
+      await Promise.all([mkdir(workspace), mkdir(leaseRoot)]);
+      const runProcess = await createQualifiedPiJsonProcess({ leaseRoot });
+      const script = [
+        "const fs=process.getBuiltinModule('node:fs')",
+        `process.stdout.write(JSON.stringify(${JSON.stringify({
+          type: "message_end",
+          message: { role: "assistant", usage: validUsage },
+        })})+'\\n')`,
+        "process.stderr.write('HPI_AGENT_END_MARKER:'+process.env.HUNTER_PI_INTERRUPTION_NONCE+'\\n')",
+        "setInterval(()=>{},1000)",
+      ].join(";");
+
+      const result = await runProcess({
+        plan: {
+          executable: process.execPath,
+          arguments: ["-e", script, "--"],
+          cwd: workspace,
+          environment: {},
+        },
+        prompt: "Apply the bounded fixture change.",
+        timeoutMs: 30_000,
+        maximumOutputBytes: 32_768,
+        forcedInterruption,
+      });
+
+      expect(result).toMatchObject({
+        interruption: expectedInterruption,
+        timedOut: expectedTimedOut,
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
+        providerUsage: {
+          status: "PASS",
+          requestCount: 1,
+          tokenCount: 165,
+          costMinorUnits: 1,
+        },
+      });
+      expect(result.eventTypes).toEqual(["message_end"]);
+    },
+  );
+
   it("fails closed when the Provider token total disagrees with its components", async () => {
     const result = await runRecords([
       {
@@ -195,8 +252,24 @@ describe("qualified Pi JSON process runner", () => {
       "utf8",
     );
     await Promise.all([
-      writeFile(join(agentDirectory, "auth.json"), '{"fixture":"auth"}\n', "utf8"),
-      writeFile(join(agentDirectory, "models.json"), '{"fixture":"models"}\n', "utf8"),
+      writeFile(
+        join(agentDirectory, "auth.json"),
+        JSON.stringify({
+          "fixture-provider": { type: "api_key", key: "selected-secret" },
+          "unrelated-provider": { type: "api_key", key: "must-not-copy" },
+        }),
+        "utf8",
+      ),
+      writeFile(
+        join(agentDirectory, "models.json"),
+        JSON.stringify({
+          providers: {
+            "fixture-provider": { baseUrl: "https://selected.example", models: [] },
+            "unrelated-provider": { baseUrl: "https://unrelated.example", models: [] },
+          },
+        }),
+        "utf8",
+      ),
     ]);
     const runProcess = await createQualifiedPiJsonProcess({
       leaseRoot,
@@ -210,24 +283,36 @@ describe("qualified Pi JSON process runner", () => {
       "const fs=process.getBuiltinModule('node:fs')",
       "const path=process.getBuiltinModule('node:path')",
       "const dir=process.env.PI_CODING_AGENT_DIR",
-      `fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({settings:JSON.parse(fs.readFileSync(path.join(dir,'settings.json'),'utf8')),auth:JSON.parse(fs.readFileSync(path.join(dir,'auth.json'),'utf8')),models:JSON.parse(fs.readFileSync(path.join(dir,'models.json'),'utf8'))}))`,
+      `fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({settings:JSON.parse(fs.readFileSync(path.join(dir,'settings.json'),'utf8')),auth:JSON.parse(fs.readFileSync(path.join(dir,'auth.json'),'utf8')),models:JSON.parse(fs.readFileSync(path.join(dir,'models.json'),'utf8')),ambientSecret:process.env.HPI_AMBIENT_SECRET_FOR_TEST??null,credentialedHttpProxy:process.env.HTTP_PROXY??null,credentialedHttpsProxy:process.env.HTTPS_PROXY??null,noProxy:process.env.NO_PROXY??null}))`,
       `for (const record of ${JSON.stringify(records)}) process.stdout.write(JSON.stringify(record)+'\\n')`,
     ].join(";");
 
-    const result = await runProcess({
-      plan: {
-        executable: process.execPath,
-        arguments: ["-e", script, "--"],
-        cwd: workspace,
-        environment: {
-          HUNTER_PI_MODE: "MANAGED",
-          PI_CODING_AGENT_DIR: agentDirectory,
+    const previousHttpProxy = process.env["HTTP_PROXY"];
+    process.env["HPI_AMBIENT_SECRET_FOR_TEST"] = "must-not-inherit";
+    process.env["HTTP_PROXY"] = "http://proxy-user:proxy-password@proxy.example:8080";
+    let result;
+    try {
+      result = await runProcess({
+        plan: {
+          executable: process.execPath,
+          arguments: ["-e", script, "--", "--provider", "fixture-provider"],
+          cwd: workspace,
+          environment: {
+            HUNTER_PI_MODE: "MANAGED",
+            PI_CODING_AGENT_DIR: agentDirectory,
+            HTTPS_PROXY: "https://proxy-user:proxy-password@proxy.example:8443",
+            NO_PROXY: "localhost,127.0.0.1",
+          },
         },
-      },
-      prompt: "Apply the bounded fixture change.",
-      timeoutMs: 30_000,
-      maximumOutputBytes: 32_768,
-    });
+        prompt: "Apply the bounded fixture change.",
+        timeoutMs: 30_000,
+        maximumOutputBytes: 32_768,
+      });
+    } finally {
+      delete process.env["HPI_AMBIENT_SECRET_FOR_TEST"];
+      if (previousHttpProxy === undefined) delete process.env["HTTP_PROXY"];
+      else process.env["HTTP_PROXY"] = previousHttpProxy;
+    }
 
     expect(result.providerUsage.status).toBe("PASS");
     expect(JSON.parse(await readFile(observationPath, "utf8"))).toEqual({
@@ -235,13 +320,20 @@ describe("qualified Pi JSON process runner", () => {
         retry: {
           enabled: false,
           maxRetries: 0,
-          provider: { maxRetries: 0, maxRetryDelayMs: 60_000 },
+          provider: { maxRetries: 0 },
         },
         compaction: { enabled: false },
-        transport: "sse",
       },
-      auth: { fixture: "auth" },
-      models: { fixture: "models" },
+      auth: { "fixture-provider": { type: "api_key", key: "selected-secret" } },
+      models: {
+        providers: {
+          "fixture-provider": { baseUrl: "https://selected.example", models: [] },
+        },
+      },
+      ambientSecret: null,
+      credentialedHttpProxy: null,
+      credentialedHttpsProxy: null,
+      noProxy: "localhost,127.0.0.1",
     });
     expect(JSON.parse(await readFile(join(agentDirectory, "settings.json"), "utf8"))).toEqual(
       sourceSettings,

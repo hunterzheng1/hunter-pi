@@ -14,7 +14,10 @@ import {
   type HpiCliIo,
 } from "@hunter-pi/cli";
 import {
+  fingerprintRealManagedChangeCheckDefinition,
+  fingerprintRealManagedChangeTaskDefinition,
   realManagedChangeEvidenceSchema,
+  realManagedChangeRequestSchema,
   type RealManagedChangeTarget,
 } from "@hunter-pi/managed-change";
 import { FileRunArchiveStore, FileWorkflowEventStore } from "@hunter-pi/evidence";
@@ -227,6 +230,11 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         capturedBytes: 128,
         outputTruncated: false,
         providerUsage: fixturePiProviderUsage,
+        containment:
+          process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
       };
     };
 
@@ -275,6 +283,9 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     });
 
     const pilotInput = completePilotPlanInput();
+    const taskDefinitionFingerprint = fingerprintRealManagedChangeTaskDefinition(
+      realManagedChangeRequestSchema.parse(plan(target)),
+    );
     const pilotPlan = new PilotPlanCompiler().compile({
       ...pilotInput,
       repositoryTargets: pilotInput.repositoryTargets.map((candidate) =>
@@ -292,30 +303,33 @@ describe("hpi change command", { timeout: 30_000 }, () => {
           ? { ...check, definitionFingerprint: artifact.plan.checkDefinitionFingerprint }
           : check,
       ),
-      tasks: pilotInput.tasks.map((task, index) =>
-        task.targetId === target.targetId
-          ? {
-              ...task,
-              sourceFingerprint: target.sourceFingerprint,
-              mode: index === 0 ? ("MANAGED" as const) : task.mode,
-            }
-          : task,
-      ),
+      tasks: pilotInput.tasks.map((task, index) => {
+        if (task.targetId !== target.targetId) return task;
+        if (index === 0 && task.mode === "QUICK") {
+          const {
+            expectedExecutionObservation: _execution,
+            expectedAcceptanceObservation: _acceptance,
+            ...binding
+          } = task;
+          void _execution;
+          void _acceptance;
+          return {
+            ...binding,
+            sourceFingerprint: target.sourceFingerprint,
+            taskDefinitionFingerprint,
+            mode: "MANAGED" as const,
+            expectedOutcome: "READY" as const,
+          };
+        }
+        return {
+          ...task,
+          sourceFingerprint: target.sourceFingerprint,
+          ...(index === 0 ? { taskDefinitionFingerprint } : {}),
+        };
+      }),
     });
     const pilotPlanPath = join(root, "pilot-plan.json");
-    const metricsPath = join(root, "pilot-task-metrics.json");
     await writeFile(pilotPlanPath, JSON.stringify(pilotPlan), "utf8");
-    await writeFile(
-      metricsPath,
-      JSON.stringify({
-        applicableFactCount: 20,
-        capturedFactCount: 20,
-        manualInterventions: 1,
-        rawPiCapturedFactCount: 15,
-        rawPiManualInterventions: 3,
-      }),
-      "utf8",
-    );
     io.stdout.splice(0);
     expect(
       await runHpiCli(
@@ -348,8 +362,6 @@ describe("hpi change command", { timeout: 30_000 }, () => {
           "pilot-task-01",
           "--archive-ids",
           "archive_cli-real-pilot-01",
-          "--metrics",
-          metricsPath,
           "--json",
         ],
         dependencies,
@@ -365,6 +377,251 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       },
     });
     expect(JSON.stringify(capture)).not.toContain(root);
+  });
+
+  it("executes and records a product-derived Quick pilot task through the CLI", async () => {
+    const { dependencies, io, root, repository } = await createCliFixture();
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse(plan(target));
+    const requestPath = join(root, "quick-request.json");
+    const pilotPlanPath = join(root, "quick-pilot-plan.json");
+    const input = completePilotPlanInput();
+    const taskDefinitionFingerprint = fingerprintRealManagedChangeTaskDefinition(request);
+    const checkDefinitionFingerprint = fingerprintRealManagedChangeCheckDefinition(request);
+    const pilotPlan = new PilotPlanCompiler().compile({
+      ...input,
+      repositoryTargets: input.repositoryTargets.map((candidate) =>
+        candidate.targetId === target.targetId
+          ? {
+              ...candidate,
+              repositoryFingerprint: target.repositoryFingerprint,
+              sourceFingerprint: target.sourceFingerprint,
+              targetReferenceFingerprint: target.targetReferenceFingerprint,
+            }
+          : candidate,
+      ),
+      acceptanceChecks: input.acceptanceChecks.map((check) =>
+        check.checkId === "check-01"
+          ? { ...check, definitionFingerprint: checkDefinitionFingerprint }
+          : check,
+      ),
+      tasks: input.tasks.map((task) =>
+        task.targetId === target.targetId
+          ? {
+              ...task,
+              sourceFingerprint: target.sourceFingerprint,
+              ...(task.taskId === "pilot-task-01" ? { taskDefinitionFingerprint } : {}),
+            }
+          : task,
+      ),
+    });
+    await Promise.all([
+      writeFile(requestPath, JSON.stringify(request), "utf8"),
+      writeFile(pilotPlanPath, JSON.stringify(pilotPlan), "utf8"),
+    ]);
+    expect(
+      await runHpiCli(
+        [
+          "pilot",
+          "capture",
+          "open",
+          "--plan",
+          pilotPlanPath,
+          "--session-id",
+          "pilot-quick-cli-session",
+          "--archive-id",
+          "pilot-quick-cli-archive",
+          "--json",
+        ],
+        dependencies,
+      ),
+    ).toBe(0);
+    io.stdout.splice(0);
+    const runTask6Process = async (
+      processRequest: Task6PiProcessRequest,
+    ): Promise<Task6PiProcessResult> => {
+      await writeFile(join(processRequest.plan.cwd, "result.txt"), "READY\n", "utf8");
+      return {
+        exitCode: 0,
+        timedOut: false,
+        framingValid: true,
+        eventTypes: ["message_end", "agent_end"],
+        recordCount: 2,
+        stdoutDigest: `sha256:${"a".repeat(64)}`,
+        stderrDigest: `sha256:${"b".repeat(64)}`,
+        capturedBytes: 128,
+        outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
+        containment:
+          process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
+      };
+    };
+
+    const exitCode = await runHpiCli(
+      [
+        "pilot",
+        "capture",
+        "quick-task",
+        "--session-id",
+        "pilot-quick-cli-session",
+        "--operation-id",
+        "pilot-quick-cli-operation",
+        "--task-id",
+        "pilot-task-01",
+        "--repo",
+        repository,
+        "--request",
+        requestPath,
+        "--json",
+        "--allow-provider-request",
+      ],
+      { ...dependencies, runTask6Process },
+    );
+
+    expect(exitCode, io.stderr.join("\n")).toBe(0);
+    expect(JSON.parse(io.stdout.join(""))).toMatchObject({
+      outcome: "RECORDED",
+      status: {
+        counts: { taskChains: 1, runArchives: 0 },
+        providerUsage: { requests: 1, tokens: 165, costMinor: 1 },
+      },
+    });
+    expect(JSON.stringify(io.stdout)).not.toContain(root);
+  });
+
+  it.each([
+    {
+      requested: "FORCED_PROCESS_KILL",
+      processRequest: "AFTER_AGENT_END_PROCESS_KILL",
+      observed: "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+      timedOut: false,
+    },
+    {
+      requested: "TERMINAL_CLOSE_SIMULATION",
+      processRequest: "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION",
+      observed: "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+      timedOut: false,
+    },
+    {
+      requested: "POWER_LOSS_SIMULATION",
+      processRequest: "AFTER_AGENT_END_POWER_LOSS_SIMULATION",
+      observed: "POWER_LOSS_SIMULATION_AFTER_AGENT_END",
+      timedOut: true,
+    },
+  ] as const)(
+    "injects and archives the exact $requested pilot interruption",
+    async ({ requested, processRequest, observed, timedOut }) => {
+      const { dependencies, io, root, repository } = await createCliFixture();
+      const planPath = join(root, "change-plan.json");
+      const target = await targetFor(repository);
+      await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
+      const processInterruptions: Task6PiProcessRequest["forcedInterruption"][] = [];
+      const archiveId = `archive_cli-${requested.toLowerCase().replaceAll("_", "-")}`;
+      const runTask6Process = async (
+        request: Task6PiProcessRequest,
+      ): Promise<Task6PiProcessResult> => {
+        processInterruptions.push(request.forcedInterruption);
+        await writeFile(join(request.plan.cwd, "result.txt"), "READY\n", "utf8");
+        const interrupted = request.forcedInterruption === processRequest;
+        return {
+          exitCode: interrupted ? 1 : 0,
+          timedOut: interrupted && timedOut,
+          framingValid: true,
+          eventTypes: interrupted ? ["message_end"] : ["message_end", "agent_end"],
+          recordCount: interrupted ? 1 : 2,
+          stdoutDigest: `sha256:${"a".repeat(64)}`,
+          stderrDigest: `sha256:${"b".repeat(64)}`,
+          capturedBytes: 128,
+          outputTruncated: false,
+          providerUsage: fixturePiProviderUsage,
+          ...(interrupted ? { interruption: observed } : {}),
+          containment:
+            process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
+          terminalFinality: "FINAL",
+          processTreeState: "EMPTY",
+          leaseState: "RELEASED",
+        };
+      };
+
+      const exitCode = await runHpiCli(
+        [
+          "change",
+          "--repo",
+          repository,
+          "--plan",
+          planPath,
+          "--run-archive-id",
+          archiveId,
+          "--pilot-interruption",
+          requested,
+          "--json",
+          "--allow-provider-request",
+        ],
+        { ...dependencies, runTask6Process },
+      );
+      expect(exitCode, io.stderr.join("\n")).toBe(0);
+      expect(processInterruptions).toEqual([processRequest, undefined]);
+      const artifact = realManagedChangeEvidenceSchema.parse(JSON.parse(io.stdout.join("")));
+      expect(artifact.projection).toMatchObject({
+        run: { lifecycle: "READY" },
+        attempts: [
+          { attemptId: "att_real-1" },
+          {
+            attemptId: "att_real-2",
+            previousAttemptId: "att_real-1",
+          },
+        ],
+      });
+      expect(artifact.projection.attempts[1]?.recoveryCheckpointId).toMatch(/^checkpoint_/u);
+      expect(artifact.projection.checkpoints[0]?.checkpointId).toMatch(/^checkpoint_/u);
+
+      const paths = resolveHpiPaths({
+        env: dependencies.environment,
+        homeDirectory: dependencies.homeDirectory,
+      });
+      const managedRunRoot = join(paths.root, "pilot", "managed-runs");
+      const archivePackage = await new FileRunArchiveStore({
+        stateRoot: join(managedRunRoot, "archive"),
+        kernel: new DurableWorkflowKernel(
+          new FileWorkflowEventStore({ stateRoot: join(managedRunRoot, "workflow") }),
+        ),
+      }).readCanonicalPackage(archiveId);
+      const taskReceiptEvidence = archivePackage.evidence.find(
+        (candidate) => candidate.evidenceId === "evidence_real-task-receipt",
+      );
+      expect(JSON.parse(taskReceiptEvidence?.capture.capturedText ?? "null")).toMatchObject({
+        schemaVersion: "hpi-real-managed-change-task-receipt.v3",
+        interruptionKind: observed,
+        providerUsage: { status: "PASS", requestCount: 2 },
+      });
+    },
+  );
+
+  it("rejects a pilot interruption without a durable Run Archive", async () => {
+    const { dependencies, root, repository } = await createCliFixture();
+    const planPath = join(root, "change-plan.json");
+    const target = await targetFor(repository);
+    await writeFile(planPath, JSON.stringify(plan(target)), "utf8");
+
+    expect(
+      await runHpiCli(
+        [
+          "change",
+          "--repo",
+          repository,
+          "--plan",
+          planPath,
+          "--pilot-interruption",
+          "FORCED_PROCESS_KILL",
+          "--json",
+          "--allow-provider-request",
+        ],
+        dependencies,
+      ),
+    ).toBe(2);
   });
 
   it("emits a structured STOP artifact when the declared project check is unavailable", async () => {
@@ -399,6 +656,11 @@ describe("hpi change command", { timeout: 30_000 }, () => {
         capturedBytes: 128,
         outputTruncated: false,
         providerUsage: fixturePiProviderUsage,
+        containment:
+          process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
       };
     };
 

@@ -61,13 +61,18 @@ async function createCoordinator(plan: PilotExecutionPlan = completePilotExecuti
 }
 
 function observationsFromEvidence(evidence: PilotEvidence): PilotCaptureObservation[] {
-  const observations: PilotCaptureObservation[] = [
-    {
-      kind: "INSTALLATION",
-      cleanProfileFingerprint: evidence.installation.cleanProfileFingerprint,
-    },
-    ...evidence.taskResults.map((result) => ({
-      kind: "TASK_CHAIN" as const,
+  const taskObservations: PilotCaptureObservation[] = evidence.taskResults.map((result) => {
+    if (result.mode === "QUICK") {
+      const receipt = evidence.quickTaskReceipts.find(
+        (candidate) => candidate.receiptId === result.quickReceiptId,
+      );
+      if (receipt === undefined) throw new Error("pilot Quick receipt fixture missing");
+      return { kind: "QUICK_TASK", receipt };
+    }
+    const run = evidence.runArchives.find((candidate) => candidate.taskId === result.taskId);
+    if (run === undefined) throw new Error("pilot Managed Archive fixture missing");
+    return {
+      kind: "MANAGED_TASK",
       taskId: result.taskId,
       terminalOutcome: result.terminalOutcome,
       sourcePreserved: result.sourcePreserved,
@@ -78,27 +83,24 @@ function observationsFromEvidence(evidence: PilotEvidence): PilotCaptureObservat
       hunterOverheadMinutes: result.hunterOverheadMinutes,
       rawPiCapturedFactCount: result.rawPiCapturedFactCount,
       rawPiManualInterventions: result.rawPiManualInterventions,
-      runs: evidence.runArchives
-        .filter((run) => run.taskId === result.taskId)
-        .map((run) => ({
-          runId: run.runId,
-          replacementOfRunId: run.replacementOfRunId,
-          archiveId: run.archiveId,
-          archiveFingerprint: run.archiveFingerprint,
-          terminalOutcome: run.terminalOutcome,
-          providerRequestCount: run.providerRequestCount,
-          providerTokenCount: run.providerTokenCount,
-          providerCostMinor: run.providerCostMinor,
-        })),
-    })),
-    ...evidence.interruptions.map((interruption) => {
-      const { kind: interruptionKind, ...facts } = interruption;
-      return {
-        kind: "INTERRUPTION" as const,
-        interruptionKind,
-        ...facts,
-      };
-    }),
+      run: {
+        runId: run.runId,
+        archiveId: run.archiveId,
+        archiveFingerprint: run.archiveFingerprint,
+        terminalOutcome: run.terminalOutcome,
+        providerRequestCount: run.providerRequestCount,
+        providerTokenCount: run.providerTokenCount,
+        providerCostMinor: run.providerCostMinor,
+        recoveryLinks: run.recoveryLinks,
+      },
+    };
+  });
+  const observations: PilotCaptureObservation[] = [
+    {
+      kind: "INSTALLATION",
+      cleanProfileFingerprint: evidence.installation.cleanProfileFingerprint,
+    },
+    ...taskObservations,
     {
       kind: "WARM_START_SAMPLES",
       discardedWarmups: evidence.discardedWarmups,
@@ -149,13 +151,7 @@ function observationsFromEvidence(evidence: PilotEvidence): PilotCaptureObservat
     },
     ...evidence.pairedComparators.map((comparator) => ({
       kind: "RAW_PI_COMPARATOR" as const,
-      taskId: comparator.taskId,
-      rawPiCapturedFactCount: comparator.rawPiCapturedFactCount,
-      rawPiManualInterventions: comparator.rawPiManualInterventions,
-      containedFalseCompletion: comparator.containedFalseCompletion,
-      rawPiProviderRequestCount: comparator.rawPiProviderRequestCount,
-      rawPiProviderTokenCount: comparator.rawPiProviderTokenCount,
-      rawPiProviderCostMinor: comparator.rawPiProviderCostMinor,
+      comparator,
     })),
   ];
   return observations;
@@ -172,7 +168,11 @@ async function recordObservations(
       operationId: `capture-operation-${String(index + 1).padStart(3, "0")}`,
       observation,
     };
-    if (observation.kind === "TASK_CHAIN" || observation.kind === "RAW_PI_COMPARATOR") {
+    if (
+      observation.kind === "MANAGED_TASK" ||
+      observation.kind === "QUICK_TASK" ||
+      observation.kind === "RAW_PI_COMPARATOR"
+    ) {
       await coordinator.recordProductObservation(productObservationRuntime, input);
     } else {
       await coordinator.record(input);
@@ -294,7 +294,9 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
     });
     const { coordinator } = await createCoordinator(plan);
     const observations = observationsFromEvidence(completePilotEvidence(plan));
-    const taskChains = observations.filter((observation) => observation.kind === "TASK_CHAIN");
+    const taskChains = observations.filter(
+      (observation) => observation.kind === "MANAGED_TASK" || observation.kind === "QUICK_TASK",
+    );
     await recordObservations(coordinator, taskChains);
     expect((await coordinator.status(sessionId)).providerUsage).toEqual({
       requests: 13,
@@ -318,7 +320,7 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
     const { coordinator } = await createCoordinator();
     expect("createPilotCaptureProductObservationRuntime" in pilotPublicPackage).toBe(false);
     const task = observationsFromEvidence(completePilotEvidence()).find(
-      (observation) => observation.kind === "TASK_CHAIN",
+      (observation) => observation.kind === "MANAGED_TASK",
     );
     if (task === undefined) throw new Error("pilot task fixture missing");
     await expect(
@@ -376,7 +378,7 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
     expect(trusted.archive).toMatchObject({
       archiveId,
       planFingerprint: plan.planFingerprint,
-      evidence: { schemaVersion: "hpi-pilot-evidence.v6", captureProvenance: "LIVE_WINDOWS_PILOT" },
+      evidence: { schemaVersion: "hpi-pilot-evidence.v7", captureProvenance: "LIVE_WINDOWS_PILOT" },
     });
     expect(new PilotEvaluator().evaluate(trusted.archive.evidence, plan, trusted).outcome).toBe(
       "GO",

@@ -390,13 +390,8 @@ export const importedArchiveProjectionSchema = z
     const hasLiveAttempt = projection.archiveProjection.attempts.some((attempt) =>
       ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
     );
-    const hasLiveCheckpointState = projection.archiveProjection.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.activeOperationReceiptIds.length > 0 ||
-        checkpoint.unknownOperationIds.length > 0 ||
-        checkpoint.heldWriterLeaseIds.length > 0 ||
-        checkpoint.processReferences.length > 0 ||
-        checkpoint.engine.sessionReference !== undefined,
+    const hasLiveCheckpointState = projection.archiveProjection.checkpoints.some((checkpoint) =>
+      checkpointHasUnreconciledState(projection.archiveProjection, checkpoint),
     );
     if (hasLiveAttempt || hasLiveCheckpointState) {
       context.addIssue({
@@ -657,6 +652,61 @@ function assertOperationIdentity(
 
 const archiveOperationLocks = new Map<string, Promise<void>>();
 
+function checkpointHasUnreconciledState(
+  projection: RunProjection,
+  checkpoint: RunProjection["checkpoints"][number],
+): boolean {
+  const carriesExternalState =
+    checkpoint.activeOperationReceiptIds.length > 0 ||
+    checkpoint.unknownOperationIds.length > 0 ||
+    checkpoint.heldWriterLeaseIds.length > 0 ||
+    checkpoint.processReferences.length > 0 ||
+    checkpoint.engine.sessionReference !== undefined;
+  if (!carriesExternalState) return false;
+  const recoveryAttempt = projection.attempts.find(
+    (attempt) => attempt.recoveryCheckpointId === checkpoint.checkpointId,
+  );
+  const finality = projection.attemptFinalityReceipts.find(
+    (receipt) =>
+      receipt.attemptId === checkpoint.attemptId &&
+      receipt.checkpointId === checkpoint.checkpointId,
+  );
+  const sameIdentities = (left: readonly unknown[], right: readonly unknown[]): boolean => {
+    const leftSet = new Set(left.map((value) => JSON.stringify(value)));
+    const rightSet = new Set(right.map((value) => JSON.stringify(value)));
+    return (
+      leftSet.size === rightSet.size && [...leftSet].every((identity) => rightSet.has(identity))
+    );
+  };
+  const recoveryEvidenceBound =
+    recoveryAttempt?.failureEvidenceIds !== undefined &&
+    projection.observations.some(
+      (observation) =>
+        observation.attemptId === checkpoint.attemptId &&
+        observation.kind === "PROCESS_EXITED" &&
+        recoveryAttempt.failureEvidenceIds?.every((evidenceId) =>
+          observation.evidenceIds.includes(evidenceId),
+        ) === true,
+    );
+  const exactFinality =
+    finality?.workspaceId === checkpoint.workspaceId &&
+    finality.workspaceFingerprint === checkpoint.workspaceFingerprint &&
+    finality.sourceFingerprint === checkpoint.sourceFingerprint &&
+    sameIdentities(finality.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) &&
+    sameIdentities(
+      finality.processFinalities.map(({ processReference }) => processReference),
+      checkpoint.processReferences,
+    );
+  return !(
+    checkpoint.attemptId !== undefined &&
+    recoveryAttempt?.previousAttemptId === checkpoint.attemptId &&
+    recoveryAttempt.recoveryOperationId !== undefined &&
+    recoveryAttempt.recoveryOperationFingerprint !== undefined &&
+    recoveryEvidenceBound &&
+    exactFinality
+  );
+}
+
 async function withArchiveOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
   const predecessor = archiveOperationLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -705,13 +755,8 @@ export function assertPortableArchive(archive: ArchivePackage): void {
   const projectionHasLiveAttempt = archive.projection.attempts.some((attempt) =>
     ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
   );
-  const projectionHasLiveCheckpointState = archive.projection.checkpoints.some(
-    (checkpoint) =>
-      checkpoint.activeOperationReceiptIds.length > 0 ||
-      checkpoint.unknownOperationIds.length > 0 ||
-      checkpoint.heldWriterLeaseIds.length > 0 ||
-      checkpoint.processReferences.length > 0 ||
-      checkpoint.engine.sessionReference !== undefined,
+  const projectionHasLiveCheckpointState = archive.projection.checkpoints.some((checkpoint) =>
+    checkpointHasUnreconciledState(archive.projection, checkpoint),
   );
   if (
     projectionHasLiveAttempt ||
@@ -943,16 +988,19 @@ function packageFor(request: z.infer<typeof archiveFinalizeRequestSchema>): Arch
       ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
     )
     .map((attempt) => attempt.attemptId);
-  const activeOperationReceiptIds = request.projection.checkpoints.flatMap(
+  const unresolvedCheckpoints = request.projection.checkpoints.filter((checkpoint) =>
+    checkpointHasUnreconciledState(request.projection, checkpoint),
+  );
+  const activeOperationReceiptIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.activeOperationReceiptIds,
   );
-  const unknownOperationIds = request.projection.checkpoints.flatMap(
+  const unknownOperationIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.unknownOperationIds,
   );
-  const heldWriterLeaseIds = request.projection.checkpoints.flatMap(
+  const heldWriterLeaseIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.heldWriterLeaseIds,
   );
-  const processReferences = request.projection.checkpoints.flatMap((checkpoint) => [
+  const processReferences = unresolvedCheckpoints.flatMap((checkpoint) => [
     ...checkpoint.processReferences,
     ...(checkpoint.engine.sessionReference === undefined
       ? []

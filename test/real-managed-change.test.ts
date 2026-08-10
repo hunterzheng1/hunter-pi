@@ -9,6 +9,7 @@ import { inspectHpiPilotTarget } from "@hunter-pi/cli";
 import type { EngineHost } from "@hunter-pi/engine-contracts";
 import { createFileLeaseManager, type LeaseManager } from "@hunter-pi/execution";
 import {
+  fingerprintRealManagedChangeTaskDefinition,
   realManagedChangeEvidenceSchema,
   realManagedChangeEvidenceV2Schema,
   realManagedChangeRequestSchema,
@@ -59,12 +60,13 @@ async function createRepository(): Promise<{ readonly root: string; readonly rep
   runGit(repository, ["config", "user.name", "Hunter Pi Test"]);
   runGit(repository, ["config", "user.email", "hunter-pi-test@example.invalid"]);
   await writeFile(join(repository, "result.txt"), "NOT_READY\n", "utf8");
+  await writeFile(join(repository, ".gitignore"), "ignored-private.txt\n", "utf8");
   await writeFile(
     join(repository, "verify.mjs"),
     "import { readFileSync } from 'node:fs';\nprocess.exit(readFileSync('result.txt', 'utf8') === 'READY\\n' ? 0 : 1);\n",
     "utf8",
   );
-  runGit(repository, ["add", "--", "result.txt", "verify.mjs"]);
+  runGit(repository, ["add", "--", ".gitignore", "result.txt", "verify.mjs"]);
   runGit(repository, ["commit", "--quiet", "-m", "Initialize real-project fixture"]);
   return { root, repository };
 }
@@ -139,6 +141,45 @@ function createMutationHost(
     processTimeoutMs: 30_000,
     maximumOutputBytes: 229_376,
     requireQualifiedProcess: true,
+  });
+}
+
+function createInterruptedMutationHost(): EngineHost {
+  return new Task6PiEngineHost({
+    launchPlanForWorkspace: (workspace) =>
+      Promise.resolve({
+        executable: process.execPath,
+        arguments: ["pi-cli.js"],
+        cwd: workspace,
+        environment: { HUNTER_PI_MODE: "MANAGED" },
+      }),
+    runProcess: async (request) => {
+      await writeFile(join(request.plan.cwd, "result.txt"), "READY\n", "utf8");
+      const interrupted = request.forcedInterruption === "AFTER_AGENT_END";
+      return {
+        exitCode: interrupted ? 1 : 0,
+        timedOut: false,
+        framingValid: true,
+        eventTypes: interrupted ? ["message_end"] : ["message_end", "agent_end"],
+        recordCount: interrupted ? 1 : 2,
+        stdoutDigest: fingerprintA,
+        stderrDigest: fingerprintB,
+        capturedBytes: 128,
+        outputTruncated: false,
+        providerUsage: fixturePiProviderUsage,
+        ...(interrupted ? { interruption: "FORCED_PROCESS_KILL_AFTER_AGENT_END" as const } : {}),
+        containment:
+          process.platform === "win32" ? "WINDOWS_JOB_OBJECT" : "LINUX_SUBREAPER_PROCESS_TREE",
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
+      };
+    },
+    now: () => "2026-08-06T00:00:10.000Z",
+    processTimeoutMs: 30_000,
+    maximumOutputBytes: 229_376,
+    requireQualifiedProcess: true,
+    forcedInterruption: "AFTER_AGENT_END",
   });
 }
 
@@ -342,11 +383,13 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     );
     expect(taskReceiptEvidence?.capture.capturedText).toBeDefined();
     expect(JSON.parse(taskReceiptEvidence?.capture.capturedText ?? "null")).toMatchObject({
-      schemaVersion: "hpi-real-managed-change-task-receipt.v1",
+      schemaVersion: "hpi-real-managed-change-task-receipt.v3",
+      interruptionKind: null,
       runId: artifact.projection.run.runId,
       repositoryFingerprint: target.repositoryFingerprint,
       targetReferenceFingerprint: target.targetReferenceFingerprint,
       sourceFingerprint: artifact.repository.sourceFingerprint,
+      taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(request),
       mode: "MANAGED",
       acceptanceCheckDefinitionFingerprints: [artifact.plan.checkDefinitionFingerprint],
       terminalOutcome: "READY",
@@ -381,15 +424,32 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
           ? { ...check, definitionFingerprint: artifact.plan.checkDefinitionFingerprint }
           : check,
       ),
-      tasks: input.tasks.map((task, index) =>
-        task.targetId === target.targetId
-          ? {
-              ...task,
-              sourceFingerprint: target.sourceFingerprint,
-              mode: index === 0 ? ("MANAGED" as const) : task.mode,
-            }
-          : task,
-      ),
+      tasks: input.tasks.map((task, index) => {
+        if (task.targetId !== target.targetId) return task;
+        if (index === 0 && task.mode === "QUICK") {
+          const {
+            expectedExecutionObservation: _execution,
+            expectedAcceptanceObservation: _acceptance,
+            ...binding
+          } = task;
+          void _execution;
+          void _acceptance;
+          return {
+            ...binding,
+            sourceFingerprint: target.sourceFingerprint,
+            taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(request),
+            mode: "MANAGED" as const,
+            expectedOutcome: "READY" as const,
+          };
+        }
+        return {
+          ...task,
+          sourceFingerprint: target.sourceFingerprint,
+          ...(index === 0
+            ? { taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(request) }
+            : {}),
+        };
+      }),
     });
     const coordinator = new FilePilotCaptureCoordinator({
       stateRoot: join(root, "pilot-capture"),
@@ -424,6 +484,166 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
         providerUsage: { requests: 1, tokens: 165, costMinor: 1 },
       },
     });
+  });
+
+  it("recovers an exact interrupted Managed task in the same Run and archives one history", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const stateRoot = join(root, "pilot-task-state");
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Recover one interrupted Managed task",
+      goal: "Change result.txt so the declared project check passes.",
+      nonGoals: ["Commit, push, publish, or deploy"],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const common = {
+      repository,
+      request,
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" as const },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+      now: () => "2026-08-06T00:00:10.000Z",
+    };
+
+    const interrupted = await runRealManagedChange({
+      ...common,
+      engineHost: createInterruptedMutationHost(),
+      pilotInterruption: {
+        runIdentity: "pilot-task-01-interrupted",
+        forcedInterruption: "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+      },
+      durableArchive: {
+        stateRoot,
+        archiveId: "archive_pilot-task-01-interrupted",
+        distributionReleaseId: "release_hunter-pi-0.1.0",
+        operationId: "op_pilot-task-01-interrupted",
+      },
+    });
+    expect(interrupted.projection).toMatchObject({
+      run: { lifecycle: "READY" },
+      change: { lifecycle: "READY" },
+      attempts: [
+        { attemptId: "att_real-1" },
+        {
+          attemptId: "att_real-2",
+          previousAttemptId: "att_real-1",
+        },
+      ],
+    });
+    expect(interrupted.projection.attempts[1]?.recoveryCheckpointId).toMatch(/^checkpoint_/u);
+    expect(interrupted.projection.checkpoints).toHaveLength(1);
+    expect(interrupted.projection.attemptFinalityReceipts).toHaveLength(1);
+    expect(interrupted.scorecard.failedAttemptPreserved).toBe(true);
+    expect(interrupted.taskResult).toBe("GO");
+
+    const eventStore = new FileWorkflowEventStore({ stateRoot: join(stateRoot, "workflow") });
+    const archiveStore = new FileRunArchiveStore({
+      stateRoot: join(stateRoot, "archive"),
+      kernel: new DurableWorkflowKernel(eventStore),
+    });
+    const interruptedPackage = await archiveStore.readCanonicalPackage(
+      "archive_pilot-task-01-interrupted",
+    );
+    const receiptFor = (package_: typeof interruptedPackage) => {
+      const evidence = package_.evidence.find(
+        (candidate) => candidate.evidenceId === "evidence_real-task-receipt",
+      );
+      return JSON.parse(evidence?.capture.capturedText ?? "null") as Record<string, unknown>;
+    };
+    expect(receiptFor(interruptedPackage)).toMatchObject({
+      mode: "MANAGED",
+      terminalOutcome: "READY",
+      taskResult: "GO",
+      providerUsage: { status: "PASS", requestCount: 2 },
+    });
+    expect(interruptedPackage.projection.run.predecessorRunId).toBeUndefined();
+
+    const pilotInput = completePilotPlanInput();
+    const pilotPlan = new PilotPlanCompiler().compile({
+      ...pilotInput,
+      repositoryTargets: pilotInput.repositoryTargets.map((candidate) =>
+        candidate.targetId === "repository-alpha"
+          ? {
+              ...candidate,
+              repositoryFingerprint: target.repositoryFingerprint,
+              sourceFingerprint: target.sourceFingerprint,
+              targetReferenceFingerprint: target.targetReferenceFingerprint,
+            }
+          : candidate,
+      ),
+      acceptanceChecks: pilotInput.acceptanceChecks.map((check, index) =>
+        index === 1
+          ? { ...check, definitionFingerprint: interrupted.plan.checkDefinitionFingerprint }
+          : check,
+      ),
+      tasks: pilotInput.tasks.map((task) =>
+        task.taskId === "pilot-task-02"
+          ? {
+              ...task,
+              sourceFingerprint: target.sourceFingerprint,
+              taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(request),
+            }
+          : task.targetId === "repository-alpha"
+            ? { ...task, sourceFingerprint: target.sourceFingerprint }
+            : task,
+      ),
+    });
+    const capture = new FilePilotCaptureCoordinator({
+      stateRoot: join(root, "pilot-interruption-capture"),
+      archiveStateRoot: join(root, "pilot-interruption-archive"),
+      managedRunStateRoot: stateRoot,
+      now: () => "2026-08-06T00:00:10.000Z",
+    });
+    await capture.open({
+      schemaVersion: "hpi-pilot-capture-open.v1",
+      sessionId: "pilot-interruption-session",
+      archiveId: "pilot-interruption-evidence",
+      plan: pilotPlan,
+    });
+    await expect(
+      capture.recordManagedTask({
+        schemaVersion: "hpi-pilot-capture-managed-task.v1",
+        sessionId: "pilot-interruption-session",
+        operationId: "capture-pilot-interruption-task-02",
+        taskId: "pilot-task-02",
+        archiveIds: ["archive_pilot-task-01-interrupted"],
+        metrics: {
+          applicableFactCount: 20,
+          capturedFactCount: 20,
+          manualInterventions: 1,
+          rawPiCapturedFactCount: 15,
+          rawPiManualInterventions: 3,
+        },
+      }),
+    ).resolves.toMatchObject({
+      outcome: "RECORDED",
+      status: {
+        counts: { taskChains: 1, runArchives: 1, interruptions: 1 },
+        providerUsage: { requests: 2, tokens: 330, costMinor: 2 },
+      },
+    });
+
+    await expect(
+      runRealManagedChange({
+        ...common,
+        engineHost: createMutationHost(),
+        durableArchive: {
+          stateRoot,
+          archiveId: "archive_pilot-task-01-untrusted-retry",
+          distributionReleaseId: "release_hunter-pi-0.1.0",
+          operationId: "op_pilot-task-01-untrusted-retry",
+        },
+      }),
+    ).rejects.toMatchObject({ reasonCode: "DIRTY_WORKTREE" });
   });
 
   it("returns STOP when the Engine cannot prove exact Provider usage", async () => {
@@ -985,6 +1205,84 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
       { severity: "P1", scope: "workspace-out-of-scope-paths" },
     ]);
     expect(JSON.stringify(artifact)).not.toContain(root);
+  });
+
+  it("returns STOP when the Agent changes an ignored path outside the explicit allowed scope", async () => {
+    const { root, repository } = await createRepository();
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject an ignored out-of-scope mutation",
+      goal: "Make the declared project check pass.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Project result check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost((workspace) =>
+        writeFile(join(workspace, "ignored-private.txt"), "unsafe\n", "utf8"),
+      ),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.review.changedPaths).toEqual(["ignored-private.txt", "result.txt"]);
+    expect(artifact.review.findings).toMatchObject([
+      { severity: "P1", scope: "workspace-out-of-scope-paths" },
+    ]);
+  });
+
+  it("returns STOP when a passing Verification command mutates an allowed path", async () => {
+    const { root, repository } = await createRepository();
+    await writeFile(
+      join(repository, "verify.mjs"),
+      "import { writeFileSync } from 'node:fs';\nwriteFileSync('result.txt', 'VERIFIER_MUTATION\\n');\n",
+      "utf8",
+    );
+    runGit(repository, ["add", "--", "verify.mjs"]);
+    runGit(repository, ["commit", "--quiet", "-m", "Add mutating Verification fixture"]);
+    const writerLease = await createWriterLease(root);
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse({
+      schemaVersion: "hpi-managed-change-request.v2",
+      title: "Reject a mutating Verification command",
+      goal: "Make the declared project check pass without trusting its side effects.",
+      nonGoals: [],
+      constraints: ["Only result.txt may change"],
+      allowedPaths: ["result.txt"],
+      check: { label: "Mutating project check", executable: "node", argv: ["verify.mjs"] },
+      target,
+    });
+    const artifact = await runRealManagedChange({
+      repository,
+      request,
+      engineHost: createMutationHost(),
+      providerAuthConfigured: true,
+      productSource: { commit: "c".repeat(40), state: "CLEAN" },
+      engineRelease: { packageName: "@earendil-works/pi-coding-agent", version: "0.83.0" },
+      providerId: "openai-codex",
+      environmentFingerprint: fingerprintA,
+      writerLeaseManager: writerLease.manager,
+      writerLeaseOwnerFingerprint: writerLease.ownerFingerprint,
+    });
+
+    expect(artifact.taskResult).toBe("STOP");
+    expect(artifact.scorecard.changedPathsWithinScope).toBe(true);
+    expect(artifact.review.findings).toMatchObject([
+      { severity: "P1", scope: "verification-workspace-mutation" },
+    ]);
+    expect(await readFile(join(repository, "result.txt"), "utf8")).toBe("VERIFIER_MUTATION\n");
   });
 
   it("refuses private path material in a plan before starting the Agent", async () => {

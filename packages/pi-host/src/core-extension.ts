@@ -250,19 +250,38 @@ export function createHunterCoreExtension(
   } = {},
 ): (api: CoreExtensionApi) => void {
   const environment = options.environment ?? process.env;
-  const mode = environment["HUNTER_PI_MODE"] === "LOGIN" ? "LOGIN" : "QUICK";
+  const configuredMode = environment["HUNTER_PI_MODE"];
+  const mode =
+    configuredMode === "LOGIN" || configuredMode === "MANAGED" ? configuredMode : "QUICK";
   const profile = permissionProfile(environment);
   const safeMode = environmentFlag(environment, "HUNTER_PI_SAFE_MODE");
   const blockPromptInput = environmentFlag(environment, "HUNTER_PI_BLOCK_PROMPT_INPUT");
   const pinnedProvider = environment["HUNTER_PI_PINNED_PROVIDER"];
   const pinnedModel = environment["HUNTER_PI_PINNED_MODEL"];
   const pinnedOrigin = environment["HUNTER_PI_PINNED_ORIGIN"];
+  const interruptionNonce = environment["HUNTER_PI_INTERRUPTION_NONCE"];
   const credentialBoundary = "CredentialGuard=NAMED_PATHS_ONLY ContentDetection=NOT_PROVEN";
   const status = `${mode}/${profile} Core=UNVERIFIED Trust=BUNDLED Isolation=PROCESS_AUTHORITY PromptInput=${blockPromptInput ? "BLOCKED" : "ENABLED"} ProviderRequests=NOT_PROVEN ${credentialBoundary}`;
   const header = environment["HUNTER_PI_HEADER"];
+  const interruptionMarker =
+    interruptionNonce !== undefined &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      interruptionNonce,
+    )
+      ? `HPI_AGENT_END_MARKER:${interruptionNonce}\n`
+      : undefined;
 
   return (api: CoreExtensionApi): void => {
     let terminationRequested = false;
+    if (interruptionMarker !== undefined) {
+      api.on("agent_end", async () => {
+        await new Promise<never>((_resolvePromise, rejectPromise) => {
+          process.stderr.write(interruptionMarker, (error) => {
+            if (error !== undefined && error !== null) rejectPromise(error);
+          });
+        });
+      });
+    }
     const selectedModelMatches = (
       model:
         { readonly provider: string; readonly id: string; readonly baseUrl?: string } | undefined,

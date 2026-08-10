@@ -112,13 +112,68 @@ export const pilotPreflightReasonSchema = z.enum([
   "PILOT_PLAN_PLUGIN_FIXTURES_INVALID",
   "PILOT_PLAN_UPDATE_CANDIDATES_INVALID",
   "PILOT_PLAN_PAIRED_TASKS_INVALID",
+  "PILOT_PLAN_INTERRUPTION_TASKS_INVALID",
   "PILOT_PLAN_FIELDS_INVALID",
   "PILOT_PLAN_SCHEMA_INVALID",
   "PILOT_PLAN_COMPILATION_FAILED",
 ]);
 export type PilotPreflightReason = z.infer<typeof pilotPreflightReasonSchema>;
 
-const pilotPlanBodyShape = {
+const pilotPlanTaskV2Schema = z.strictObject({
+  taskId: stableIdSchema,
+  targetId: stableIdSchema,
+  sourceFingerprint: fingerprintSchema,
+  mode: pilotModeSchema,
+  expectedOutcome: pilotOutcomeSchema,
+  acceptanceCheckIds: z.array(stableIdSchema).min(1),
+});
+
+const pilotPlanTaskCommonShape = {
+  taskId: stableIdSchema,
+  targetId: stableIdSchema,
+  sourceFingerprint: fingerprintSchema,
+  taskDefinitionFingerprint: fingerprintSchema,
+  acceptanceCheckIds: z.array(stableIdSchema).min(1),
+} as const;
+
+export const pilotQuickExecutionObservationSchema = z.enum([
+  "RETURNED",
+  "TIMED_OUT",
+  "PROCESS_ERROR",
+  "BLOCKED",
+  "NOT_PROVEN",
+]);
+export const pilotQuickAcceptanceObservationSchema = z.enum([
+  "PASS",
+  "FAIL",
+  "BLOCKED",
+  "NOT_RUN",
+  "NOT_PROVEN",
+]);
+
+export const pilotPlanTaskSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    ...pilotPlanTaskCommonShape,
+    mode: z.literal("QUICK"),
+    expectedExecutionObservation: z.literal("RETURNED"),
+    expectedAcceptanceObservation: z.literal("PASS"),
+  }),
+  z.strictObject({
+    ...pilotPlanTaskCommonShape,
+    mode: z.literal("MANAGED"),
+    expectedOutcome: pilotOutcomeSchema,
+  }),
+]);
+export type PilotPlanTask = z.infer<typeof pilotPlanTaskSchema>;
+
+export const pilotPlanInterruptionTaskSchema = z.strictObject({
+  interruptionId: stableIdSchema,
+  taskId: stableIdSchema,
+  kind: z.enum(["FORCED_PROCESS_KILL", "TERMINAL_CLOSE_SIMULATION", "POWER_LOSS_SIMULATION"]),
+});
+export type PilotPlanInterruptionTask = z.infer<typeof pilotPlanInterruptionTaskSchema>;
+
+const pilotPlanCommonBodyShape = {
   platform: z.literal("win32"),
   architecture: z.literal("x64"),
   sourceFingerprint: fingerprintSchema,
@@ -138,25 +193,26 @@ const pilotPlanBodyShape = {
       selectionMode: pilotRepositorySelectionModeSchema,
     }),
   ),
-  tasks: z
-    .array(
-      z.strictObject({
-        taskId: stableIdSchema,
-        targetId: stableIdSchema,
-        sourceFingerprint: fingerprintSchema,
-        mode: pilotModeSchema,
-        expectedOutcome: pilotOutcomeSchema,
-        acceptanceCheckIds: z.array(stableIdSchema).min(1),
-      }),
-    )
-    .length(10),
   pluginFixtures: z.array(pilotPlanPluginFixtureSchema).length(5),
   updateCandidates: z.array(pilotPlanUpdateCandidateSchema).length(2),
   pairedTaskIds: z.array(stableIdSchema).length(3),
 } as const;
 
-function validatePilotPlanBody(
-  body: z.infer<z.ZodObject<typeof pilotPlanBodyShape>>,
+const pilotPlanV2BodyShape = {
+  ...pilotPlanCommonBodyShape,
+  tasks: z.array(pilotPlanTaskV2Schema).length(10),
+} as const;
+
+const pilotPlanBodyShape = {
+  ...pilotPlanCommonBodyShape,
+  tasks: z.array(pilotPlanTaskSchema).length(10),
+  interruptionTasks: z.array(pilotPlanInterruptionTaskSchema).length(3),
+} as const;
+
+function validatePilotPlanBodyBase(
+  body:
+    | z.infer<z.ZodObject<typeof pilotPlanBodyShape>>
+    | z.infer<z.ZodObject<typeof pilotPlanV2BodyShape>>,
   context: z.RefinementCtx,
 ): void {
   const targetIds = body.repositoryTargets.map((target) => target.targetId);
@@ -324,11 +380,79 @@ function validatePilotPlanBody(
   }
 }
 
+function validatePilotPlanBody(
+  body: z.infer<z.ZodObject<typeof pilotPlanBodyShape>>,
+  context: z.RefinementCtx,
+): void {
+  validatePilotPlanBodyBase(body, context);
+  const interruptionIds = body.interruptionTasks.map((item) => item.interruptionId);
+  const interruptionKinds = body.interruptionTasks.map((item) => item.kind);
+  if (
+    new Set(interruptionIds).size !== 3 ||
+    new Set(interruptionKinds).size !== 3 ||
+    new Set(body.interruptionTasks.map((item) => item.taskId)).size !== 3 ||
+    body.interruptionTasks.some(
+      (item) => body.tasks.find((task) => task.taskId === item.taskId)?.mode !== "MANAGED",
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["interruptionTasks"],
+      message:
+        "pilot must freeze each interruption kind once and bind every interruption to a Managed task",
+    });
+  }
+}
+
 type PilotPlanBody = z.infer<z.ZodObject<typeof pilotPlanBodyShape>>;
+type PilotPlanV2Body = z.infer<z.ZodObject<typeof pilotPlanV2BodyShape>>;
+
+export const pilotPlanInputV2Schema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-plan-input.v2"),
+    ...pilotPlanV2BodyShape,
+  })
+  .superRefine((input, context) => {
+    validatePilotPlanBodyBase(input, context);
+  });
+
+export const pilotExecutionPlanV2Schema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-execution-plan.v2"),
+    ...pilotPlanV2BodyShape,
+    planFingerprint: fingerprintSchema,
+  })
+  .superRefine((plan, context) => {
+    const body: PilotPlanV2Body = {
+      platform: plan.platform,
+      architecture: plan.architecture,
+      sourceFingerprint: plan.sourceFingerprint,
+      artifactFingerprint: plan.artifactFingerprint,
+      engineReleaseFingerprint: plan.engineReleaseFingerprint,
+      machineProfile: plan.machineProfile,
+      comparatorConfigurationFingerprint: plan.comparatorConfigurationFingerprint,
+      workflowFactChecklistFingerprint: plan.workflowFactChecklistFingerprint,
+      acceptanceChecks: plan.acceptanceChecks,
+      operatorScope: plan.operatorScope,
+      repositoryTargets: plan.repositoryTargets,
+      tasks: plan.tasks,
+      pluginFixtures: plan.pluginFixtures,
+      updateCandidates: plan.updateCandidates,
+      pairedTaskIds: plan.pairedTaskIds,
+    };
+    validatePilotPlanBodyBase(body, context);
+    if (pilotFingerprint(body) !== plan.planFingerprint) {
+      context.addIssue({
+        code: "custom",
+        path: ["planFingerprint"],
+        message: "historical pilot execution plan fingerprint does not match its frozen body",
+      });
+    }
+  });
 
 export const pilotPlanInputSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-plan-input.v2"),
+    schemaVersion: z.literal("hpi-pilot-plan-input.v3"),
     ...pilotPlanBodyShape,
   })
   .superRefine((input, context) => {
@@ -338,7 +462,7 @@ export type PilotPlanInput = z.infer<typeof pilotPlanInputSchema>;
 
 export const pilotExecutionPlanSchema = z
   .strictObject({
-    schemaVersion: z.literal("hpi-pilot-execution-plan.v2"),
+    schemaVersion: z.literal("hpi-pilot-execution-plan.v3"),
     ...pilotPlanBodyShape,
     planFingerprint: fingerprintSchema,
   })
@@ -359,6 +483,7 @@ export const pilotExecutionPlanSchema = z
       pluginFixtures: plan.pluginFixtures,
       updateCandidates: plan.updateCandidates,
       pairedTaskIds: plan.pairedTaskIds,
+      interruptionTasks: plan.interruptionTasks,
     };
     validatePilotPlanBody(body, context);
     if (pilotFingerprint(body) !== plan.planFingerprint) {
@@ -390,7 +515,7 @@ export const pilotPreflightReceiptSchema = z
   });
 export type PilotPreflightReceipt = z.infer<typeof pilotPreflightReceiptSchema>;
 
-export const pilotTaskOracleSchema = z.strictObject({
+export const pilotTaskOracleV6Schema = z.strictObject({
   taskId: stableIdSchema,
   repositoryFingerprint: fingerprintSchema,
   targetReferenceFingerprint: fingerprintSchema,
@@ -400,9 +525,9 @@ export const pilotTaskOracleSchema = z.strictObject({
   acceptanceCheckIds: z.array(stableIdSchema).min(1),
   acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
 });
-export type PilotTaskOracle = z.infer<typeof pilotTaskOracleSchema>;
+export type PilotTaskOracleV6 = z.infer<typeof pilotTaskOracleV6Schema>;
 
-export const pilotTaskResultSchema = z
+export const pilotTaskResultV6Schema = z
   .strictObject({
     taskId: stableIdSchema,
     repositoryFingerprint: fingerprintSchema,
@@ -450,9 +575,9 @@ export const pilotTaskResultSchema = z
       });
     }
   });
-export type PilotTaskResult = z.infer<typeof pilotTaskResultSchema>;
+export type PilotTaskResultV6 = z.infer<typeof pilotTaskResultV6Schema>;
 
-export const pilotRunArchiveReceiptSchema = z.strictObject({
+export const pilotRunArchiveReceiptV6Schema = z.strictObject({
   runId: stableIdSchema,
   taskId: stableIdSchema,
   replacementOfRunId: stableIdSchema.nullable(),
@@ -464,7 +589,7 @@ export const pilotRunArchiveReceiptSchema = z.strictObject({
   providerTokenCount: nonnegativeIntegerSchema,
   providerCostMinor: nonnegativeIntegerSchema,
 });
-export type PilotRunArchiveReceipt = z.infer<typeof pilotRunArchiveReceiptSchema>;
+export type PilotRunArchiveReceiptV6 = z.infer<typeof pilotRunArchiveReceiptV6Schema>;
 
 export const pilotInstallationSchema = z.strictObject({
   status: z.literal("PASS"),
@@ -474,7 +599,7 @@ export const pilotInstallationSchema = z.strictObject({
 });
 export type PilotInstallation = z.infer<typeof pilotInstallationSchema>;
 
-export const pilotInterruptionSchema = z.strictObject({
+export const pilotInterruptionV6Schema = z.strictObject({
   interruptionId: stableIdSchema,
   taskId: stableIdSchema,
   kind: z.enum(["FORCED_PROCESS_KILL", "TERMINAL_CLOSE", "POWER_INTERRUPTION"]),
@@ -486,7 +611,7 @@ export const pilotInterruptionSchema = z.strictObject({
   resumeOutcome: pilotOutcomeSchema,
   actionableWithinFiveMinutes: z.boolean(),
 });
-export type PilotInterruption = z.infer<typeof pilotInterruptionSchema>;
+export type PilotInterruptionV6 = z.infer<typeof pilotInterruptionV6Schema>;
 
 export const pilotUpdateRollbackCycleSchema = z.strictObject({
   cycleId: stableIdSchema,
@@ -508,7 +633,7 @@ export const pilotPluginFixtureSchema = z.strictObject({
 });
 export type PilotPluginFixture = z.infer<typeof pilotPluginFixtureSchema>;
 
-export const pilotComparatorSchema = z
+export const pilotComparatorV6Schema = z
   .strictObject({
     taskId: stableIdSchema,
     repositoryFingerprint: fingerprintSchema,
@@ -544,7 +669,7 @@ export const pilotComparatorSchema = z
       });
     }
   });
-export type PilotComparator = z.infer<typeof pilotComparatorSchema>;
+export type PilotComparatorV6 = z.infer<typeof pilotComparatorV6Schema>;
 
 export const pilotCiStatusSchema = z.enum(["PASS", "FAIL", "PENDING"]);
 export const pilotCiReceiptSchema = z.strictObject({
@@ -557,7 +682,7 @@ export const pilotCiReceiptSchema = z.strictObject({
 });
 export type PilotCiReceipt = z.infer<typeof pilotCiReceiptSchema>;
 
-export const pilotEvidenceSchema = z
+export const pilotEvidenceV6Schema = z
   .strictObject({
     schemaVersion: z.literal("hpi-pilot-evidence.v6"),
     captureProvenance: pilotCaptureProvenanceSchema,
@@ -565,10 +690,10 @@ export const pilotEvidenceSchema = z
     operatorScope: pilotOperatorScopeSchema,
     machine: pilotMachineProfileSchema,
     installation: pilotInstallationSchema,
-    taskOracles: z.array(pilotTaskOracleSchema).length(10),
-    taskResults: z.array(pilotTaskResultSchema).length(10),
-    runArchives: z.array(pilotRunArchiveReceiptSchema).min(10).max(100),
-    interruptions: z.array(pilotInterruptionSchema).length(3),
+    taskOracles: z.array(pilotTaskOracleV6Schema).length(10),
+    taskResults: z.array(pilotTaskResultV6Schema).length(10),
+    runArchives: z.array(pilotRunArchiveReceiptV6Schema).min(10).max(100),
+    interruptions: z.array(pilotInterruptionV6Schema).length(3),
     discardedWarmups: z.literal(5),
     warmStartSamplesMs: z.array(nonnegativeNumberSchema).min(20),
     acknowledgementSamplesMs: z.array(nonnegativeNumberSchema).min(30),
@@ -585,7 +710,7 @@ export const pilotEvidenceSchema = z
       windows: pilotCiReceiptSchema,
       ubuntu: pilotCiReceiptSchema,
     }),
-    pairedComparators: z.array(pilotComparatorSchema).length(3),
+    pairedComparators: z.array(pilotComparatorV6Schema).length(3),
     observedAt: timestampSchema,
   })
   .superRefine((evidence, context) => {
@@ -871,6 +996,463 @@ export const pilotEvidenceSchema = z
         path: ["ci"],
         message: "Windows and Ubuntu CI Evidence must bind the exact tested source",
       });
+    }
+  });
+export type PilotEvidenceV6 = z.infer<typeof pilotEvidenceV6Schema>;
+
+const pilotResolvedTaskBindingShape = {
+  taskId: stableIdSchema,
+  repositoryFingerprint: fingerprintSchema,
+  targetReferenceFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  taskDefinitionFingerprint: fingerprintSchema,
+  acceptanceCheckIds: z.array(stableIdSchema).min(1),
+  acceptanceCheckDefinitionFingerprints: z.array(fingerprintSchema).min(1),
+} as const;
+
+const pilotProviderUsageShape = {
+  providerSendAcknowledged: z.boolean(),
+  providerRequestCount: nonnegativeIntegerSchema,
+  providerTokenCount: nonnegativeIntegerSchema,
+  providerCostMinor: nonnegativeIntegerSchema,
+} as const;
+
+const pilotHunterTaskMeasurementShape = {
+  sourcePreserved: z.boolean(),
+  rawSecretLeakage: z.boolean(),
+  applicableFactCount: z.number().int().positive(),
+  capturedFactCount: nonnegativeIntegerSchema,
+  manualInterventions: nonnegativeIntegerSchema,
+  hunterOverheadMinutes: nonnegativeNumberSchema,
+} as const;
+
+const pilotTaskMeasurementShape = {
+  ...pilotHunterTaskMeasurementShape,
+  rawPiCapturedFactCount: nonnegativeIntegerSchema,
+  rawPiManualInterventions: nonnegativeIntegerSchema,
+} as const;
+
+export const pilotTaskOracleSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    ...pilotResolvedTaskBindingShape,
+    mode: z.literal("QUICK"),
+    expectedExecutionObservation: z.literal("RETURNED"),
+    expectedAcceptanceObservation: z.literal("PASS"),
+  }),
+  z.strictObject({
+    ...pilotResolvedTaskBindingShape,
+    mode: z.literal("MANAGED"),
+    expectedOutcome: pilotOutcomeSchema,
+  }),
+]);
+export type PilotTaskOracle = z.infer<typeof pilotTaskOracleSchema>;
+
+export const pilotTaskResultSchema = z
+  .discriminatedUnion("mode", [
+    z.strictObject({
+      ...pilotResolvedTaskBindingShape,
+      ...pilotProviderUsageShape,
+      ...pilotTaskMeasurementShape,
+      mode: z.literal("QUICK"),
+      quickReceiptId: stableIdSchema,
+      executionObservation: pilotQuickExecutionObservationSchema,
+      oracleExecutionObservation: pilotQuickExecutionObservationSchema,
+      acceptanceObservation: pilotQuickAcceptanceObservationSchema,
+      oracleAcceptanceObservation: pilotQuickAcceptanceObservationSchema,
+      verifiedChangeClaimed: z.literal(false),
+      correct: z.boolean(),
+    }),
+    z.strictObject({
+      ...pilotResolvedTaskBindingShape,
+      ...pilotProviderUsageShape,
+      ...pilotTaskMeasurementShape,
+      mode: z.literal("MANAGED"),
+      terminalOutcome: pilotOutcomeSchema,
+      oracleOutcome: pilotOutcomeSchema,
+      correct: z.boolean(),
+    }),
+  ])
+  .superRefine((result, context) => {
+    if (result.capturedFactCount > result.applicableFactCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["capturedFactCount"],
+        message: "captured workflow facts cannot exceed applicable facts",
+      });
+    }
+    if (result.providerSendAcknowledged !== result.providerRequestCount > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["providerRequestCount"],
+        message: "Provider send acknowledgement must match the observed request count",
+      });
+    }
+    const correct =
+      result.mode === "QUICK"
+        ? result.executionObservation === result.oracleExecutionObservation &&
+          result.acceptanceObservation === result.oracleAcceptanceObservation
+        : result.terminalOutcome === result.oracleOutcome;
+    if (result.correct !== correct) {
+      context.addIssue({
+        code: "custom",
+        path: ["correct"],
+        message: "task correctness must be derived from the frozen mode-specific oracle",
+      });
+    }
+  });
+export type PilotTaskResult = z.infer<typeof pilotTaskResultSchema>;
+
+export const pilotQuickTaskReceiptSchema = z
+  .strictObject({
+    receiptId: stableIdSchema,
+    ...pilotResolvedTaskBindingShape,
+    ...pilotProviderUsageShape,
+    ...pilotHunterTaskMeasurementShape,
+    mode: z.literal("QUICK"),
+    executionObservation: pilotQuickExecutionObservationSchema,
+    acceptanceObservation: pilotQuickAcceptanceObservationSchema,
+    verifiedChangeClaimed: z.literal(false),
+    processReceiptFingerprint: fingerprintSchema,
+    acceptanceReceiptFingerprint: fingerprintSchema,
+    runtimeConfigurationFingerprint: fingerprintSchema,
+    processFinality: z.literal("FINAL"),
+    processTreeState: z.literal("EMPTY"),
+    outputState: z.literal("CLOSED"),
+    leaseState: z.literal("RELEASED"),
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.capturedFactCount > receipt.applicableFactCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["capturedFactCount"],
+        message: "captured workflow facts cannot exceed applicable facts",
+      });
+    }
+    if (receipt.providerSendAcknowledged !== receipt.providerRequestCount > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["providerRequestCount"],
+        message: "Quick Provider send acknowledgement must match exact observed usage",
+      });
+    }
+  });
+export type PilotQuickTaskReceipt = z.infer<typeof pilotQuickTaskReceiptSchema>;
+
+export const pilotRunRecoveryLinkSchema = z.strictObject({
+  interruptionId: stableIdSchema,
+  kind: pilotPlanInterruptionTaskSchema.shape.kind,
+  checkpointId: stableIdSchema,
+  interruptedAttemptId: stableIdSchema,
+  recoveryAttemptId: stableIdSchema,
+  actionableWithinFiveMinutes: z.boolean(),
+});
+export type PilotRunRecoveryLink = z.infer<typeof pilotRunRecoveryLinkSchema>;
+
+export const pilotRunArchiveReceiptSchema = z.strictObject({
+  runId: stableIdSchema,
+  taskId: stableIdSchema,
+  archiveId: stableIdSchema,
+  archiveFingerprint: fingerprintSchema,
+  sourceFingerprint: fingerprintSchema,
+  terminalOutcome: pilotOutcomeSchema,
+  providerRequestCount: nonnegativeIntegerSchema,
+  providerTokenCount: nonnegativeIntegerSchema,
+  providerCostMinor: nonnegativeIntegerSchema,
+  recoveryLinks: z.array(pilotRunRecoveryLinkSchema).max(3),
+});
+export type PilotRunArchiveReceipt = z.infer<typeof pilotRunArchiveReceiptSchema>;
+
+export const pilotInterruptionSchema = z.strictObject({
+  interruptionId: stableIdSchema,
+  taskId: stableIdSchema,
+  kind: pilotPlanInterruptionTaskSchema.shape.kind,
+  runId: stableIdSchema,
+  archiveFingerprint: fingerprintSchema,
+  checkpointId: stableIdSchema,
+  interruptedAttemptId: stableIdSchema,
+  recoveryAttemptId: stableIdSchema,
+  historyPreserved: z.boolean(),
+  sourcePreserved: z.boolean(),
+  resumeOutcome: pilotOutcomeSchema,
+  actionableWithinFiveMinutes: z.boolean(),
+});
+export type PilotInterruption = z.infer<typeof pilotInterruptionSchema>;
+
+export const pilotComparatorSchema = z
+  .strictObject({
+    ...pilotResolvedTaskBindingShape,
+    mode: pilotModeSchema,
+    comparatorConfigurationFingerprint: fingerprintSchema,
+    workflowFactChecklistFingerprint: fingerprintSchema,
+    processReceiptFingerprint: fingerprintSchema,
+    acceptanceReceiptFingerprint: fingerprintSchema,
+    executionObservation: pilotQuickExecutionObservationSchema,
+    acceptanceObservation: pilotQuickAcceptanceObservationSchema,
+    processFinality: z.literal("FINAL"),
+    processTreeState: z.literal("EMPTY"),
+    outputState: z.literal("CLOSED"),
+    leaseState: z.literal("RELEASED"),
+    coreExtensionCount: z.literal(0),
+    applicableFactCount: z.number().int().positive(),
+    rawPiCapturedFactCount: nonnegativeIntegerSchema,
+    hunterCapturedFactCount: nonnegativeIntegerSchema,
+    rawPiManualInterventions: nonnegativeIntegerSchema,
+    hunterManualInterventions: nonnegativeIntegerSchema,
+    hunterAdditionalOverheadMinutes: nonnegativeNumberSchema,
+    containedFalseCompletion: z.boolean(),
+    rawPiProviderRequestCount: positiveIntegerSchema,
+    rawPiProviderTokenCount: nonnegativeIntegerSchema,
+    rawPiProviderCostMinor: nonnegativeIntegerSchema,
+  })
+  .superRefine((comparator, context) => {
+    if (
+      comparator.rawPiCapturedFactCount > comparator.applicableFactCount ||
+      comparator.hunterCapturedFactCount > comparator.applicableFactCount
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["applicableFactCount"],
+        message: "paired captured facts cannot exceed applicable facts",
+      });
+    }
+  });
+export type PilotComparator = z.infer<typeof pilotComparatorSchema>;
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameResolvedTaskBinding(
+  left: z.infer<typeof pilotTaskOracleSchema>,
+  right:
+    | z.infer<typeof pilotTaskResultSchema>
+    | z.infer<typeof pilotQuickTaskReceiptSchema>
+    | z.infer<typeof pilotComparatorSchema>,
+): boolean {
+  return (
+    left.taskId === right.taskId &&
+    left.repositoryFingerprint === right.repositoryFingerprint &&
+    left.targetReferenceFingerprint === right.targetReferenceFingerprint &&
+    left.sourceFingerprint === right.sourceFingerprint &&
+    left.taskDefinitionFingerprint === right.taskDefinitionFingerprint &&
+    left.mode === right.mode &&
+    sameStringArray(left.acceptanceCheckIds, right.acceptanceCheckIds) &&
+    sameStringArray(
+      left.acceptanceCheckDefinitionFingerprints,
+      right.acceptanceCheckDefinitionFingerprints,
+    )
+  );
+}
+
+export const pilotEvidenceSchema = z
+  .strictObject({
+    schemaVersion: z.literal("hpi-pilot-evidence.v7"),
+    captureProvenance: pilotCaptureProvenanceSchema,
+    planFingerprint: fingerprintSchema,
+    operatorScope: pilotOperatorScopeSchema,
+    machine: pilotMachineProfileSchema,
+    installation: pilotInstallationSchema,
+    taskOracles: z.array(pilotTaskOracleSchema).length(10),
+    taskResults: z.array(pilotTaskResultSchema).length(10),
+    quickTaskReceipts: z.array(pilotQuickTaskReceiptSchema).max(10),
+    runArchives: z.array(pilotRunArchiveReceiptSchema).max(100),
+    interruptions: z.array(pilotInterruptionSchema).length(3),
+    discardedWarmups: z.literal(5),
+    warmStartSamplesMs: z.array(nonnegativeNumberSchema).min(20),
+    acknowledgementSamplesMs: z.array(nonnegativeNumberSchema).min(30),
+    updateRollbackCycles: z.array(pilotUpdateRollbackCycleSchema).length(2),
+    pluginFixtures: z.array(pilotPluginFixtureSchema).length(5),
+    memorySamplesMiB: z.array(nonnegativeNumberSchema).min(30),
+    storageGate: z.boolean(),
+    manualStateEditingRequired: z.boolean(),
+    privacyGate: z.boolean(),
+    providerLatencySeparated: z.boolean(),
+    reviewP0P1Count: nonnegativeIntegerSchema,
+    ci: z.strictObject({
+      sourceFingerprint: fingerprintSchema,
+      windows: pilotCiReceiptSchema,
+      ubuntu: pilotCiReceiptSchema,
+    }),
+    pairedComparators: z.array(pilotComparatorSchema).length(3),
+    observedAt: timestampSchema,
+  })
+  .superRefine((evidence, context) => {
+    const addIdentityIssue = (path: string, message: string): void => {
+      context.addIssue({ code: "custom", path: [path], message });
+    };
+    const oracleById = new Map(evidence.taskOracles.map((item) => [item.taskId, item]));
+    const resultById = new Map(evidence.taskResults.map((item) => [item.taskId, item]));
+    const quickByTaskId = new Map(evidence.quickTaskReceipts.map((item) => [item.taskId, item]));
+    const runByTaskId = new Map(evidence.runArchives.map((item) => [item.taskId, item]));
+    const runById = new Map(evidence.runArchives.map((item) => [item.runId, item]));
+    const comparatorByTaskId = new Map(
+      evidence.pairedComparators.map((item) => [item.taskId, item]),
+    );
+    if (oracleById.size !== evidence.taskOracles.length) {
+      addIdentityIssue("taskOracles", "task oracle identities must be unique");
+    }
+    if (resultById.size !== evidence.taskResults.length) {
+      addIdentityIssue("taskResults", "task result identities must be unique");
+    }
+    if (
+      quickByTaskId.size !== evidence.quickTaskReceipts.length ||
+      new Set(evidence.quickTaskReceipts.map((item) => item.receiptId)).size !==
+        evidence.quickTaskReceipts.length
+    ) {
+      addIdentityIssue("quickTaskReceipts", "Quick receipt identities must be unique");
+    }
+    if (
+      runByTaskId.size !== evidence.runArchives.length ||
+      runById.size !== evidence.runArchives.length ||
+      new Set(evidence.runArchives.map((item) => item.archiveId)).size !==
+        evidence.runArchives.length
+    ) {
+      addIdentityIssue("runArchives", "Managed Run Archive identities must be unique per task");
+    }
+    if (comparatorByTaskId.size !== evidence.pairedComparators.length) {
+      addIdentityIssue("pairedComparators", "comparator task identities must be unique");
+    }
+
+    for (const oracle of evidence.taskOracles) {
+      const result = resultById.get(oracle.taskId);
+      if (result === undefined || !sameResolvedTaskBinding(oracle, result)) {
+        addIdentityIssue("taskResults", "task results must bind the exact frozen oracle set");
+        continue;
+      }
+      if (oracle.mode === "QUICK") {
+        const receipt = quickByTaskId.get(oracle.taskId);
+        if (
+          result.mode !== "QUICK" ||
+          receipt === undefined ||
+          !sameResolvedTaskBinding(oracle, receipt) ||
+          result.quickReceiptId !== receipt.receiptId ||
+          result.oracleExecutionObservation !== oracle.expectedExecutionObservation ||
+          result.oracleAcceptanceObservation !== oracle.expectedAcceptanceObservation ||
+          result.executionObservation !== receipt.executionObservation ||
+          result.acceptanceObservation !== receipt.acceptanceObservation ||
+          result.providerRequestCount !== receipt.providerRequestCount ||
+          result.providerTokenCount !== receipt.providerTokenCount ||
+          result.providerCostMinor !== receipt.providerCostMinor ||
+          result.sourcePreserved !== receipt.sourcePreserved ||
+          result.rawSecretLeakage !== receipt.rawSecretLeakage ||
+          result.applicableFactCount !== receipt.applicableFactCount ||
+          result.capturedFactCount !== receipt.capturedFactCount ||
+          result.manualInterventions !== receipt.manualInterventions ||
+          result.hunterOverheadMinutes !== receipt.hunterOverheadMinutes ||
+          runByTaskId.has(oracle.taskId)
+        ) {
+          addIdentityIssue(
+            "quickTaskReceipts",
+            "Quick results must derive from one exact non-Run product receipt",
+          );
+        }
+      } else {
+        const run = runByTaskId.get(oracle.taskId);
+        if (
+          result.mode !== "MANAGED" ||
+          run === undefined ||
+          quickByTaskId.has(oracle.taskId) ||
+          result.oracleOutcome !== oracle.expectedOutcome ||
+          run.sourceFingerprint !== oracle.sourceFingerprint ||
+          run.terminalOutcome !== result.terminalOutcome ||
+          run.providerRequestCount !== result.providerRequestCount ||
+          run.providerTokenCount !== result.providerTokenCount ||
+          run.providerCostMinor !== result.providerCostMinor
+        ) {
+          addIdentityIssue(
+            "runArchives",
+            "Managed results must derive from one exact canonical Run Archive",
+          );
+        }
+      }
+    }
+
+    if (
+      quickByTaskId.size !== evidence.taskOracles.filter((item) => item.mode === "QUICK").length ||
+      runByTaskId.size !== evidence.taskOracles.filter((item) => item.mode === "MANAGED").length
+    ) {
+      addIdentityIssue(
+        "taskResults",
+        "every frozen task requires exactly one mode-appropriate product receipt",
+      );
+    }
+
+    const interruptionIds = evidence.interruptions.map((item) => item.interruptionId);
+    const interruptionKinds = evidence.interruptions.map((item) => item.kind);
+    if (
+      new Set(interruptionIds).size !== 3 ||
+      new Set(interruptionKinds).size !== 3 ||
+      evidence.interruptions.some((item) => {
+        const oracle = oracleById.get(item.taskId);
+        const run = runById.get(item.runId);
+        const link = run?.recoveryLinks.find(
+          (candidate) => candidate.interruptionId === item.interruptionId,
+        );
+        return (
+          oracle?.mode !== "MANAGED" ||
+          run?.taskId !== item.taskId ||
+          run.archiveFingerprint !== item.archiveFingerprint ||
+          run.terminalOutcome !== item.resumeOutcome ||
+          link?.checkpointId !== item.checkpointId ||
+          link.kind !== item.kind ||
+          link.interruptedAttemptId !== item.interruptedAttemptId ||
+          link.recoveryAttemptId !== item.recoveryAttemptId ||
+          link.actionableWithinFiveMinutes !== item.actionableWithinFiveMinutes
+        );
+      })
+    ) {
+      addIdentityIssue(
+        "interruptions",
+        "interruptions must bind three exact same-Run Checkpoint recovery links",
+      );
+    }
+
+    for (const comparator of evidence.pairedComparators) {
+      const oracle = oracleById.get(comparator.taskId);
+      const result = resultById.get(comparator.taskId);
+      if (
+        oracle === undefined ||
+        result === undefined ||
+        !sameResolvedTaskBinding(oracle, comparator) ||
+        comparator.applicableFactCount !== result.applicableFactCount ||
+        comparator.rawPiCapturedFactCount !== result.rawPiCapturedFactCount ||
+        comparator.hunterCapturedFactCount !== result.capturedFactCount ||
+        comparator.rawPiManualInterventions !== result.rawPiManualInterventions ||
+        comparator.hunterManualInterventions !== result.manualInterventions ||
+        comparator.hunterAdditionalOverheadMinutes !== result.hunterOverheadMinutes
+      ) {
+        addIdentityIssue(
+          "pairedComparators",
+          "raw Pi comparators must bind the exact frozen task and Hunter result",
+        );
+      }
+    }
+
+    if (new Set(evidence.taskOracles.map((item) => item.repositoryFingerprint)).size < 2) {
+      addIdentityIssue("taskOracles", "the pilot must cover at least two distinct repositories");
+    }
+    if (
+      evidence.installation.sourceFingerprint !== evidence.machine.sourceFingerprint ||
+      evidence.installation.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint
+    ) {
+      addIdentityIssue(
+        "installation",
+        "fresh-install Evidence must bind the exact tested source and release artifact",
+      );
+    }
+    if (
+      evidence.ci.sourceFingerprint !== evidence.machine.sourceFingerprint ||
+      evidence.ci.windows.sourceFingerprint !== evidence.ci.sourceFingerprint ||
+      evidence.ci.ubuntu.sourceFingerprint !== evidence.ci.sourceFingerprint ||
+      evidence.ci.windows.platform !== "WINDOWS" ||
+      evidence.ci.ubuntu.platform !== "UBUNTU" ||
+      evidence.ci.windows.runFingerprint === evidence.ci.ubuntu.runFingerprint ||
+      evidence.ci.windows.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
+      evidence.ci.ubuntu.artifactFingerprint !== evidence.machine.hunterReleaseFingerprint ||
+      evidence.ci.windows.engineReleaseFingerprint !== evidence.machine.engineReleaseFingerprint ||
+      evidence.ci.ubuntu.engineReleaseFingerprint !== evidence.machine.engineReleaseFingerprint
+    ) {
+      addIdentityIssue("ci", "Windows and Ubuntu CI Evidence must bind the exact tested source");
     }
   });
 export type PilotEvidence = z.infer<typeof pilotEvidenceSchema>;

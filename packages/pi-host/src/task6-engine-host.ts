@@ -62,6 +62,13 @@ export const task6PiProcessResultSchema = z.strictObject({
   capturedBytes: z.number().int().nonnegative(),
   outputTruncated: z.boolean(),
   providerUsage: piProviderUsageSchema,
+  interruption: z
+    .enum([
+      "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+      "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+      "POWER_LOSS_SIMULATION_AFTER_AGENT_END",
+    ])
+    .optional(),
   containment: z
     .enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE", "TEST_CONTAINED"])
     .optional(),
@@ -76,6 +83,11 @@ export interface Task6PiProcessRequest {
   readonly prompt: string;
   readonly timeoutMs: number;
   readonly maximumOutputBytes: number;
+  readonly forcedInterruption?:
+    | "AFTER_AGENT_END"
+    | "AFTER_AGENT_END_PROCESS_KILL"
+    | "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION"
+    | "AFTER_AGENT_END_POWER_LOSS_SIMULATION";
 }
 
 export interface Task6PiEngineHostOptions {
@@ -85,12 +97,15 @@ export interface Task6PiEngineHostOptions {
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
   readonly requireQualifiedProcess?: boolean;
+  readonly forcedInterruption?: Task6PiProcessRequest["forcedInterruption"];
 }
 
 interface StoredOperation {
   readonly fingerprint: string;
   readonly payloadSignature: string;
   readonly receipt: OperationReceipt;
+  reconciliationOutcome?: OperationReconciliationReceipt["outcome"];
+  reconciliationEffects?: readonly string[];
   reconciliation?: OperationReconciliationReceipt;
 }
 
@@ -243,6 +258,8 @@ export class Task6PiEngineHost implements EngineHost {
   readonly #processTimeoutMs: number;
   readonly #maximumOutputBytes: number;
   readonly #requireQualifiedProcess: boolean;
+  readonly #forcedInterruption: Task6PiEngineHostOptions["forcedInterruption"];
+  #forcedInterruptionConsumed = false;
   readonly #operations = new Map<OperationId, StoredOperation>();
   readonly #pendingOperations = new Map<OperationId, PendingOperation>();
   readonly #handles = new Map<string, HandleState>();
@@ -262,6 +279,7 @@ export class Task6PiEngineHost implements EngineHost {
     this.#processTimeoutMs = options.processTimeoutMs;
     this.#maximumOutputBytes = options.maximumOutputBytes;
     this.#requireQualifiedProcess = options.requireQualifiedProcess ?? false;
+    this.#forcedInterruption = options.forcedInterruption;
   }
 
   public probe(request: ProbeRequest): Promise<CapabilityReceipt> {
@@ -372,6 +390,11 @@ export class Task6PiEngineHost implements EngineHost {
 
     const execution = (async (): Promise<OperationReceipt> => {
       const deadlineRemaining = Date.parse(parsed.deadline) - Date.parse(this.#now());
+      const forcedInterruption =
+        this.#forcedInterruption !== undefined && !this.#forcedInterruptionConsumed
+          ? this.#forcedInterruption
+          : undefined;
+      if (forcedInterruption !== undefined) this.#forcedInterruptionConsumed = true;
       const processResult = task6PiProcessResultSchema.parse(
         await this.#runProcess({
           plan: state.launchPlan,
@@ -385,6 +408,7 @@ export class Task6PiEngineHost implements EngineHost {
             ),
           ),
           maximumOutputBytes: this.#maximumOutputBytes,
+          ...(forcedInterruption === undefined ? {} : { forcedInterruption }),
         }),
       );
       const observations: EngineObservation[] = [
@@ -419,6 +443,26 @@ export class Task6PiEngineHost implements EngineHost {
           }),
         );
       }
+      if (
+        processResult.interruption !== undefined &&
+        processResult.providerUsage.status === "PASS"
+      ) {
+        observations.push(
+          engineObservationSchema.parse({
+            schemaVersion: "1.0.0",
+            cursor: observations.length + 1,
+            attemptId: state.handle.attemptId,
+            kind: "OPERATION_OBSERVED",
+            observedAt: this.#now(),
+            summary: `QualifiedInterruption=${processResult.interruption}; independent Verification did not run.`,
+            resourceUsage: {
+              externalOperations: processResult.providerUsage.requestCount,
+              tokens: processResult.providerUsage.tokenCount,
+              costMinorUnits: processResult.providerUsage.costMinorUnits,
+            },
+          }),
+        );
+      }
       observations.push(
         engineObservationSchema.parse({
           schemaVersion: "1.0.0",
@@ -436,14 +480,32 @@ export class Task6PiEngineHost implements EngineHost {
         processResult.framingValid &&
         processResult.exitCode === 0 &&
         processResult.eventTypes.includes("agent_end") &&
+        processResult.interruption === undefined &&
         (!this.#requireQualifiedProcess || hasQualifiedProcessContainment(processResult));
-      return this.#storeReceipt(
+      const receipt = this.#storeReceipt(
         parsed.operationId,
         parsed.fingerprint,
         payloadSignature,
         applied ? "APPLIED" : "UNKNOWN",
         applied ? ["agent-operation-returned"] : [],
       );
+      if (
+        !applied &&
+        this.#requireQualifiedProcess &&
+        processResult.interruption !== undefined &&
+        !processResult.outputTruncated &&
+        processResult.framingValid &&
+        processResult.providerUsage.status === "PASS" &&
+        hasQualifiedProcessContainment(processResult)
+      ) {
+        const stored = this.#operations.get(parsed.operationId);
+        if (stored === undefined) throw new Error("qualified interrupted operation was not stored");
+        stored.reconciliationOutcome = "APPLIED";
+        stored.reconciliationEffects = [
+          "qualified-agent-operation-returned-before-forced-process-finality",
+        ];
+      }
+      return receipt;
     })();
     this.#pendingOperations.set(parsed.operationId, {
       fingerprint: parsed.fingerprint,
@@ -531,8 +593,8 @@ export class Task6PiEngineHost implements EngineHost {
       operationId: parsed.operationId,
       fingerprint: parsed.fingerprint,
       previousOutcome: "UNKNOWN",
-      outcome: "UNKNOWN",
-      observedEffects: [],
+      outcome: stored.reconciliationOutcome ?? "UNKNOWN",
+      observedEffects: stored.reconciliationEffects ?? [],
       observedAt: this.#now(),
     });
     return Promise.resolve(operationReconciliationReceiptSchema.parse(stored.reconciliation));

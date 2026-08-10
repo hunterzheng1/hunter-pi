@@ -74,12 +74,40 @@ describe("Task 12 pilot plan compiler", () => {
   it("freezes explicit targets and tasks without carrying paths or credentials into the plan", () => {
     const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
 
-    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v2");
+    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v3");
     expect(plan.planFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(plan.repositoryTargets).toHaveLength(2);
     expect(plan.tasks).toHaveLength(10);
     expect(JSON.stringify(plan)).not.toContain("C:\\");
     expect(JSON.stringify(plan)).not.toMatch(/api[_-]?key\s*=|token\s*=|password\s*=/iu);
+  });
+
+  it("keeps Quick observations separate from Managed outcomes and freezes task definitions", () => {
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+    const quickTasks = plan.tasks.filter((task) => task.mode === "QUICK");
+    const managedTasks = plan.tasks.filter((task) => task.mode === "MANAGED");
+
+    expect(quickTasks.length).toBeGreaterThan(0);
+    expect(managedTasks.length).toBeGreaterThan(0);
+    expect(
+      plan.tasks.every((task) => /^sha256:[a-f0-9]{64}$/u.test(task.taskDefinitionFingerprint)),
+    ).toBe(true);
+    expect(quickTasks.every((task) => !("expectedOutcome" in task))).toBe(true);
+    expect(managedTasks.every((task) => task.expectedOutcome === "READY")).toBe(true);
+  });
+
+  it("freezes three distinct interruption scenarios onto Managed tasks only", () => {
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+    const taskById = new Map(plan.tasks.map((task) => [task.taskId, task]));
+
+    expect(plan.interruptionTasks).toHaveLength(3);
+    expect(new Set(plan.interruptionTasks.map((item) => item.interruptionId)).size).toBe(3);
+    expect(new Set(plan.interruptionTasks.map((item) => item.kind))).toEqual(
+      new Set(["FORCED_PROCESS_KILL", "TERMINAL_CLOSE_SIMULATION", "POWER_LOSS_SIMULATION"]),
+    );
+    expect(
+      plan.interruptionTasks.every((item) => taskById.get(item.taskId)?.mode === "MANAGED"),
+    ).toBe(true);
   });
 
   it("fails closed when repository selection is implicit", () => {
@@ -220,7 +248,9 @@ describe("Task 12 pilot plan compiler", () => {
         ...plan,
         operatorScope: { ...plan.operatorScope, workspacePolicy: "DISPOSABLE_PILOT_WORKTREES" },
         tasks: plan.tasks.map((task, index) =>
-          index === 0 ? { ...task, expectedOutcome: "BLOCKED" as const } : task,
+          index === 1 && task.mode === "MANAGED"
+            ? { ...task, expectedOutcome: "BLOCKED" as const }
+            : task,
         ),
       }),
     ).toThrow(/fingerprint/u);

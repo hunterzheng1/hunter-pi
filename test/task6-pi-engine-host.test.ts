@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   engineInputSchema,
   probeRequestSchema,
+  reconcileOperationRequestSchema,
   startAttemptRequestSchema,
 } from "@hunter-pi/engine-contracts";
 import * as piHostModule from "@hunter-pi/pi-host";
@@ -42,6 +43,7 @@ interface ProcessRequest {
   readonly prompt: string;
   readonly timeoutMs: number;
   readonly maximumOutputBytes: number;
+  readonly forcedInterruption?: "AFTER_AGENT_END";
 }
 
 interface ProcessResult {
@@ -65,6 +67,7 @@ interface ProcessResult {
   readonly terminalFinality?: "FINAL" | "NOT_PROVEN";
   readonly processTreeState?: "EMPTY" | "ACTIVE" | "NOT_PROVEN";
   readonly leaseState?: "RELEASED" | "HELD" | "NOT_REQUIRED" | "NOT_PROVEN";
+  readonly interruption?: "FORCED_PROCESS_KILL_AFTER_AGENT_END";
 }
 
 interface Task6Host {
@@ -79,6 +82,7 @@ interface Task6Host {
     readonly operationReceipt: unknown;
   }>;
   send(handle: unknown, input: unknown): Promise<unknown>;
+  reconcile(request: unknown): Promise<unknown>;
   observe(
     handle: unknown,
     cursor?: number,
@@ -102,6 +106,7 @@ type Task6HostConstructor = new (options: {
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
   readonly requireQualifiedProcess?: boolean;
+  readonly forcedInterruption?: "AFTER_AGENT_END";
 }) => Task6Host;
 
 function requireHostConstructor(): Task6HostConstructor {
@@ -287,6 +292,89 @@ describe("Task 6 fixed Pi Engine Host", () => {
       }),
     );
     expect(receipt).toMatchObject({ outcome: "UNKNOWN" });
+  });
+
+  it("reconciles only an exact qualified post-agent-end interruption as applied", async () => {
+    const Host = requireHostConstructor();
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task6-recovery-");
+    cleanupRoots.push(root);
+    const host = new Host({
+      launchPlanForWorkspace: (workspace) =>
+        Promise.resolve({
+          executable: process.execPath,
+          arguments: [],
+          cwd: workspace,
+          environment: {},
+        }),
+      runProcess: (request) => {
+        expect(request.forcedInterruption).toBe("AFTER_AGENT_END");
+        return Promise.resolve({
+          exitCode: 1,
+          timedOut: false,
+          framingValid: true,
+          eventTypes: ["message_end"],
+          recordCount: 1,
+          stdoutDigest: fingerprintA,
+          stderrDigest: fingerprintB,
+          capturedBytes: 16,
+          outputTruncated: false,
+          providerUsage: providerUsagePass,
+          interruption: "FORCED_PROCESS_KILL_AFTER_AGENT_END" as const,
+          containment:
+            process.platform === "win32"
+              ? ("WINDOWS_JOB_OBJECT" as const)
+              : ("LINUX_SUBREAPER_PROCESS_TREE" as const),
+          terminalFinality: "FINAL" as const,
+          processTreeState: "EMPTY" as const,
+          leaseState: "RELEASED" as const,
+        });
+      },
+      now: () => observedAt,
+      processTimeoutMs: 30_000,
+      maximumOutputBytes: 262_144,
+      requireQualifiedProcess: true,
+      forcedInterruption: "AFTER_AGENT_END",
+    });
+    const start = await host.start({
+      schemaVersion: "1.0.0",
+      operationId: "op_task6-recovery-start",
+      fingerprint: fingerprintA,
+      expectedTarget: { namespace: "workspace", reference: root },
+      deadline: "2026-08-04T00:01:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+      runId: "run_task6-recovery",
+      attemptId: "att_task6-recovery",
+      planRevisionId: "plan_task6-recovery",
+      workspaceReference: root,
+    });
+    const send = await host.send(
+      start.handle,
+      engineInputSchema.parse({
+        schemaVersion: "1.0.0",
+        operationId: "op_task6-recovery-send",
+        fingerprint: fingerprintB,
+        expectedTarget: { namespace: "engine-handle", reference: start.handle.engineHandleId },
+        deadline: "2026-08-04T00:01:00.000Z",
+        cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+        kind: "USER_INPUT",
+        content: "qualified recovery fixture",
+      }),
+    );
+    expect(send).toMatchObject({ outcome: "UNKNOWN", observedEffects: [] });
+
+    await expect(
+      host.reconcile(
+        reconcileOperationRequestSchema.parse({
+          schemaVersion: "1.0.0",
+          operationId: "op_task6-recovery-send",
+          fingerprint: fingerprintB,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      previousOutcome: "UNKNOWN",
+      outcome: "APPLIED",
+      observedEffects: ["qualified-agent-operation-returned-before-forced-process-finality"],
+    });
   });
 
   it("rejects operation replay with a different payload even when the caller reuses the fingerprint", async () => {

@@ -30,6 +30,7 @@
     "@hunter-pi/pi-host": "0.0.0",
     "@hunter-pi/plugin-manager": "0.0.0",
     "@hunter-pi/updater": "0.0.0",
+    "@hunter-pi/verification": "0.0.0",
     "zod": "4.4.3"
   }
 }

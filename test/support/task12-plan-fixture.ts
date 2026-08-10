@@ -34,7 +34,7 @@ export function completePilotPlanInput(): PilotPlanInput {
     },
   ];
   return {
-    schemaVersion: "hpi-pilot-plan-input.v2",
+    schemaVersion: "hpi-pilot-plan-input.v3",
     platform: "win32",
     architecture: "x64",
     sourceFingerprint: firstSourceFingerprint,
@@ -84,8 +84,14 @@ export function completePilotPlanInput(): PilotPlanInput {
         taskId: `pilot-task-${String(index + 1).padStart(2, "0")}`,
         targetId: target.targetId,
         sourceFingerprint: target.sourceFingerprint,
-        mode: index % 2 === 0 ? ("QUICK" as const) : ("MANAGED" as const),
-        expectedOutcome: "READY" as const,
+        taskDefinitionFingerprint: indexedFingerprint(index),
+        ...(index % 2 === 0
+          ? {
+              mode: "QUICK" as const,
+              expectedExecutionObservation: "RETURNED" as const,
+              expectedAcceptanceObservation: "PASS" as const,
+            }
+          : { mode: "MANAGED" as const, expectedOutcome: "READY" as const }),
         acceptanceCheckIds: [`check-${String(index + 1).padStart(2, "0")}`],
       };
     }),
@@ -117,6 +123,23 @@ export function completePilotPlanInput(): PilotPlanInput {
       },
     ],
     pairedTaskIds: ["pilot-task-01", "pilot-task-06", "pilot-task-07"],
+    interruptionTasks: [
+      {
+        interruptionId: "pilot-interruption-1",
+        taskId: "pilot-task-02",
+        kind: "FORCED_PROCESS_KILL",
+      },
+      {
+        interruptionId: "pilot-interruption-2",
+        taskId: "pilot-task-06",
+        kind: "TERMINAL_CLOSE_SIMULATION",
+      },
+      {
+        interruptionId: "pilot-interruption-3",
+        taskId: "pilot-task-10",
+        kind: "POWER_LOSS_SIMULATION",
+      },
+    ],
   };
 }
 

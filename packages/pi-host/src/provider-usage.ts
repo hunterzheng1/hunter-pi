@@ -84,6 +84,28 @@ function recordType(record: Record<string, unknown>): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function hasExactPiAgentTail(
+  terminalType: string | undefined,
+  precedingType: string | undefined,
+): boolean {
+  return terminalType === "agent_settled" && precedingType === "agent_end";
+}
+
+/**
+ * Accepts only the live completion tail emitted by the bundled Pi 0.83 Engine.
+ * Historical receipts are replayed from their immutable facts, not through this predicate.
+ */
+export function hasExactPiAgentCompletion(eventTypes: readonly string[]): boolean {
+  return (
+    hasExactPiAgentTail(eventTypes.at(-1), eventTypes.at(-2)) &&
+    eventTypes.indexOf("agent_settled") === eventTypes.length - 1
+  );
+}
+
+function hasExactCompletedAgentTail(records: readonly Record<string, unknown>[]): boolean {
+  return hasExactPiAgentCompletion(records.map((record) => recordType(record) ?? ""));
+}
+
 /**
  * Accounts only final assistant message_end records. agent_end repeats messages,
  * so reading it would double count Provider requests and usage.
@@ -101,7 +123,7 @@ export function accountPiProviderUsage(
   const terminalRecord = records.at(-1);
   if (
     terminalRecord === undefined ||
-    (requestBoundary === "TRANSPORT_RETRIES_DISABLED" && recordType(terminalRecord) !== "agent_end")
+    (requestBoundary === "TRANSPORT_RETRIES_DISABLED" && !hasExactCompletedAgentTail(records))
   ) {
     return notProven("EVENT_STREAM_INCOMPLETE");
   }

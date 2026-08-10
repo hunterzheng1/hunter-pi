@@ -136,6 +136,7 @@ const qualifiedPiSuccessScript = [
   "const usage={input:120,output:30,cacheRead:10,cacheWrite:5,totalTokens:165,cost:{input:0.0012,output:0.0006,cacheRead:0.0001,cacheWrite:0.00005,total:0.00195}};",
   "process.stdout.write(JSON.stringify({type:'message_end',message:{role:'assistant',usage}})+'\\n');",
   "process.stdout.write(JSON.stringify({type:'agent_end'})+'\\n');",
+  "process.stdout.write(JSON.stringify({type:'agent_settled'})+'\\n');",
 ].join("\n");
 
 afterEach(async () => {

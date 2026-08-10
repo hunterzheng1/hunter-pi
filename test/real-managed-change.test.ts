@@ -116,6 +116,7 @@ function createMutationHost(
   extraMutation?: (workspace: string) => Promise<void>,
   beforeMutation?: () => void | Promise<void>,
   providerUsage: PiProviderUsage = fixturePiProviderUsage,
+  capturedBytes = 128,
 ): EngineHost {
   return new Task6PiEngineHost({
     launchPlanForWorkspace: (workspace) =>
@@ -138,7 +139,7 @@ function createMutationHost(
         recordCount: 3,
         stdoutDigest: fingerprintA,
         stderrDigest: fingerprintB,
-        capturedBytes: 128,
+        capturedBytes,
         outputTruncated: false,
         providerUsage,
         containment:
@@ -1097,12 +1098,17 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
       plan,
     });
     let agentCalls = 0;
-    const engineHost = createMutationHost(async (workspace) => {
-      agentCalls += 1;
-      if (agentCalls === 1) {
-        await writeFile(join(workspace, "result.txt"), "NOT_READY\n", "utf8");
-      }
-    });
+    const engineHost = createMutationHost(
+      async (workspace) => {
+        agentCalls += 1;
+        if (agentCalls === 1) {
+          await writeFile(join(workspace, "result.txt"), "NOT_READY\n", "utf8");
+        }
+      },
+      undefined,
+      fixturePiProviderUsage,
+      180_000,
+    );
     const artifact = await runRealManagedChange({
       repository,
       request,
@@ -1133,6 +1139,13 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
 
     expect(agentCalls).toBe(2);
     expect(artifact.taskResult).toBe("GO");
+    expect(artifact.resourceAccounting).toMatchObject({
+      status: "PASS",
+      budgets: { maxOutputBytes: 491_520 },
+      captureLimits: { engine: 229_376, verification: 16_384 },
+      capturedOutputBytes: { engine: 360_000, verification: 0 },
+      consumed: { outputBytes: 360_000 },
+    });
     expect(artifact.projection.attempts).toMatchObject([
       { attemptId: "att_real-1", verificationStatus: "FAILED" },
       {

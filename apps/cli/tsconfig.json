@@ -18,6 +18,7 @@
     { "path": "../../packages/pi-host" },
     { "path": "../../packages/pilot" },
     { "path": "../../packages/plugin-manager" },
+    { "path": "../../packages/verification" },
     { "path": "../../packages/updater" }
   ]
 }

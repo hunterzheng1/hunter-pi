@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -70,6 +70,60 @@ describe("GitHub Actions CI efficiency policy", () => {
       /run: npm run (package-smoke|pack:preview|probe:pi|probe:task7|probe:task9|probe:task10)(?:\s|$)/u,
     );
     expect(workflow).not.toMatch(/npm run compare:task(?:7|9|10)-evidence(?:\s|$)/u);
+  });
+
+  it("cannot hide missing workspace references behind stale build outputs", async () => {
+    const repositoryRoot = resolve(import.meta.dirname, "..");
+    const workspaceDirectories = (
+      await Promise.all(
+        ["apps", "packages"].map(async (workspaceRoot) =>
+          (await readdir(resolve(repositoryRoot, workspaceRoot), { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => resolve(repositoryRoot, workspaceRoot, entry.name)),
+        ),
+      )
+    ).flat();
+    const workspaces = await Promise.all(
+      workspaceDirectories.map(async (directory) => ({
+        directory,
+        manifest: JSON.parse(await readFile(resolve(directory, "package.json"), "utf8")) as {
+          readonly name: string;
+          readonly dependencies?: Readonly<Record<string, string>>;
+          readonly devDependencies?: Readonly<Record<string, string>>;
+          readonly peerDependencies?: Readonly<Record<string, string>>;
+        },
+        tsconfig: JSON.parse(await readFile(resolve(directory, "tsconfig.json"), "utf8")) as {
+          readonly references?: readonly { readonly path: string }[];
+        },
+      })),
+    );
+    const directoryByName = new Map(
+      workspaces.map((workspace) => [workspace.manifest.name, workspace.directory] as const),
+    );
+    const missingReferences = workspaces.flatMap((workspace) => {
+      const internalDependencies = [
+        ...Object.keys(workspace.manifest.dependencies ?? {}),
+        ...Object.keys(workspace.manifest.devDependencies ?? {}),
+        ...Object.keys(workspace.manifest.peerDependencies ?? {}),
+      ].filter((dependency) => directoryByName.has(dependency));
+      const referencedDirectories = new Set(
+        (workspace.tsconfig.references ?? []).map((reference) =>
+          resolve(workspace.directory, reference.path),
+        ),
+      );
+      return internalDependencies
+        .filter((dependency) => {
+          const dependencyDirectory = directoryByName.get(dependency);
+          return (
+            dependencyDirectory !== undefined && !referencedDirectories.has(dependencyDirectory)
+          );
+        })
+        .map((dependency) => `${workspace.manifest.name} -> ${dependency}`);
+    });
+
+    expect(missingReferences).toEqual([]);
+    expect(manifest.scripts?.["clean:build"]).toBe("tsc -b tsconfig.build.json --clean");
+    expect(manifest.scripts?.["verify"]).toMatch(/^npm run clean:build &&/u);
   });
 
   it("reuses quality and Pi aggregation jobs for Task 9 and Task 10 platform Evidence", () => {

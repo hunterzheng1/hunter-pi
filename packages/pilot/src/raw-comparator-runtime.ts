@@ -33,8 +33,7 @@ import {
 } from "./contracts.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 import { createPilotRepositoryTargetReceipt } from "./target.js";
-
-const rawCapturedFactCount = 15;
+import { rawPiCapturedWorkflowFactCount } from "./workflow-facts.js";
 
 export function fingerprintPilotRawComparatorConfiguration(input: {
   readonly enginePackage: string;
@@ -496,7 +495,7 @@ export async function runPilotRawComparator(
       coreExtensionCount: 0,
       applicableFactCount: options.hunterResult.applicableFactCount,
       rawPiCapturedFactCount: Math.min(
-        rawCapturedFactCount,
+        rawPiCapturedWorkflowFactCount(),
         options.hunterResult.applicableFactCount,
       ),
       hunterCapturedFactCount: options.hunterResult.capturedFactCount,

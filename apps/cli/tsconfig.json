@@ -5,6 +5,7 @@
     "outDir": "dist",
     "paths": {
       "@hunter-pi/pilot": ["../../packages/pilot/src/index.ts"],
+      "@hunter-pi/pilot/internal-capture": ["../../packages/pilot/src/capture-session.ts"],
       "@hunter-pi/updater": ["../../packages/updater/src/index.ts"]
     },
     "rootDir": "src",

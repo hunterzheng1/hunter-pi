@@ -5,6 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
+import { z } from "zod";
+
 import {
   FilePiPackageBindingStore,
   PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
@@ -75,6 +77,7 @@ import {
 import {
   createPilotRepositoryTargetBlockedReceipt,
   createPilotRepositoryTargetReceipt,
+  createPilotRuntimeBinding,
   FilePilotArchiveStore,
   FilePilotCaptureCoordinator,
   PilotCaptureCoordinatorError,
@@ -84,17 +87,20 @@ import {
   pilotExecutionPlanSchema,
   pilotFingerprint,
   pilotQuickWorkflowFactChecklistFingerprint,
+  pilotRuntimeBindingSchema,
   pilotTargetIdSchema,
   fingerprintPilotRawComparatorConfiguration,
   runPilotRawComparator,
   runPilotQuickTask,
   type PilotPlanInput,
   type PilotRepositoryTargetReceipt,
+  type PilotRuntimeBinding,
   type PilotPreflightFailure,
   type TrustedPilotArchive,
 } from "@hunter-pi/pilot";
+import { createPilotCaptureProductExecutionRuntime } from "@hunter-pi/pilot/internal-capture";
 import { createQualifiedControlledCommandRunner } from "@hunter-pi/verification";
-import { archiveIdSchema, operationIdSchema } from "@hunter-pi/domain";
+import { archiveIdSchema, fingerprintSchema, operationIdSchema } from "@hunter-pi/domain";
 import {
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
@@ -155,6 +161,112 @@ export interface HpiCliDependencies {
     readonly paths: HpiPaths;
     readonly artifactPath?: string;
   }) => Promise<UpdateManager | undefined>;
+}
+
+const pilotPortableManifestSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-windows-portable.v2"),
+  product: z.literal("Hunter Pi"),
+  platform: z.literal("win32-x64"),
+  nodeVersion: z.string().min(1).max(64),
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  sourceState: z.literal("CLEAN"),
+  updateChannel: z.literal("developer-preview"),
+  installer: z.literal("PORTABLE_DIRECTORY"),
+  signed: z.boolean(),
+  releaseId: z.string().min(1).max(256),
+  productVersion: z.string().min(1).max(128),
+  engineReleaseId: z.string().min(1).max(256),
+  engineReleaseFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  artifactByteLength: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  versionDirectory: z.string().min(1).max(1_024),
+  cliPackageFingerprint: fingerprintSchema,
+  productShellIntegrity: fingerprintSchema,
+  coreExtensionIntegrity: fingerprintSchema,
+  nodeRuntimeIntegrity: fingerprintSchema,
+});
+
+async function readInstalledPilotRuntimeBinding(options: {
+  readonly dependencies: HpiCliDependencies;
+  readonly version: HpiVersionInfo;
+  readonly configuration: HpiConfiguration;
+  readonly auth: PiProviderAuthMetadata;
+  readonly destination: PiProviderDestination;
+}): Promise<PilotRuntimeBinding> {
+  const portableRoot = options.dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
+  const modelId = options.configuration.provider.selectedModel;
+  if (
+    portableRoot === undefined ||
+    !isAbsolute(portableRoot) ||
+    modelId === null ||
+    !options.auth.configured ||
+    options.auth.source === undefined
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot runtime identity is incomplete",
+    );
+  }
+  const manifestPath = join(resolve(portableRoot), "portable-manifest.json");
+  let stats;
+  try {
+    stats = await lstat(manifestPath);
+  } catch {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is unavailable",
+    );
+  }
+  if (
+    !stats.isFile() ||
+    stats.isSymbolicLink() ||
+    stats.nlink !== 1 ||
+    !Number.isSafeInteger(stats.size) ||
+    stats.size <= 0 ||
+    stats.size > 64 * 1024
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is not one exact bounded file",
+    );
+  }
+  let manifest: z.infer<typeof pilotPortableManifestSchema>;
+  try {
+    const text =
+      options.dependencies.readTextFile === undefined
+        ? await readFile(manifestPath, "utf8")
+        : await options.dependencies.readTextFile(manifestPath);
+    manifest = pilotPortableManifestSchema.parse(JSON.parse(text) as unknown);
+  } catch {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is invalid",
+    );
+  }
+  const binding = createPilotRuntimeBinding({
+    sourceCommit: options.version.sourceCommit,
+    artifactFingerprint: manifest.artifactFingerprint,
+    enginePackageName: options.version.engine.packageName,
+    engineVersion: options.version.engine.version,
+    providerId: options.configuration.provider.id,
+    modelId,
+    configuredOrigin: options.destination.configuredOrigin,
+    pristineOrigin: options.destination.pristineOrigin,
+    credentialSource: options.auth.source,
+  });
+  if (
+    manifest.sourceCommit !== options.version.sourceCommit ||
+    manifest.productVersion !== options.version.productVersion ||
+    manifest.engineReleaseFingerprint !== binding.engineReleaseFingerprint ||
+    manifest.productShellIntegrity !== options.version.productShellIntegrity ||
+    manifest.coreExtensionIntegrity !== options.version.coreExtensionIntegrity
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest does not match the running product",
+    );
+  }
+  return pilotRuntimeBindingSchema.parse(binding);
 }
 
 export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
@@ -2446,6 +2558,10 @@ function pilotCaptureNextAction(error: PilotCaptureCoordinatorError): string {
       return "Provide one strict plan-bound capture observation without paths or credentials.";
     case "PROVIDER_BUDGET_EXCEEDED":
       return "Stop Provider work; the frozen pilot authorization budget is exhausted.";
+    case "PROVIDER_USAGE_RECONCILIATION_REQUIRED":
+      return "Do not retry the Provider operation; preserve the session for exact usage reconciliation.";
+    case "RUNTIME_BINDING_MISMATCH":
+      return "Use the exact clean Windows artifact, Engine, Provider endpoint, model, and credential scope frozen in the pilot plan.";
     case "INCOMPLETE":
       return "Record every next action reported by capture status before finalizing.";
     case "WINDOWS_REQUIRED":
@@ -2636,6 +2752,13 @@ async function pilotCaptureCommand(
         dependencies,
         paths,
       );
+      const runtimeBinding = await readInstalledPilotRuntimeBinding({
+        dependencies,
+        version,
+        configuration,
+        auth,
+        destination: resolvedProviderDestination,
+      });
       const quickConfiguration = hpiConfigurationSchema.parse({
         ...configuration,
         permissionProfile: "FULL_ACCESS",
@@ -2671,16 +2794,8 @@ async function pilotCaptureCommand(
           permissionProfile: "FULL_ACCESS",
         }),
       );
-      const receipt = await coordinator.recordQuickTask(
-        {
-          schemaVersion: "hpi-pilot-capture-quick-task.v1",
-          sessionId,
-          operationId,
-          taskId,
-          repository,
-          request: request.data,
-        },
-        async (context) => {
+      const quickRuntime = createPilotCaptureProductExecutionRuntime({
+        quickTask: async (context) => {
           const launchPlan = createPiLaunchPlan({
             paths,
             configuration: quickConfiguration,
@@ -2722,7 +2837,16 @@ async function pilotCaptureCommand(
             now: dependencies.now,
           });
         },
-      );
+      });
+      const receipt = await coordinator.recordQuickTask(quickRuntime, {
+        schemaVersion: "hpi-pilot-capture-quick-task.v2",
+        sessionId,
+        operationId,
+        taskId,
+        repository,
+        request: request.data,
+        runtimeBinding,
+      });
       line(dependencies.io, JSON.stringify(receipt));
       return 0;
     }
@@ -2790,6 +2914,13 @@ async function pilotCaptureCommand(
         dependencies,
         paths,
       );
+      const runtimeBinding = await readInstalledPilotRuntimeBinding({
+        dependencies,
+        version,
+        configuration,
+        auth,
+        destination: resolvedProviderDestination,
+      });
       const leaseRoot = join(paths.root, "leases");
       const commandLeaseRoot = join(paths.root, "pilot", "raw-command-leases");
       await Promise.all([
@@ -2824,16 +2955,8 @@ async function pilotCaptureCommand(
         providerId: configuration.provider.id,
         modelId: configuration.provider.selectedModel,
       });
-      const receipt = await coordinator.recordRawComparator(
-        {
-          schemaVersion: "hpi-pilot-capture-raw-comparator.v1",
-          sessionId,
-          operationId,
-          taskId,
-          repository,
-          request: request.data,
-        },
-        async (context) => {
+      const rawRuntime = createPilotCaptureProductExecutionRuntime({
+        rawComparator: async (context) => {
           if (
             context.plan.comparatorConfigurationFingerprint !==
               actualComparatorConfigurationFingerprint ||
@@ -2872,7 +2995,17 @@ async function pilotCaptureCommand(
             now: dependencies.now,
           });
         },
-      );
+      });
+      const receipt = await coordinator.recordRawComparator(rawRuntime, {
+        schemaVersion: "hpi-pilot-capture-raw-comparator.v2",
+        sessionId,
+        operationId,
+        taskId,
+        repository,
+        request: request.data,
+        runtimeBinding,
+        comparatorConfigurationFingerprint: actualComparatorConfigurationFingerprint,
+      });
       line(dependencies.io, JSON.stringify(receipt));
       return 0;
     }

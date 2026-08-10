@@ -11,11 +11,20 @@ import {
   PilotEvaluator,
   PilotPlanCompiler,
   isTrustedPilotArchive,
+  pilotQuickWorkflowFactChecklistFingerprint,
   type PilotCaptureObservation,
   type PilotEvidence,
   type PilotExecutionPlan,
 } from "@hunter-pi/pilot";
-import { createPilotCaptureProductObservationRuntime } from "../packages/pilot/src/capture-session.js";
+import {
+  fingerprintRealManagedChangeCheckDefinition,
+  fingerprintRealManagedChangeTaskDefinition,
+  realManagedChangeRequestSchema,
+} from "@hunter-pi/managed-change";
+import {
+  createPilotCaptureProductExecutionRuntime,
+  createPilotCaptureProductObservationRuntime,
+} from "../packages/pilot/src/capture-session.js";
 import { completePilotEvidence } from "./support/task12-evidence-fixture.js";
 import {
   completePilotExecutionPlan,
@@ -28,6 +37,77 @@ const cleanupRoots: string[] = [];
 const sessionId = "pilot-session-daily-01";
 const archiveId = "pilot-archive-daily-01";
 const productObservationRuntime = createPilotCaptureProductObservationRuntime();
+
+function quickCaptureFixture() {
+  const input = completePilotPlanInput();
+  const target = input.repositoryTargets[0];
+  if (target === undefined) throw new Error("pilot Quick target fixture missing");
+  const request = realManagedChangeRequestSchema.parse({
+    schemaVersion: "hpi-managed-change-request.v2",
+    title: "Capture one bounded Quick result",
+    goal: "Create result.txt with the accepted fixture value.",
+    nonGoals: ["Do not commit the result."],
+    constraints: ["Modify only result.txt."],
+    allowedPaths: ["result.txt"],
+    check: { label: "result check", executable: "node", argv: ["check.mjs"] },
+    target: {
+      targetId: target.targetId,
+      selectionMode: target.selectionMode,
+      repositoryFingerprint: target.repositoryFingerprint,
+      sourceFingerprint: target.sourceFingerprint,
+      targetReferenceFingerprint: target.targetReferenceFingerprint,
+    },
+  });
+  const plan = new PilotPlanCompiler().compile({
+    ...input,
+    workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+    acceptanceChecks: input.acceptanceChecks.map((check) =>
+      check.checkId === "check-01"
+        ? { ...check, definitionFingerprint: fingerprintRealManagedChangeCheckDefinition(request) }
+        : check,
+    ),
+    tasks: input.tasks.map((task) =>
+      task.taskId === "pilot-task-01"
+        ? {
+            ...task,
+            taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(request),
+          }
+        : task,
+    ),
+  });
+  const receipt = completePilotEvidence(plan).quickTaskReceipts.find(
+    (candidate) => candidate.taskId === "pilot-task-01",
+  );
+  if (receipt === undefined) throw new Error("pilot Quick receipt fixture missing");
+  if (
+    plan.operatorScope.providerEndpointFingerprint === null ||
+    plan.operatorScope.providerModelFingerprint === null ||
+    plan.operatorScope.credentialScopeFingerprint === null
+  ) {
+    throw new Error("pilot Provider scope fixture missing");
+  }
+  return {
+    plan,
+    request: {
+      schemaVersion: "hpi-pilot-capture-quick-task.v2" as const,
+      sessionId,
+      operationId: "capture-operation-quick-01",
+      taskId: "pilot-task-01",
+      repository: "C:\\fixture-repository",
+      request,
+      runtimeBinding: {
+        schemaVersion: "hpi-pilot-runtime-binding.v1" as const,
+        sourceFingerprint: plan.sourceFingerprint,
+        artifactFingerprint: plan.artifactFingerprint,
+        engineReleaseFingerprint: plan.engineReleaseFingerprint,
+        providerEndpointFingerprint: plan.operatorScope.providerEndpointFingerprint,
+        providerModelFingerprint: plan.operatorScope.providerModelFingerprint,
+        credentialScopeFingerprint: plan.operatorScope.credentialScopeFingerprint,
+      },
+    },
+    receipt,
+  };
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -340,6 +420,115 @@ describe("Task 12 durable pilot capture coordinator", { timeout: 30_000 }, () =>
       }),
     ).rejects.toMatchObject({ code: "OBSERVATION_INVALID" });
     await expect(coordinator.finalize(sessionId)).rejects.toMatchObject({ code: "INCOMPLETE" });
+  });
+
+  it("does not expose a public executor callback that can mint a Quick receipt", async () => {
+    const fixture = quickCaptureFixture();
+    const { coordinator } = await createCoordinator(fixture.plan);
+    expect("createPilotCaptureProductExecutionRuntime" in pilotPublicPackage).toBe(false);
+    expect("PilotCaptureQuickTaskExecutor" in pilotPublicPackage).toBe(false);
+
+    await expect(
+      coordinator.recordQuickTask(() => Promise.resolve(fixture.receipt), fixture.request),
+    ).rejects.toMatchObject({ code: "OBSERVATION_INVALID" });
+    expect((await coordinator.status(sessionId)).counts.taskChains).toBe(0);
+  });
+
+  it("persists a full Provider budget reservation before send and never retries unknown usage", async () => {
+    const fixture = quickCaptureFixture();
+    const { captureRoot, coordinator } = await createCoordinator(fixture.plan);
+    let firstExecutionCount = 0;
+    const interruptedRuntime = createPilotCaptureProductExecutionRuntime({
+      quickTask: () => {
+        firstExecutionCount += 1;
+        return Promise.reject(new Error("simulated crash after Provider send"));
+      },
+    });
+
+    await expect(
+      coordinator.recordQuickTask(interruptedRuntime, fixture.request),
+    ).rejects.toMatchObject({ code: "OBSERVATION_INVALID" });
+    expect(firstExecutionCount).toBe(1);
+    const intent = JSON.parse(
+      await readFile(
+        join(
+          captureRoot,
+          "sessions",
+          sessionId,
+          `provider-${fixture.request.operationId}.intent.json`,
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(intent).toMatchObject({
+      schemaVersion: "hpi-pilot-provider-operation-intent.v1",
+      operationId: fixture.request.operationId,
+      eventCountBefore: 0,
+      usageBefore: { requests: 0, tokens: 0, costMinor: 0 },
+      reservation: {
+        requests: fixture.plan.operatorScope.maxProviderRequests,
+        tokens: fixture.plan.operatorScope.maxProviderTokens,
+        costMinor: fixture.plan.operatorScope.maxProviderCostMinor,
+      },
+    });
+    await expect(coordinator.status(sessionId)).rejects.toMatchObject({
+      code: "PROVIDER_USAGE_RECONCILIATION_REQUIRED",
+    });
+
+    let retryExecutionCount = 0;
+    const retryRuntime = createPilotCaptureProductExecutionRuntime({
+      quickTask: () => {
+        retryExecutionCount += 1;
+        return Promise.resolve(fixture.receipt);
+      },
+    });
+    await expect(coordinator.recordQuickTask(retryRuntime, fixture.request)).rejects.toMatchObject({
+      code: "PROVIDER_USAGE_RECONCILIATION_REQUIRED",
+    });
+    expect(retryExecutionCount).toBe(0);
+  });
+
+  it("resolves a Provider intent only through its exact durable product event", async () => {
+    const fixture = quickCaptureFixture();
+    const { coordinator } = await createCoordinator(fixture.plan);
+    let executionCount = 0;
+    const runtime = createPilotCaptureProductExecutionRuntime({
+      quickTask: () => {
+        executionCount += 1;
+        return Promise.resolve(fixture.receipt);
+      },
+    });
+
+    const recorded = await coordinator.recordQuickTask(runtime, fixture.request);
+    const replayed = await coordinator.recordQuickTask(runtime, fixture.request);
+    expect(recorded.outcome).toBe("RECORDED");
+    expect(replayed.outcome).toBe("REPLAYED");
+    expect(executionCount).toBe(1);
+    expect((await coordinator.status(sessionId)).providerUsage).toEqual({
+      requests: fixture.receipt.providerRequestCount,
+      tokens: fixture.receipt.providerTokenCount,
+      costMinor: fixture.receipt.providerCostMinor,
+    });
+  });
+
+  it("keeps historical managed-task v1 parse support out of live capture", async () => {
+    const { coordinator } = await createCoordinator();
+    await expect(
+      coordinator.recordManagedTask({
+        schemaVersion: "hpi-pilot-capture-managed-task.v1",
+        sessionId,
+        operationId: "capture-operation-managed-v1",
+        taskId: "pilot-task-02",
+        archiveIds: ["archive-historical-v1"],
+        metrics: {
+          applicableFactCount: 20,
+          capturedFactCount: 20,
+          manualInterventions: 0,
+          rawPiCapturedFactCount: 0,
+          rawPiManualInterventions: 0,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "OBSERVATION_INVALID" });
   });
 
   it("projects a complete session into one immutable trusted Archive and recovers publication", async () => {

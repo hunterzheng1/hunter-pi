@@ -16,6 +16,7 @@
       "@hunter-pi/managed-change": ["./packages/managed-change/src/index.ts"],
       "@hunter-pi/pi-host": ["./packages/pi-host/src/index.ts"],
       "@hunter-pi/pilot": ["./packages/pilot/src/index.ts"],
+      "@hunter-pi/pilot/internal-capture": ["./packages/pilot/src/capture-session.ts"],
       "@hunter-pi/plugin-manager": ["./packages/plugin-manager/src/index.ts"],
       "@hunter-pi/testkit": ["./packages/testkit/src/index.ts"],
       "@hunter-pi/updater": ["./packages/updater/src/index.ts"],

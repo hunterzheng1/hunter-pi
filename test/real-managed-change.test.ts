@@ -464,18 +464,11 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
       plan,
     });
     const taskCapture = await coordinator.recordManagedTask({
-      schemaVersion: "hpi-pilot-capture-managed-task.v1",
+      schemaVersion: "hpi-pilot-capture-managed-task.v2",
       sessionId: "pilot-real-managed-session",
       operationId: "capture-real-managed-task-01",
       taskId: "pilot-task-01",
       archiveIds: ["archive_real-pilot-01"],
-      metrics: {
-        applicableFactCount: 20,
-        capturedFactCount: 20,
-        manualInterventions: 1,
-        rawPiCapturedFactCount: 15,
-        rawPiManualInterventions: 3,
-      },
     });
     expect(taskCapture).toMatchObject({
       outcome: "RECORDED",
@@ -611,18 +604,11 @@ describe("real-project Managed Change runner", { timeout: 30_000 }, () => {
     });
     await expect(
       capture.recordManagedTask({
-        schemaVersion: "hpi-pilot-capture-managed-task.v1",
+        schemaVersion: "hpi-pilot-capture-managed-task.v2",
         sessionId: "pilot-interruption-session",
         operationId: "capture-pilot-interruption-task-02",
         taskId: "pilot-task-02",
         archiveIds: ["archive_pilot-task-01-interrupted"],
-        metrics: {
-          applicableFactCount: 20,
-          capturedFactCount: 20,
-          manualInterventions: 1,
-          rawPiCapturedFactCount: 15,
-          rawPiManualInterventions: 3,
-        },
       }),
     ).resolves.toMatchObject({
       outcome: "RECORDED",

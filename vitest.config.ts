@@ -29,6 +29,9 @@ export default defineConfig({
       "@hunter-pi/pi-host": fileURLToPath(
         new URL("./packages/pi-host/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/pilot/internal-capture": fileURLToPath(
+        new URL("./packages/pilot/src/capture-session.ts", import.meta.url),
+      ),
       "@hunter-pi/pilot": fileURLToPath(new URL("./packages/pilot/src/index.ts", import.meta.url)),
       "@hunter-pi/plugin-manager": fileURLToPath(
         new URL("./packages/plugin-manager/src/index.ts", import.meta.url),

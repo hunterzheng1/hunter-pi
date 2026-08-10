@@ -33,9 +33,11 @@ import {
 } from "./contracts.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
 import { createPilotRepositoryTargetReceipt } from "./target.js";
-
-const quickApplicableFactCount = 20;
-const quickCapturedFactCount = 19;
+import {
+  capturedPilotWorkflowFactIds,
+  pilotApplicableWorkflowFactCount,
+  quickPilotWorkflowFactSignals,
+} from "./workflow-facts.js";
 
 export class PilotQuickTaskRuntimeError extends Error {
   public constructor(message: string) {
@@ -408,6 +410,30 @@ export async function runPilotQuickTask(
     if (usage.status !== "PASS") {
       throw new PilotQuickTaskRuntimeError("the Quick Provider usage is not exactly accounted");
     }
+    const capturedWorkflowFacts = capturedPilotWorkflowFactIds(
+      quickPilotWorkflowFactSignals({
+        taskIdentityObserved: options.oracle.taskId === options.taskId,
+        repositoryIdentityObserved: options.oracle.repositoryFingerprint.length > 0,
+        targetReferenceObserved: options.oracle.targetReferenceFingerprint.length > 0,
+        sourceIdentityObserved: options.oracle.sourceFingerprint.length > 0,
+        taskDefinitionObserved: options.oracle.taskDefinitionFingerprint.length > 0,
+        acceptanceDefinitionObserved:
+          options.oracle.acceptanceCheckDefinitionFingerprints.length === 1,
+        executionObserved: typeof executionObservation === "string",
+        processFinal: processResult.terminalFinality === "FINAL",
+        processTreeFinal: processResult.processTreeState === "EMPTY",
+        outputFinal: !processResult.outputTruncated,
+        writerLeaseFinal: released,
+        providerRequestUsageObserved: Number.isSafeInteger(usage.requestCount),
+        providerTokenUsageObserved: Number.isSafeInteger(usage.tokenCount),
+        providerCostUsageObserved: Number.isSafeInteger(usage.costMinorUnits),
+        sourcePreservationObserved: typeof sourcePreserved === "boolean",
+        changedPathScopeObserved: typeof pathsWithinScope === "boolean",
+        independentAcceptanceObserved: acceptance.receipt.commandFingerprint.length > 0,
+        acceptanceWorkspacePreservationObserved: typeof acceptancePreservedWorkspace === "boolean",
+        secretLeakageObserved: !processResult.outputTruncated,
+      }),
+    );
     return pilotQuickTaskReceiptSchema.parse({
       receiptId: `quick-receipt-${shortId(`${options.taskId}\0${processResult.stdoutDigest}`)}`,
       taskId: options.oracle.taskId,
@@ -423,8 +449,8 @@ export async function runPilotQuickTask(
       providerCostMinor: usage.costMinorUnits,
       sourcePreserved,
       rawSecretLeakage: false,
-      applicableFactCount: quickApplicableFactCount,
-      capturedFactCount: quickCapturedFactCount,
+      applicableFactCount: pilotApplicableWorkflowFactCount,
+      capturedFactCount: capturedWorkflowFacts.length,
       manualInterventions: 0,
       hunterOverheadMinutes: Math.max(0, monotonicNow() - started - providerRuntimeMs) / 60_000,
       mode: "QUICK",
@@ -443,14 +469,3 @@ export async function runPilotQuickTask(
     if (!released) await release().catch(() => undefined);
   }
 }
-
-export const pilotQuickWorkflowFactChecklist = Object.freeze({
-  schemaVersion: "hpi-pilot-workflow-fact-checklist.v1",
-  applicableFactCount: quickApplicableFactCount,
-  quickCapturedFactCount,
-  identity: "task/source/target/check/process/finality/usage/acceptance/safety/measurement",
-});
-
-export const pilotQuickWorkflowFactChecklistFingerprint = pilotFingerprint(
-  pilotQuickWorkflowFactChecklist,
-);

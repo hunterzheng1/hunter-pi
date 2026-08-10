@@ -15,7 +15,9 @@ export {
   pilotCaptureManagedTaskInputV1Schema,
   pilotCaptureManagedTaskInputV2Schema,
   pilotCaptureQuickTaskInputSchema,
+  pilotCaptureQuickTaskInputV1Schema,
   pilotCaptureRawComparatorInputSchema,
+  pilotCaptureRawComparatorInputV1Schema,
   pilotCaptureNextActionSchema,
   pilotCaptureObservationSchema,
   pilotCaptureOpenInputSchema,
@@ -25,11 +27,7 @@ export {
   type FilePilotCaptureCoordinatorOptions,
   type PilotCaptureCoordinatorErrorCode,
   type PilotCaptureManagedTaskInput,
-  type PilotCaptureQuickTaskExecutionContext,
-  type PilotCaptureQuickTaskExecutor,
   type PilotCaptureQuickTaskInput,
-  type PilotCaptureRawComparatorExecutionContext,
-  type PilotCaptureRawComparatorExecutor,
   type PilotCaptureRawComparatorInput,
   type PilotCaptureNextAction,
   type PilotCaptureObservation,
@@ -42,5 +40,7 @@ export * from "./evaluator.js";
 export * from "./plan.js";
 export * from "./quick-task-runtime.js";
 export * from "./raw-comparator-runtime.js";
+export * from "./runtime-binding.js";
 export * from "./serialization.js";
 export * from "./target.js";
+export * from "./workflow-facts.js";

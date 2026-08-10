@@ -22,7 +22,11 @@ import {
 } from "@hunter-pi/managed-change";
 import { FileRunArchiveStore, FileWorkflowEventStore } from "@hunter-pi/evidence";
 import { DurableWorkflowKernel } from "@hunter-pi/workflow-kernel";
-import { PilotPlanCompiler } from "@hunter-pi/pilot";
+import {
+  PilotPlanCompiler,
+  createPilotRuntimeBinding,
+  pilotQuickWorkflowFactChecklistFingerprint,
+} from "@hunter-pi/pilot";
 import {
   acknowledgeProviderDisclosure,
   createDefaultHpiConfiguration,
@@ -39,6 +43,22 @@ import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
+const pilotArtifactFingerprint = `sha256:${"8".repeat(64)}`;
+const pilotSourceCommit = "d".repeat(40);
+
+function pilotRuntimeBindingForFixture() {
+  return createPilotRuntimeBinding({
+    sourceCommit: pilotSourceCommit,
+    artifactFingerprint: pilotArtifactFingerprint,
+    enginePackageName: "@earendil-works/pi-coding-agent",
+    engineVersion: "0.83.0",
+    providerId: "openai-codex",
+    modelId: "gpt-5.6-sol",
+    configuredOrigin: "https://provider-managed.example",
+    pristineOrigin: "https://provider-managed.example",
+    credentialSource: "stored",
+  });
+}
 const qualifiedPiSuccessScript = [
   "const fs = require('node:fs');",
   "fs.writeFileSync('result.txt', 'READY\\n');",
@@ -97,10 +117,13 @@ async function createCliFixture(): Promise<{
     writeStdout: (text: string) => stdout.push(text),
     writeStderr: (text: string) => stderr.push(text),
   };
-  const sourceCommit = "d".repeat(40);
+  const sourceCommit = pilotSourceCommit;
   const dependencies: HpiCliDependencies = {
     cwd: repository,
-    environment: { HUNTER_PI_HOME: join(root, "profile") },
+    environment: {
+      HUNTER_PI_HOME: join(root, "profile"),
+      HUNTER_PI_PORTABLE_ROOT: root,
+    },
     homeDirectory: root,
     io,
     now: () => "2026-08-06T00:00:10.000Z",
@@ -131,7 +154,36 @@ async function createCliFixture(): Promise<{
       }),
     readTextFile: (path) => readFile(path, "utf8"),
   };
-  await writeFile(join(root, "core-extension.js"), coreSource, "utf8");
+  const runtimeBinding = pilotRuntimeBindingForFixture();
+  await Promise.all([
+    writeFile(join(root, "core-extension.js"), coreSource, "utf8"),
+    writeFile(
+      join(root, "portable-manifest.json"),
+      JSON.stringify({
+        schemaVersion: "hpi-windows-portable.v2",
+        product: "Hunter Pi",
+        platform: "win32-x64",
+        nodeVersion: process.versions.node,
+        sourceCommit,
+        sourceState: "CLEAN",
+        updateChannel: "developer-preview",
+        installer: "PORTABLE_DIRECTORY",
+        signed: false,
+        releaseId: "release_hunter-pi-fixture",
+        productVersion: "0.1.0-dev.0",
+        engineReleaseId: "engine-release_pi-0.83.0",
+        engineReleaseFingerprint: runtimeBinding.engineReleaseFingerprint,
+        artifactFingerprint: runtimeBinding.artifactFingerprint,
+        artifactByteLength: 1,
+        versionDirectory: "versions/release_hunter-pi-fixture",
+        cliPackageFingerprint: `sha256:${"c".repeat(64)}`,
+        productShellIntegrity: `sha256:${"e".repeat(64)}`,
+        coreExtensionIntegrity: coreIntegrity,
+        nodeRuntimeIntegrity: `sha256:${"f".repeat(64)}`,
+      }),
+      "utf8",
+    ),
+  ]);
   await saveHpiConfiguration(
     resolveHpiPaths({ env: dependencies.environment, homeDirectory: dependencies.homeDirectory }),
     {
@@ -386,10 +438,27 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     const requestPath = join(root, "quick-request.json");
     const pilotPlanPath = join(root, "quick-pilot-plan.json");
     const input = completePilotPlanInput();
+    const runtimeBinding = pilotRuntimeBindingForFixture();
     const taskDefinitionFingerprint = fingerprintRealManagedChangeTaskDefinition(request);
     const checkDefinitionFingerprint = fingerprintRealManagedChangeCheckDefinition(request);
     const pilotPlan = new PilotPlanCompiler().compile({
       ...input,
+      sourceFingerprint: runtimeBinding.sourceFingerprint,
+      artifactFingerprint: runtimeBinding.artifactFingerprint,
+      engineReleaseFingerprint: runtimeBinding.engineReleaseFingerprint,
+      workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      machineProfile: {
+        ...input.machineProfile,
+        sourceFingerprint: runtimeBinding.sourceFingerprint,
+        hunterReleaseFingerprint: runtimeBinding.artifactFingerprint,
+        engineReleaseFingerprint: runtimeBinding.engineReleaseFingerprint,
+      },
+      operatorScope: {
+        ...input.operatorScope,
+        providerEndpointFingerprint: runtimeBinding.providerEndpointFingerprint,
+        providerModelFingerprint: runtimeBinding.providerModelFingerprint,
+        credentialScopeFingerprint: runtimeBinding.credentialScopeFingerprint,
+      },
       repositoryTargets: input.repositoryTargets.map((candidate) =>
         candidate.targetId === target.targetId
           ? {
@@ -481,7 +550,7 @@ describe("hpi change command", { timeout: 30_000 }, () => {
       { ...dependencies, runTask6Process },
     );
 
-    expect(exitCode, io.stderr.join("\n")).toBe(0);
+    expect(exitCode, [...io.stderr, ...io.stdout].join("\n")).toBe(0);
     expect(JSON.parse(io.stdout.join(""))).toMatchObject({
       outcome: "RECORDED",
       status: {

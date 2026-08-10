@@ -122,13 +122,15 @@ async function createFixture(): Promise<{
   return { root, repository, leaseRoot, request, oracle };
 }
 
-function qualifiedProcessResult(): Task6PiProcessResult {
+function qualifiedProcessResult(
+  eventTypes: string[] = ["message_end", "agent_end", "agent_settled"],
+): Task6PiProcessResult {
   return {
     exitCode: 0,
     timedOut: false,
     framingValid: true,
-    eventTypes: ["message_end", "agent_end"],
-    recordCount: 2,
+    eventTypes,
+    recordCount: eventTypes.length,
     stdoutDigest: fixtureFingerprint,
     stderrDigest: fixtureFingerprint,
     capturedBytes: 100,
@@ -326,6 +328,37 @@ describe("product-derived Quick task runtime", () => {
     expect(receipt).not.toHaveProperty("terminalOutcome");
     expect(runProcess).toHaveBeenCalledOnce();
     expect(beforeProviderSend).toHaveBeenCalledOnce();
+  });
+
+  it("does not report RETURNED when the Pi 0.83 settled event is missing", async () => {
+    const fixture = await createFixture();
+    const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
+
+    const receipt = await runPilotQuickTask({
+      taskId: fixture.oracle.taskId,
+      repository: fixture.repository,
+      request: fixture.request,
+      oracle: fixture.oracle,
+      launchPlan: {
+        executable: process.execPath,
+        arguments: ["pi-cli.js"],
+        cwd: fixture.repository,
+        environment: {},
+      },
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
+        await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
+        return qualifiedProcessResult(["message_end", "agent_end"]);
+      },
+      commandRunner: passingCommandRunner(),
+      writerLeaseManager: leaseManager,
+      writerLeaseOwnerFingerprint: fixtureFingerprint,
+      environmentFingerprint: fixtureFingerprint,
+      runtimeConfigurationFingerprint: fixtureFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
+    });
+
+    expect(receipt.executionObservation).toBe("NOT_PROVEN");
   });
 
   it("records failed acceptance when the Agent mutates an undeclared path", async () => {
@@ -619,6 +652,45 @@ describe("product-derived raw Pi comparator runtime", () => {
       outputState: "CLOSED",
       leaseState: "RELEASED",
     });
+  });
+
+  it("does not report RETURNED when a complete Pi 0.83 settled tail repeats", async () => {
+    const fixture = await createFixture();
+    const leaseManager = await createFileLeaseManager({ leaseRoot: fixture.leaseRoot });
+
+    const comparator = await runPilotRawComparator({
+      taskId: fixture.oracle.taskId,
+      repository: fixture.repository,
+      request: fixture.request,
+      oracle: fixture.oracle,
+      hunterResult: hunterResult(fixture.oracle),
+      launchPlan: {
+        executable: process.execPath,
+        arguments: isolatedRawArguments(),
+        cwd: fixture.repository,
+        environment: {},
+      },
+      runProcess: async (_request, boundary) => {
+        await authorizeProviderSend(boundary);
+        await writeFile(join(fixture.repository, "result.txt"), "accepted\n", "utf8");
+        return qualifiedProcessResult([
+          "message_end",
+          "agent_end",
+          "agent_settled",
+          "agent_end",
+          "agent_settled",
+        ]);
+      },
+      commandRunner: passingCommandRunner(),
+      writerLeaseManager: leaseManager,
+      writerLeaseOwnerFingerprint: fixtureFingerprint,
+      environmentFingerprint: fixtureFingerprint,
+      comparatorConfigurationFingerprint: fixtureFingerprint,
+      workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+      beforeProviderSend: () => Promise.resolve(),
+    });
+
+    expect(comparator.executionObservation).toBe("NOT_PROVEN");
   });
 
   it("derives contained false completion when raw Pi returns but acceptance fails", async () => {

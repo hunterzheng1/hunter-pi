@@ -66,6 +66,7 @@ export {
 } from "./product-launcher.js";
 export { LfOnlyNdjsonDecoder } from "./ndjson.js";
 export {
+  hasExactPiAgentCompletion,
   piProviderUsageReasonSchema,
   piProviderUsageSchema,
   type PiProviderUsage,

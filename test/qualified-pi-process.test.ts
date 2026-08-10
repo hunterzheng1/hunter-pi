@@ -168,13 +168,14 @@ describe("qualified Pi JSON process runner", () => {
     const result = await runRecords([
       { type: "message_end", message: { role: "assistant", usage: validUsage } },
       { type: "agent_end" },
+      { type: "agent_settled" },
     ]);
 
     expect(result).toMatchObject({
       exitCode: 0,
       timedOut: false,
       framingValid: true,
-      eventTypes: ["message_end", "agent_end"],
+      eventTypes: ["message_end", "agent_end", "agent_settled"],
       providerUsage: {
         status: "PASS",
         requestCount: 1,
@@ -187,6 +188,78 @@ describe("qualified Pi JSON process runner", () => {
       terminalFinality: "FINAL",
       processTreeState: "EMPTY",
       leaseState: "RELEASED",
+    });
+  });
+
+  it("accepts the exact Pi 0.83 agent_end then agent_settled terminal sequence", async () => {
+    const result = await runRecords([
+      { type: "message_end", message: { role: "assistant", usage: validUsage } },
+      { type: "agent_end" },
+      { type: "agent_settled" },
+    ]);
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      framingValid: true,
+      eventTypes: ["message_end", "agent_end", "agent_settled"],
+      providerUsage: {
+        status: "PASS",
+        requestCount: 1,
+        tokenCount: 165,
+        costMinorUnits: 1,
+        reasons: [],
+      },
+      terminalFinality: "FINAL",
+      processTreeState: "EMPTY",
+      leaseState: "RELEASED",
+    });
+  });
+
+  it("accounts every assistant request before the exact Pi 0.83 settled tail", async () => {
+    const result = await runRecords([
+      { type: "message_end", message: { role: "assistant", usage: validUsage } },
+      { type: "message_end", message: { role: "assistant", usage: validUsage } },
+      { type: "agent_end" },
+      { type: "agent_settled" },
+    ]);
+
+    expect(result.providerUsage).toEqual({
+      status: "PASS",
+      requestCount: 2,
+      tokenCount: 330,
+      costMinorUnits: 1,
+      reasons: [],
+    });
+  });
+
+  it.each([
+    ["missing agent_settled", ["message_end", "agent_end"]],
+    ["reversed terminal events", ["message_end", "agent_settled", "agent_end"]],
+    ["duplicate agent_settled", ["message_end", "agent_end", "agent_settled", "agent_settled"]],
+    ["agent_end after settlement", ["message_end", "agent_end", "agent_settled", "agent_end"]],
+    [
+      "a repeated complete terminal pair",
+      ["message_end", "agent_end", "agent_settled", "agent_end", "agent_settled"],
+    ],
+    [
+      "a stray settlement before the complete terminal pair",
+      ["message_end", "agent_settled", "agent_end", "agent_settled"],
+    ],
+  ])("fails closed for a Pi 0.83 stream with %s", async (_label, eventTypes) => {
+    const result = await runRecords(
+      eventTypes.map((type) =>
+        type === "message_end"
+          ? { type, message: { role: "assistant", usage: validUsage } }
+          : { type },
+      ),
+    );
+
+    expect(result.providerUsage).toEqual({
+      status: "NOT_PROVEN",
+      requestCount: null,
+      tokenCount: null,
+      costMinorUnits: null,
+      reasons: ["EVENT_STREAM_INCOMPLETE"],
     });
   });
 
@@ -254,6 +327,7 @@ describe("qualified Pi JSON process runner", () => {
         message: { role: "assistant", usage: { ...validUsage, totalTokens: 166 } },
       },
       { type: "agent_end" },
+      { type: "agent_settled" },
     ]);
 
     expect(result.providerUsage).toEqual({
@@ -275,6 +349,7 @@ describe("qualified Pi JSON process runner", () => {
         },
       },
       { type: "agent_end" },
+      { type: "agent_settled" },
     ]);
 
     expect(result.providerUsage).toEqual({
@@ -286,10 +361,28 @@ describe("qualified Pi JSON process runner", () => {
     });
   });
 
-  it("fails closed unless agent_end terminates the complete event stream", async () => {
+  it("fails closed unless the exact Pi 0.83 tail terminates the complete event stream", async () => {
     const result = await runRecords([
       { type: "agent_end" },
+      { type: "agent_settled" },
       { type: "message_end", message: { role: "assistant", usage: validUsage } },
+    ]);
+
+    expect(result.providerUsage).toEqual({
+      status: "NOT_PROVEN",
+      requestCount: null,
+      tokenCount: null,
+      costMinorUnits: null,
+      reasons: ["EVENT_STREAM_INCOMPLETE"],
+    });
+  });
+
+  it("fails closed when any event follows the exact Pi 0.83 settled tail", async () => {
+    const result = await runRecords([
+      { type: "message_end", message: { role: "assistant", usage: validUsage } },
+      { type: "agent_end" },
+      { type: "agent_settled" },
+      { type: "unexpected_after_settlement" },
     ]);
 
     expect(result.providerUsage).toEqual({
@@ -350,6 +443,7 @@ describe("qualified Pi JSON process runner", () => {
     const records = [
       { type: "message_end", message: { role: "assistant", usage: validUsage } },
       { type: "agent_end" },
+      { type: "agent_settled" },
     ];
     const script = [
       "const fs=process.getBuiltinModule('node:fs')",
@@ -426,6 +520,7 @@ describe("qualified Pi JSON process runner", () => {
     const records = [
       { type: "message_end", message: { role: "assistant", usage: validUsage } },
       { type: "agent_end" },
+      { type: "agent_settled" },
     ];
     const script = `for (const record of ${JSON.stringify(records)}) process.stdout.write(JSON.stringify(record)+'\\n')`;
     const request = {
@@ -472,6 +567,7 @@ describe("qualified Pi JSON process runner", () => {
         type: "agent_end",
         messages: [{ role: "assistant", usage: validUsage }],
       },
+      { type: "agent_settled" },
     ]);
 
     expect(result.providerUsage).toEqual({

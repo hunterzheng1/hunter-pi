@@ -23,7 +23,11 @@ import {
   realManagedChangeRequestSchema,
   type RealManagedChangeRequest,
 } from "@hunter-pi/managed-change";
-import type { PiLaunchPlan, Task6PiProcessRunner } from "@hunter-pi/pi-host";
+import {
+  hasExactPiAgentCompletion,
+  type PiLaunchPlan,
+  type Task6PiProcessRunner,
+} from "@hunter-pi/pi-host";
 import { observeControlledCommand, type ProcessRunner } from "@hunter-pi/verification";
 
 import {
@@ -414,7 +418,7 @@ export async function runPilotQuickTask(
       : processResult.exitCode !== 0
         ? "PROCESS_ERROR"
         : processResult.framingValid &&
-            processResult.eventTypes.at(-1) === "agent_end" &&
+            hasExactPiAgentCompletion(processResult.eventTypes) &&
             processResult.providerUsage.status === "PASS"
           ? "RETURNED"
           : "NOT_PROVEN";

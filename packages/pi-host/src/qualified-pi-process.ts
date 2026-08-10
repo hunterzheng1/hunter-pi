@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { URL } from "node:url";
 
 import {
   createFileLeaseManager,
   createLocalManagedProcessHost,
   leaseAcquireRequestSchema,
   leaseReleaseRequestSchema,
+  managedProcessCancelRequestSchema,
   managedProcessSessionIdSchema,
   managedProcessStartRequestSchema,
   type ManagedProcessFinalReceipt,
@@ -21,6 +23,7 @@ import {
 
 import {
   task6PiProcessResultSchema,
+  type Task6PiProcessRunner,
   type Task6PiProcessRequest,
   type Task6PiProcessResult,
 } from "./task6-engine-host.js";
@@ -36,8 +39,10 @@ export class QualifiedPiProcessBlockedError extends Error {
   public readonly reason:
     | "LEASE_CONFLICT"
     | "PROCESS_FINALITY_NOT_PROVEN"
+    | "FORCED_INTERRUPTION_NOT_PROVEN"
     | "RUNTIME_CONFIGURATION_NOT_PROVEN"
-    | "RUNTIME_SNAPSHOT_CLEANUP_FAILED";
+    | "RUNTIME_SNAPSHOT_CLEANUP_FAILED"
+    | "LEASE_RELEASE_NOT_PROVEN";
 
   public constructor(reason: QualifiedPiProcessBlockedError["reason"], message: string) {
     super(message);
@@ -55,12 +60,53 @@ function shortFingerprint(value: string): string {
 }
 
 function inheritedEnvironment(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] =>
-        entry[1] !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(entry[0]),
-    ),
-  );
+  const inherited: Record<string, string> = {};
+  for (const name of [
+    "SystemRoot",
+    "WINDIR",
+    "ComSpec",
+    "PATHEXT",
+    "PATH",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "USERPROFILE",
+    "LANG",
+    "LC_ALL",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS",
+  ] as const) {
+    const value = process.env[name];
+    if (value !== undefined) inherited[name] = value;
+  }
+  return inherited;
+}
+
+function removeCredentialedProxyEnvironment(
+  environment: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(environment)) {
+    if (name === "HTTP_PROXY" || name === "HTTPS_PROXY") {
+      try {
+        const parsed = new URL(value);
+        if (
+          (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+          parsed.username !== "" ||
+          parsed.password !== ""
+        ) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    sanitized[name] = value;
+  }
+  return sanitized;
 }
 
 interface QualifiedPiRuntimeSnapshot {
@@ -100,6 +146,7 @@ async function readExactOptionalFile(path: string): Promise<Buffer | undefined> 
 async function prepareQualifiedPiRuntimeSnapshot(
   leaseRoot: string,
   environment: Readonly<Record<string, string>>,
+  selectedProvider: string | undefined,
 ): Promise<QualifiedPiRuntimeSnapshot> {
   const snapshotsRoot = join(dirname(resolve(leaseRoot)), "pi-runtime-snapshots");
   let directory: string | undefined;
@@ -134,35 +181,13 @@ async function prepareQualifiedPiRuntimeSnapshot(
       }
     }
 
-    const sourceSettings =
-      sourceDirectory === undefined
-        ? undefined
-        : await readExactOptionalFile(join(sourceDirectory, "settings.json"));
-    let settings: Record<string, unknown> = {};
-    if (sourceSettings !== undefined) {
-      try {
-        const parsed: unknown = JSON.parse(sourceSettings.toString("utf8"));
-        if (!isPlainObject(parsed)) throw new Error("settings root is not an object");
-        settings = parsed;
-      } catch {
-        throw new QualifiedPiProcessBlockedError(
-          "RUNTIME_CONFIGURATION_NOT_PROVEN",
-          "the Pi runtime settings cannot be snapshotted safely",
-        );
-      }
-    }
-    const retry = isPlainObject(settings["retry"]) ? settings["retry"] : {};
-    const provider = isPlainObject(retry["provider"]) ? retry["provider"] : {};
-    const compaction = isPlainObject(settings["compaction"]) ? settings["compaction"] : {};
     const boundedSettings = {
-      ...settings,
       retry: {
-        ...retry,
         enabled: false,
         maxRetries: 0,
-        provider: { ...provider, maxRetries: 0 },
+        provider: { maxRetries: 0 },
       },
-      compaction: { ...compaction, enabled: false },
+      compaction: { enabled: false },
     };
     await writeFile(join(directory, "settings.json"), `${JSON.stringify(boundedSettings)}\n`, {
       flag: "wx",
@@ -170,11 +195,60 @@ async function prepareQualifiedPiRuntimeSnapshot(
     });
 
     if (sourceDirectory !== undefined) {
-      for (const filename of ["auth.json", "models.json"] as const) {
-        const content = await readExactOptionalFile(join(sourceDirectory, filename));
-        if (content !== undefined) {
-          await writeFile(join(directory, filename), content, { flag: "wx", mode: 0o600 });
+      const auth = await readExactOptionalFile(join(sourceDirectory, "auth.json"));
+      const models = await readExactOptionalFile(join(sourceDirectory, "models.json"));
+      if ((auth !== undefined || models !== undefined) && selectedProvider === undefined) {
+        throw new QualifiedPiProcessBlockedError(
+          "RUNTIME_CONFIGURATION_NOT_PROVEN",
+          "the selected Provider is unavailable for the bounded Pi runtime snapshot",
+        );
+      }
+      if (auth !== undefined && selectedProvider !== undefined) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(auth.toString("utf8"));
+        } catch {
+          parsed = undefined;
         }
+        if (!isPlainObject(parsed)) {
+          throw new QualifiedPiProcessBlockedError(
+            "RUNTIME_CONFIGURATION_NOT_PROVEN",
+            "the Pi authentication store cannot be snapshotted safely",
+          );
+        }
+        const selectedCredential = parsed[selectedProvider];
+        await writeFile(
+          join(directory, "auth.json"),
+          `${JSON.stringify(
+            selectedCredential === undefined ? {} : { [selectedProvider]: selectedCredential },
+          )}\n`,
+          { flag: "wx", mode: 0o600 },
+        );
+      }
+      if (models !== undefined && selectedProvider !== undefined) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(models.toString("utf8"));
+        } catch {
+          parsed = undefined;
+        }
+        if (!isPlainObject(parsed) || !isPlainObject(parsed["providers"])) {
+          throw new QualifiedPiProcessBlockedError(
+            "RUNTIME_CONFIGURATION_NOT_PROVEN",
+            "the Pi model store cannot be snapshotted safely",
+          );
+        }
+        const selectedConfiguration = parsed["providers"][selectedProvider];
+        await writeFile(
+          join(directory, "models.json"),
+          `${JSON.stringify({
+            providers:
+              selectedConfiguration === undefined
+                ? {}
+                : { [selectedProvider]: selectedConfiguration },
+          })}\n`,
+          { flag: "wx", mode: 0o600 },
+        );
       }
     }
     return {
@@ -200,6 +274,25 @@ async function prepareQualifiedPiRuntimeSnapshot(
   }
 }
 
+function selectedProviderFromPlan(request: Task6PiProcessRequest): string | undefined {
+  const providers: string[] = [];
+  for (let index = 0; index < request.plan.arguments.length; index += 1) {
+    if (request.plan.arguments[index] !== "--provider") continue;
+    const provider = request.plan.arguments[index + 1];
+    if (provider !== undefined && provider.length > 0) providers.push(provider);
+  }
+  const pinnedProvider = request.plan.environment["HUNTER_PI_PINNED_PROVIDER"];
+  if (pinnedProvider !== undefined) providers.push(pinnedProvider);
+  const unique = [...new Set(providers)];
+  if (unique.length > 1) {
+    throw new QualifiedPiProcessBlockedError(
+      "RUNTIME_CONFIGURATION_NOT_PROVEN",
+      "the qualified Pi plan contains conflicting Provider selections",
+    );
+  }
+  return unique[0];
+}
+
 async function removeQualifiedPiRuntimeSnapshot(
   snapshot: QualifiedPiRuntimeSnapshot,
 ): Promise<void> {
@@ -218,6 +311,7 @@ function resultFromManagedProcess(
   stdout: Buffer,
   stderr: Buffer,
   maximumOutputBytes: number,
+  forcedInterruption?: Task6PiProcessResult["interruption"],
 ): Task6PiProcessResult {
   const outputTruncated = finalReceipt.truncated;
   let eventTypes: string[] = [];
@@ -232,7 +326,12 @@ function resultFromManagedProcess(
       const decoder = new LfOnlyNdjsonDecoder(maximumOutputBytes);
       const records = [...decoder.push(stdout), ...decoder.finish()];
       recordCount = records.length;
-      providerUsage = accountPiProviderUsage(records, "TRANSPORT_RETRIES_DISABLED");
+      providerUsage = accountPiProviderUsage(
+        records,
+        forcedInterruption !== undefined
+          ? "TRANSPORT_RETRIES_DISABLED_AND_AGENT_END_MARKER"
+          : "TRANSPORT_RETRIES_DISABLED",
+      );
       eventTypes = records.flatMap((record) => {
         const type = Reflect.get(record, "type");
         return typeof type === "string" ? [type] : [];
@@ -253,10 +352,33 @@ function resultFromManagedProcess(
     capturedBytes: finalReceipt.retainedBytes,
     outputTruncated,
     providerUsage,
+    ...(forcedInterruption === undefined ? {} : { interruption: forcedInterruption }),
     terminalFinality: finalReceipt.terminalFinality,
     processTreeState: finalReceipt.processTreeState,
     leaseState: finalReceipt.leaseState,
   });
+}
+
+async function waitForExactInterruptionMarker(
+  host: ReturnType<typeof createLocalManagedProcessHost>,
+  sessionId: string,
+  nonce: string,
+  maximumOutputBytes: number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const expectedLine = `HPI_AGENT_END_MARKER:${nonce}`;
+  while (!signal.aborted && Date.now() <= deadline) {
+    const output = await readManagedOutput(host, sessionId, maximumOutputBytes);
+    if (output.stderr.toString("utf8").split("\n").includes(expectedLine)) return;
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  if (signal.aborted) return;
+  throw new QualifiedPiProcessBlockedError(
+    "FORCED_INTERRUPTION_NOT_PROVEN",
+    "the qualified Pi interruption boundary was not observed before its deadline",
+  );
 }
 
 function withContainment(result: Task6PiProcessResult, containment: string): Task6PiProcessResult {
@@ -264,6 +386,14 @@ function withContainment(result: Task6PiProcessResult, containment: string): Tas
     ...result,
     containment,
   });
+}
+
+function hasExactManagedProcessFinality(receipt: ManagedProcessFinalReceipt): boolean {
+  return (
+    receipt.terminalFinality === "FINAL" &&
+    receipt.processTreeState === "EMPTY" &&
+    receipt.outputState === "CLOSED"
+  );
 }
 
 async function readManagedOutput(
@@ -288,7 +418,7 @@ async function readManagedOutput(
 
 export async function createQualifiedPiJsonProcess(
   options: QualifiedPiJsonProcessOptions,
-): Promise<(request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>> {
+): Promise<Task6PiProcessRunner> {
   await mkdir(options.leaseRoot, { recursive: true });
   const now = options.now ?? (() => new Date().toISOString());
   const leaseManager = await createFileLeaseManager({
@@ -300,10 +430,11 @@ export async function createQualifiedPiJsonProcess(
   );
   let invocation = 0;
 
-  return async (request: Task6PiProcessRequest): Promise<Task6PiProcessResult> => {
+  return async (request, boundary): Promise<Task6PiProcessResult> => {
     invocation += 1;
     const suffix = shortFingerprint(
       JSON.stringify({
+        ownerFingerprint,
         invocation,
         cwd: request.plan.cwd,
         executable: request.plan.executable,
@@ -352,7 +483,7 @@ export async function createQualifiedPiJsonProcess(
     }
 
     const release = async (): Promise<void> => {
-      await leaseManager.release(
+      const released = await leaseManager.release(
         leaseReleaseRequestSchema.parse({
           schemaVersion: "hpi-lease-release.v1",
           operationId: releaseOperationId,
@@ -362,6 +493,12 @@ export async function createQualifiedPiJsonProcess(
           bindingFingerprint: null,
         }),
       );
+      if (released.receipt.outcome !== "RELEASED") {
+        throw new QualifiedPiProcessBlockedError(
+          "LEASE_RELEASE_NOT_PROVEN",
+          "the qualified Pi process lease was not released exactly",
+        );
+      }
     };
 
     let runtimeSnapshot: QualifiedPiRuntimeSnapshot | undefined;
@@ -369,11 +506,30 @@ export async function createQualifiedPiJsonProcess(
     const sessionId = managedProcessSessionIdSchema.parse(`process_pi-${suffix}`);
     const operationId = operationIdSchema.parse(`op_pi-start-${suffix}`);
     let releaseNeeded = true;
+    let managedProcessFinalityProven = false;
+    let finalizeManagedProcessAfterFailure: (() => Promise<boolean>) | undefined;
     try {
       runtimeSnapshot = await prepareQualifiedPiRuntimeSnapshot(
         options.leaseRoot,
         request.plan.environment,
+        selectedProviderFromPlan(request),
       );
+      const forcedInterruptionNonce =
+        request.forcedInterruption === undefined ? undefined : randomUUID();
+      const interruptionResult =
+        request.forcedInterruption === undefined
+          ? undefined
+          : request.forcedInterruption === "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION"
+            ? ("TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END" as const)
+            : request.forcedInterruption === "AFTER_AGENT_END_POWER_LOSS_SIMULATION"
+              ? ("POWER_LOSS_SIMULATION_AFTER_AGENT_END" as const)
+              : ("FORCED_PROCESS_KILL_AFTER_AGENT_END" as const);
+      const interruptionCancelReason =
+        request.forcedInterruption === "AFTER_AGENT_END_POWER_LOSS_SIMULATION"
+          ? ("TIMEOUT" as const)
+          : request.forcedInterruption === "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION"
+            ? ("USER_REQUEST" as const)
+            : ("POLICY" as const);
       const processRequest = managedProcessStartRequestSchema.parse({
         schemaVersion: "hpi-process-start.v1",
         operationId,
@@ -382,7 +538,15 @@ export async function createQualifiedPiJsonProcess(
         executable: request.plan.executable,
         argv: [...request.plan.arguments, "--mode", "json", "--no-session", request.prompt],
         cwd: request.plan.cwd,
-        environment: { ...inheritedEnvironment(), ...runtimeSnapshot.environment },
+        environment: removeCredentialedProxyEnvironment({
+          ...inheritedEnvironment(),
+          ...runtimeSnapshot.environment,
+          ...(forcedInterruptionNonce === undefined
+            ? {}
+            : {
+                HUNTER_PI_INTERRUPTION_NONCE: forcedInterruptionNonce,
+              }),
+        }),
         timeoutMs: request.timeoutMs,
         maxOutputBytes: request.maximumOutputBytes,
         // The qualified-process lease is held by this adapter for the entire
@@ -390,29 +554,111 @@ export async function createQualifiedPiJsonProcess(
         // and terminal finality; it does not own this outer workspace slot.
         leases: [],
       });
+      await boundary?.beforeExternalOperation();
       const started = await host.start(processRequest);
-      const final = await host.awaitFinal(started.receipt.sessionId);
-      const output = await readManagedOutput(host, sessionId, request.maximumOutputBytes);
-      const result = resultFromManagedProcess(
-        final.receipt,
-        output.stdout,
-        output.stderr,
-        request.maximumOutputBytes,
-      );
-      if (final.receipt.terminalFinality !== "FINAL") {
-        throw new QualifiedPiProcessBlockedError(
-          "PROCESS_FINALITY_NOT_PROVEN",
-          "the qualified Pi process did not reach reconciled terminal finality",
+      let cancellationRequested = false;
+      const finalPromise = host.awaitFinal(started.receipt.sessionId).then((final) => {
+        managedProcessFinalityProven = hasExactManagedProcessFinality(final.receipt);
+        return final;
+      });
+      const finalizeAfterFailure = async (): Promise<boolean> => {
+        if (managedProcessFinalityProven) return true;
+        try {
+          if (!cancellationRequested) {
+            await host.cancel(
+              managedProcessCancelRequestSchema.parse({
+                schemaVersion: "hpi-process-cancel.v1",
+                operationId: operationIdSchema.parse(`op_pi-cleanup-${suffix}`),
+                operationFingerprint: sha256(`hpi-qualified-pi-cleanup\0${suffix}`),
+                sessionId,
+                reason: "POLICY",
+              }),
+            );
+          }
+          const cleanupFinal = await host.awaitFinal(sessionId);
+          managedProcessFinalityProven = hasExactManagedProcessFinality(cleanupFinal.receipt);
+        } catch {
+          managedProcessFinalityProven = false;
+        }
+        return managedProcessFinalityProven;
+      };
+      finalizeManagedProcessAfterFailure = finalizeAfterFailure;
+      let result: Task6PiProcessResult;
+      try {
+        let forcedInterruptionProven = false;
+        if (forcedInterruptionNonce !== undefined) {
+          const boundaryAbort = new AbortController();
+          const boundary = waitForExactInterruptionMarker(
+            host,
+            sessionId,
+            forcedInterruptionNonce,
+            request.maximumOutputBytes,
+            request.timeoutMs,
+            boundaryAbort.signal,
+          );
+          const winner = await Promise.race([
+            boundary.then(() => "MARKER" as const),
+            finalPromise.then(() => "FINAL" as const),
+          ]);
+          boundaryAbort.abort();
+          if (winner !== "MARKER") {
+            throw new QualifiedPiProcessBlockedError(
+              "FORCED_INTERRUPTION_NOT_PROVEN",
+              "the qualified Pi process ended before the forced interruption boundary",
+            );
+          }
+          const cancelled = await host.cancel(
+            managedProcessCancelRequestSchema.parse({
+              schemaVersion: "hpi-process-cancel.v1",
+              operationId: operationIdSchema.parse(`op_pi-cancel-${suffix}`),
+              operationFingerprint: sha256(`hpi-qualified-pi-cancel\0${suffix}`),
+              sessionId,
+              reason: interruptionCancelReason,
+            }),
+          );
+          if (cancelled.receipt.outcome !== "ACKNOWLEDGED") {
+            throw new QualifiedPiProcessBlockedError(
+              "FORCED_INTERRUPTION_NOT_PROVEN",
+              "the qualified Pi process did not acknowledge the forced interruption",
+            );
+          }
+          cancellationRequested = true;
+          forcedInterruptionProven = true;
+        }
+        const final = await finalPromise;
+        const output = await readManagedOutput(host, sessionId, request.maximumOutputBytes);
+        result = resultFromManagedProcess(
+          final.receipt,
+          output.stdout,
+          output.stderr,
+          request.maximumOutputBytes,
+          forcedInterruptionProven ? interruptionResult : undefined,
         );
+        if (final.receipt.terminalFinality !== "FINAL") {
+          throw new QualifiedPiProcessBlockedError(
+            "PROCESS_FINALITY_NOT_PROVEN",
+            "the qualified Pi process did not reach reconciled terminal finality",
+          );
+        }
+      } catch (error) {
+        if (!(await finalizeAfterFailure())) {
+          throw new QualifiedPiProcessBlockedError(
+            "PROCESS_FINALITY_NOT_PROVEN",
+            "the qualified Pi process could not be finalized after an adapter failure",
+          );
+        }
+        throw error;
       }
       await release();
       releaseNeeded = false;
       return withContainment({ ...result, leaseState: "RELEASED" }, started.receipt.containment);
     } finally {
-      if (releaseNeeded) {
+      const processSafeToRelease =
+        finalizeManagedProcessAfterFailure === undefined || managedProcessFinalityProven;
+      if (releaseNeeded && processSafeToRelease) {
         await release().catch(() => undefined);
       }
-      if (runtimeSnapshot !== undefined) {
+      if (runtimeSnapshot !== undefined && processSafeToRelease) {
         await removeQualifiedPiRuntimeSnapshot(runtimeSnapshot);
       }
     }

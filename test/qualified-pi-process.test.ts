@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   QualifiedPiProcessBlockedError,
@@ -63,6 +63,78 @@ async function runRecords(
 }
 
 describe("qualified Pi JSON process runner", () => {
+  it("does not spawn the default process when the external-operation boundary rejects", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-default-boundary-");
+    cleanupRoots.push(root);
+    const beforeExternalOperation = vi.fn(() => Promise.reject(new Error("authorization denied")));
+
+    await expect(
+      runTask6PiJsonProcess(
+        {
+          plan: {
+            executable: process.execPath,
+            arguments: [
+              "-e",
+              "require('node:fs').writeFileSync('spawned.txt', 'unexpected')",
+              "--",
+            ],
+            cwd: root,
+            environment: { HUNTER_PI_MODE: "MANAGED" },
+          },
+          prompt: "Do not send this input.",
+          timeoutMs: 30_000,
+          maximumOutputBytes: 32_768,
+        },
+        { beforeExternalOperation },
+      ),
+    ).rejects.toThrow("authorization denied");
+    await expect(readFile(join(root, "spawned.txt"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(beforeExternalOperation).toHaveBeenCalledOnce();
+  });
+
+  it("reaches authorization again from a new runner after a clean pre-boundary failure", async () => {
+    const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-qualified-retry-");
+    cleanupRoots.push(root);
+    const workspace = join(root, "workspace");
+    const leaseRoot = join(root, "leases");
+    await Promise.all([mkdir(workspace), mkdir(leaseRoot)]);
+    const request = {
+      plan: {
+        executable: process.execPath,
+        arguments: ["-e", "process.exit(0)", "--"],
+        cwd: workspace,
+        environment: { HUNTER_PI_MODE: "MANAGED" },
+      },
+      prompt: "Retry the bounded fixture operation.",
+      timeoutMs: 30_000,
+      maximumOutputBytes: 32_768,
+    };
+    const firstRunner = await createQualifiedPiJsonProcess({
+      leaseRoot,
+      now: () => "2026-08-06T00:00:10.000Z",
+    });
+
+    await expect(
+      firstRunner(request, {
+        beforeExternalOperation: () => Promise.reject(new Error("first authorization unavailable")),
+      }),
+    ).rejects.toThrow("first authorization unavailable");
+
+    const secondAuthorization = vi.fn(() =>
+      Promise.reject(new Error("second authorization reached")),
+    );
+    const secondRunner = await createQualifiedPiJsonProcess({
+      leaseRoot,
+      now: () => "2026-08-06T00:00:20.000Z",
+    });
+    await expect(
+      secondRunner(request, { beforeExternalOperation: secondAuthorization }),
+    ).rejects.toThrow("second authorization reached");
+    expect(secondAuthorization).toHaveBeenCalledOnce();
+  });
+
   it("does not trust Provider usage until hidden transport retries are proven disabled", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-unqualified-process-");
     cleanupRoots.push(root);
@@ -117,6 +189,63 @@ describe("qualified Pi JSON process runner", () => {
       leaseState: "RELEASED",
     });
   });
+
+  it.each([
+    ["AFTER_AGENT_END_PROCESS_KILL", "FORCED_PROCESS_KILL_AFTER_AGENT_END", false],
+    [
+      "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION",
+      "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+      false,
+    ],
+    ["AFTER_AGENT_END_POWER_LOSS_SIMULATION", "POWER_LOSS_SIMULATION_AFTER_AGENT_END", true],
+  ] as const)(
+    "finalizes the qualified Pi tree for %s and retains exact usage",
+    async (forcedInterruption, expectedInterruption, expectedTimedOut) => {
+      const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-qualified-interrupt-");
+      cleanupRoots.push(root);
+      const workspace = join(root, "workspace");
+      const leaseRoot = join(root, "leases");
+      await Promise.all([mkdir(workspace), mkdir(leaseRoot)]);
+      const runProcess = await createQualifiedPiJsonProcess({ leaseRoot });
+      const script = [
+        "const fs=process.getBuiltinModule('node:fs')",
+        `process.stdout.write(JSON.stringify(${JSON.stringify({
+          type: "message_end",
+          message: { role: "assistant", usage: validUsage },
+        })})+'\\n')`,
+        "process.stderr.write('HPI_AGENT_END_MARKER:'+process.env.HUNTER_PI_INTERRUPTION_NONCE+'\\n')",
+        "setInterval(()=>{},1000)",
+      ].join(";");
+
+      const result = await runProcess({
+        plan: {
+          executable: process.execPath,
+          arguments: ["-e", script, "--"],
+          cwd: workspace,
+          environment: {},
+        },
+        prompt: "Apply the bounded fixture change.",
+        timeoutMs: 30_000,
+        maximumOutputBytes: 32_768,
+        forcedInterruption,
+      });
+
+      expect(result).toMatchObject({
+        interruption: expectedInterruption,
+        timedOut: expectedTimedOut,
+        terminalFinality: "FINAL",
+        processTreeState: "EMPTY",
+        leaseState: "RELEASED",
+        providerUsage: {
+          status: "PASS",
+          requestCount: 1,
+          tokenCount: 165,
+          costMinorUnits: 1,
+        },
+      });
+      expect(result.eventTypes).toEqual(["message_end"]);
+    },
+  );
 
   it("fails closed when the Provider token total disagrees with its components", async () => {
     const result = await runRecords([
@@ -195,8 +324,24 @@ describe("qualified Pi JSON process runner", () => {
       "utf8",
     );
     await Promise.all([
-      writeFile(join(agentDirectory, "auth.json"), '{"fixture":"auth"}\n', "utf8"),
-      writeFile(join(agentDirectory, "models.json"), '{"fixture":"models"}\n', "utf8"),
+      writeFile(
+        join(agentDirectory, "auth.json"),
+        JSON.stringify({
+          "fixture-provider": { type: "api_key", key: "selected-secret" },
+          "unrelated-provider": { type: "api_key", key: "must-not-copy" },
+        }),
+        "utf8",
+      ),
+      writeFile(
+        join(agentDirectory, "models.json"),
+        JSON.stringify({
+          providers: {
+            "fixture-provider": { baseUrl: "https://selected.example", models: [] },
+            "unrelated-provider": { baseUrl: "https://unrelated.example", models: [] },
+          },
+        }),
+        "utf8",
+      ),
     ]);
     const runProcess = await createQualifiedPiJsonProcess({
       leaseRoot,
@@ -210,24 +355,36 @@ describe("qualified Pi JSON process runner", () => {
       "const fs=process.getBuiltinModule('node:fs')",
       "const path=process.getBuiltinModule('node:path')",
       "const dir=process.env.PI_CODING_AGENT_DIR",
-      `fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({settings:JSON.parse(fs.readFileSync(path.join(dir,'settings.json'),'utf8')),auth:JSON.parse(fs.readFileSync(path.join(dir,'auth.json'),'utf8')),models:JSON.parse(fs.readFileSync(path.join(dir,'models.json'),'utf8'))}))`,
+      `fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({settings:JSON.parse(fs.readFileSync(path.join(dir,'settings.json'),'utf8')),auth:JSON.parse(fs.readFileSync(path.join(dir,'auth.json'),'utf8')),models:JSON.parse(fs.readFileSync(path.join(dir,'models.json'),'utf8')),ambientSecret:process.env.HPI_AMBIENT_SECRET_FOR_TEST??null,credentialedHttpProxy:process.env.HTTP_PROXY??null,credentialedHttpsProxy:process.env.HTTPS_PROXY??null,noProxy:process.env.NO_PROXY??null}))`,
       `for (const record of ${JSON.stringify(records)}) process.stdout.write(JSON.stringify(record)+'\\n')`,
     ].join(";");
 
-    const result = await runProcess({
-      plan: {
-        executable: process.execPath,
-        arguments: ["-e", script, "--"],
-        cwd: workspace,
-        environment: {
-          HUNTER_PI_MODE: "MANAGED",
-          PI_CODING_AGENT_DIR: agentDirectory,
+    const previousHttpProxy = process.env["HTTP_PROXY"];
+    process.env["HPI_AMBIENT_SECRET_FOR_TEST"] = "must-not-inherit";
+    process.env["HTTP_PROXY"] = "http://proxy-user:proxy-password@proxy.example:8080";
+    let result;
+    try {
+      result = await runProcess({
+        plan: {
+          executable: process.execPath,
+          arguments: ["-e", script, "--", "--provider", "fixture-provider"],
+          cwd: workspace,
+          environment: {
+            HUNTER_PI_MODE: "MANAGED",
+            PI_CODING_AGENT_DIR: agentDirectory,
+            HTTPS_PROXY: "https://proxy-user:proxy-password@proxy.example:8443",
+            NO_PROXY: "localhost,127.0.0.1",
+          },
         },
-      },
-      prompt: "Apply the bounded fixture change.",
-      timeoutMs: 30_000,
-      maximumOutputBytes: 32_768,
-    });
+        prompt: "Apply the bounded fixture change.",
+        timeoutMs: 30_000,
+        maximumOutputBytes: 32_768,
+      });
+    } finally {
+      delete process.env["HPI_AMBIENT_SECRET_FOR_TEST"];
+      if (previousHttpProxy === undefined) delete process.env["HTTP_PROXY"];
+      else process.env["HTTP_PROXY"] = previousHttpProxy;
+    }
 
     expect(result.providerUsage.status).toBe("PASS");
     expect(JSON.parse(await readFile(observationPath, "utf8"))).toEqual({
@@ -235,13 +392,20 @@ describe("qualified Pi JSON process runner", () => {
         retry: {
           enabled: false,
           maxRetries: 0,
-          provider: { maxRetries: 0, maxRetryDelayMs: 60_000 },
+          provider: { maxRetries: 0 },
         },
         compaction: { enabled: false },
-        transport: "sse",
       },
-      auth: { fixture: "auth" },
-      models: { fixture: "models" },
+      auth: { "fixture-provider": { type: "api_key", key: "selected-secret" } },
+      models: {
+        providers: {
+          "fixture-provider": { baseUrl: "https://selected.example", models: [] },
+        },
+      },
+      ambientSecret: null,
+      credentialedHttpProxy: null,
+      credentialedHttpsProxy: null,
+      noProxy: "localhost,127.0.0.1",
     });
     expect(JSON.parse(await readFile(join(agentDirectory, "settings.json"), "utf8"))).toEqual(
       sourceSettings,
@@ -279,21 +443,27 @@ describe("qualified Pi JSON process runner", () => {
       maximumOutputBytes: 32_768,
     };
 
+    const beforeExternalOperation = vi.fn(() => Promise.resolve());
     let failure: unknown;
     try {
-      await runProcess(request);
+      await runProcess(request, { beforeExternalOperation });
     } catch (error) {
       failure = error;
     }
     expect(failure).toBeInstanceOf(QualifiedPiProcessBlockedError);
     expect(failure).toMatchObject({ reason: "RUNTIME_CONFIGURATION_NOT_PROVEN" });
     expect((failure as Error).message).not.toContain(root);
+    expect(beforeExternalOperation).not.toHaveBeenCalled();
 
-    const recovered = await runProcess({
-      ...request,
-      plan: { ...request.plan, environment: { HUNTER_PI_MODE: "MANAGED" } },
-    });
+    const recovered = await runProcess(
+      {
+        ...request,
+        plan: { ...request.plan, environment: { HUNTER_PI_MODE: "MANAGED" } },
+      },
+      { beforeExternalOperation },
+    );
     expect(recovered.providerUsage.status).toBe("PASS");
+    expect(beforeExternalOperation).toHaveBeenCalledOnce();
   });
 
   it("does not double count assistant messages repeated inside agent_end", async () => {

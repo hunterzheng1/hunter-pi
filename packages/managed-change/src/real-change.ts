@@ -1,14 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
-import { lstat, realpath } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { createReadStream } from "node:fs";
+import { lstat, readlink, realpath } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 
 import { z } from "zod";
 
 import {
+  attemptFinalityReceiptSchema,
   attemptIdSchema,
   checkIdSchema,
+  checkpointIdSchema,
+  distributionReleaseIdSchema,
+  engineReleaseIdSchema,
   evidenceEnvelopeSchema,
   evidenceIdSchema,
   fingerprintSchema,
@@ -21,6 +26,7 @@ import {
   runSchema,
   stepIdSchema,
   verificationReceiptIdSchema,
+  verificationOutcomeSchema,
   workspaceIdSchema,
   writerLeaseIdSchema,
   type EvidenceEnvelope,
@@ -29,6 +35,7 @@ import {
   type PlanRevision,
   type ReviewFinding,
   type Run,
+  type VerificationReceipt,
 } from "@hunter-pi/domain";
 import {
   leaseAcquireRequestSchema,
@@ -55,12 +62,19 @@ import {
 } from "@hunter-pi/evidence";
 import { runDeclaredCommandVerification } from "@hunter-pi/verification";
 import {
+  CheckpointCoordinator,
   DurableWorkflowKernel,
   InMemoryWorkflowKernel,
+  RecoveryCoordinator,
   runProjectionSchema,
   type RunProjection,
   type WorkflowKernel,
 } from "@hunter-pi/workflow-kernel";
+
+import {
+  realManagedChangePilotExecutionFor,
+  type RealManagedChangeProviderReservation,
+} from "./pilot-execution-runtime.js";
 
 const terminalSafeTextSchema = z
   .string()
@@ -257,7 +271,7 @@ const providerEvidenceSchema = providerEvidenceV2Schema.extend({
   usage: providerUsageEvidenceSchema,
 });
 
-export const realManagedChangeTaskReceiptSchema = z.strictObject({
+export const realManagedChangeTaskReceiptV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v1"),
   runId: runSchema.shape.runId,
   repositoryFingerprint: fingerprintSchema,
@@ -273,6 +287,125 @@ export const realManagedChangeTaskReceiptSchema = z.strictObject({
   reviewP0P1Count: safeNonnegativeIntegerSchema,
   overheadMs: safeNonnegativeIntegerSchema,
 });
+export type RealManagedChangeTaskReceiptV1 = z.infer<typeof realManagedChangeTaskReceiptV1Schema>;
+
+export const realManagedChangeTaskReceiptV2Schema = realManagedChangeTaskReceiptV1Schema
+  .omit({ schemaVersion: true })
+  .safeExtend({
+    schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v2"),
+    taskDefinitionFingerprint: fingerprintSchema,
+  });
+export type RealManagedChangeTaskReceiptV2 = z.infer<typeof realManagedChangeTaskReceiptV2Schema>;
+
+export const realManagedChangeInterruptionKindSchema = z.enum([
+  "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+  "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+  "POWER_LOSS_SIMULATION_AFTER_AGENT_END",
+]);
+export type RealManagedChangeInterruptionKind = z.infer<
+  typeof realManagedChangeInterruptionKindSchema
+>;
+
+export const realManagedChangeTaskReceiptV3Schema = realManagedChangeTaskReceiptV2Schema
+  .omit({ schemaVersion: true })
+  .safeExtend({
+    schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v3"),
+    interruptionKind: realManagedChangeInterruptionKindSchema.nullable(),
+  });
+
+export const realManagedChangeWorkflowFactIdSchema = z.enum([
+  "TASK_IDENTITY",
+  "REPOSITORY_IDENTITY",
+  "TARGET_REFERENCE_IDENTITY",
+  "SOURCE_IDENTITY",
+  "TASK_DEFINITION",
+  "ACCEPTANCE_DEFINITION",
+  "EXECUTION_OBSERVATION",
+  "PROCESS_FINALITY",
+  "PROCESS_TREE_FINALITY",
+  "OUTPUT_FINALITY",
+  "WRITER_LEASE_FINALITY",
+  "PROVIDER_REQUEST_USAGE",
+  "PROVIDER_TOKEN_USAGE",
+  "PROVIDER_COST_USAGE",
+  "SOURCE_PRESERVATION",
+  "CHANGED_PATH_SCOPE",
+  "INDEPENDENT_ACCEPTANCE",
+  "ACCEPTANCE_WORKSPACE_PRESERVATION",
+  "SECRET_LEAKAGE_OBSERVATION",
+  "ATTEMPT_HISTORY",
+]);
+export type RealManagedChangeWorkflowFactId = z.infer<typeof realManagedChangeWorkflowFactIdSchema>;
+
+export const realManagedChangePilotRuntimeBindingSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-runtime-binding.v1"),
+  sourceFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  engineReleaseFingerprint: fingerprintSchema,
+  providerEndpointFingerprint: fingerprintSchema,
+  providerModelFingerprint: fingerprintSchema,
+  credentialScopeFingerprint: fingerprintSchema,
+});
+
+export const realManagedChangePilotExecutionBindingSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-real-managed-change-pilot-execution-binding.v1"),
+  planFingerprint: fingerprintSchema,
+  taskId: managedChangeTargetIdSchema,
+  targetId: managedChangeTargetIdSchema,
+  captureSessionId: managedChangeTargetIdSchema,
+  captureOperationId: managedChangeTargetIdSchema,
+  acceptanceCheckId: checkIdSchema,
+  runtimeBinding: realManagedChangePilotRuntimeBindingSchema,
+  workflowFactChecklistFingerprint: fingerprintSchema,
+  deliberateFixback: z.boolean(),
+});
+export type RealManagedChangePilotExecutionBinding = z.infer<
+  typeof realManagedChangePilotExecutionBindingSchema
+>;
+
+export const realManagedChangeVerificationHistoryEntrySchema = z.strictObject({
+  attemptId: attemptIdSchema,
+  verificationReceiptId: verificationReceiptIdSchema,
+  checkId: checkIdSchema,
+  outcome: verificationOutcomeSchema,
+  resultFingerprint: fingerprintSchema,
+});
+
+export const realManagedChangeTaskReceiptSchema = realManagedChangeTaskReceiptV3Schema
+  .omit({ schemaVersion: true })
+  .safeExtend({
+    schemaVersion: z.literal("hpi-real-managed-change-task-receipt.v4"),
+    targetId: managedChangeTargetIdSchema,
+    pilotExecutionBinding: realManagedChangePilotExecutionBindingSchema.nullable(),
+    capturedWorkflowFactIds: z
+      .array(realManagedChangeWorkflowFactIdSchema)
+      .min(1)
+      .max(realManagedChangeWorkflowFactIdSchema.options.length),
+    verificationHistory: z.array(realManagedChangeVerificationHistoryEntrySchema).min(1).max(2),
+    failedAttemptPreserved: z.boolean(),
+    fixbackPass: z.boolean(),
+  })
+  .superRefine((receipt, context) => {
+    if (new Set(receipt.capturedWorkflowFactIds).size !== receipt.capturedWorkflowFactIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["capturedWorkflowFactIds"],
+        message: "captured Managed workflow fact identities must be unique",
+      });
+    }
+    if (
+      new Set(receipt.verificationHistory.map((entry) => entry.attemptId)).size !==
+        receipt.verificationHistory.length ||
+      new Set(receipt.verificationHistory.map((entry) => entry.verificationReceiptId)).size !==
+        receipt.verificationHistory.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["verificationHistory"],
+        message: "Managed Verification history identities must be unique",
+      });
+    }
+  });
 export type RealManagedChangeTaskReceipt = z.infer<typeof realManagedChangeTaskReceiptSchema>;
 
 const repositoryEvidenceSchema = z.strictObject({
@@ -458,7 +591,12 @@ export type RealManagedChangeReasonCode =
   | "UNSUPPORTED_PROJECT_PATH"
   | "WORKSPACE_DRIFT"
   | "WORKSPACE_BUSY"
+  | "WORKING_TREE_INSPECTION_BUDGET_EXCEEDED"
   | "TARGET_IDENTITY_MISMATCH"
+  | "INTERRUPTION_NOT_PROVEN"
+  | "PILOT_RUNTIME_BINDING_REQUIRED"
+  | "PILOT_CAPTURE_SESSION_NOT_READY"
+  | "PILOT_PROVIDER_BUDGET_EXHAUSTED"
   | "EXTERNAL_FILTER_CONFIGURED";
 
 export class RealManagedChangeBlockedError extends Error {
@@ -482,6 +620,22 @@ const resourceBudgets = Object.freeze({
 const fixbackProviderReserve = Object.freeze({ tokens: 100_000, costMinorUnits: 500 });
 const outputCaptureLimits = Object.freeze({ engine: 229_376, verification: 16_384 });
 const runTimeoutMs = 300_000;
+const maximumWorkingTreeInspectionLimits = Object.freeze({
+  maximumHashedBytes: 8 * 1_024 * 1_024 * 1_024,
+  maximumElapsedMs: 120_000,
+});
+const workingTreeInspectionLimitsSchema = z.strictObject({
+  maximumHashedBytes: safePositiveIntegerSchema.max(
+    maximumWorkingTreeInspectionLimits.maximumHashedBytes,
+  ),
+  maximumElapsedMs: safePositiveIntegerSchema.max(
+    maximumWorkingTreeInspectionLimits.maximumElapsedMs,
+  ),
+});
+export type RealManagedChangeWorkingTreeInspectionLimits = z.infer<
+  typeof workingTreeInspectionLimitsSchema
+>;
+type WorkingTreeInspectionLimits = RealManagedChangeWorkingTreeInspectionLimits;
 
 function sha256(value: string | Buffer): Fingerprint {
   return fingerprintSchema.parse(`sha256:${createHash("sha256").update(value).digest("hex")}`);
@@ -493,6 +647,35 @@ function idSuffix(value: string): string {
 
 function pilotTargetFingerprint(value: unknown): Fingerprint {
   return sha256Fingerprint(canonicalJson(value));
+}
+
+export function fingerprintRealManagedChangeTaskDefinition(
+  input: RealManagedChangeRequest,
+): Fingerprint {
+  const request = realManagedChangeRequestSchema.parse(input);
+  return sha256Fingerprint(
+    canonicalJson({
+      schemaVersion: "hpi-real-managed-change-task-definition.v1",
+      title: request.title,
+      goal: request.goal,
+      nonGoals: request.nonGoals,
+      constraints: request.constraints,
+      allowedPaths: request.allowedPaths,
+      check: request.check,
+    }),
+  );
+}
+
+export function fingerprintRealManagedChangeCheckDefinition(
+  input: RealManagedChangeRequest,
+): Fingerprint {
+  const request = realManagedChangeRequestSchema.parse(input);
+  return sha256(
+    JSON.stringify({
+      ...request.check,
+      workingDirectoryReference: "workspace-root",
+    }),
+  );
 }
 
 function minimalGitEnvironment(): NodeJS.ProcessEnv {
@@ -540,7 +723,7 @@ function runGitCommand(repository: string, arguments_: readonly string[]): GitCo
     {
       env: minimalGitEnvironment(),
       encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
+      maxBuffer: 64 * 1024 * 1024,
       shell: false,
       windowsHide: true,
     },
@@ -569,6 +752,11 @@ interface GitRepositorySnapshot {
   readonly baseCommit: string;
   readonly baseTree: string;
   readonly status: string;
+  readonly workingTreeStateFingerprint: Fingerprint;
+  readonly ignoredContent: IgnoredContentSnapshot;
+  readonly digestCache: WorkingTreeDigestCache;
+  readonly inspectionLimits: WorkingTreeInspectionLimits;
+  readonly inspectionMonotonicNow: () => number;
   readonly workspaceFingerprint: Fingerprint;
   readonly sourceFingerprint: Fingerprint;
   readonly pilotRepositoryFingerprint: Fingerprint;
@@ -576,7 +764,311 @@ interface GitRepositorySnapshot {
   readonly pilotTargetReferenceFingerprint: Fingerprint;
 }
 
-async function inspectGitRepository(repositoryInput: string): Promise<GitRepositorySnapshot> {
+interface WorkingTreeContentEntry {
+  readonly path: string;
+  readonly kind: "REGULAR_FILE" | "SYMLINK" | "MISSING";
+  readonly mode?: string;
+  readonly digest?: Fingerprint;
+}
+
+interface IgnoredContentSnapshot {
+  readonly fingerprint: Fingerprint;
+  readonly entries: readonly WorkingTreeContentEntry[];
+}
+
+type WorkingTreeDigestCache = Map<
+  string,
+  { readonly statSignature: string; readonly digest: Fingerprint }
+>;
+
+interface WorkingTreeInspectionBudget {
+  readonly maximumHashedBytes: bigint;
+  readonly maximumElapsedMs: number;
+  readonly startedAt: number;
+  readonly monotonicNow: () => number;
+  readonly abortController: AbortController;
+  hashedBytes: bigint;
+}
+
+function workingTreeInspectionBudgetExceeded(message: string): RealManagedChangeBlockedError {
+  return new RealManagedChangeBlockedError("WORKING_TREE_INSPECTION_BUDGET_EXCEEDED", message);
+}
+
+function remainingWorkingTreeInspectionMs(budget: WorkingTreeInspectionBudget): number {
+  const elapsedMs = budget.monotonicNow() - budget.startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > budget.maximumElapsedMs) {
+    budget.abortController.abort();
+    throw workingTreeInspectionBudgetExceeded(
+      "the working-tree inspection exceeds the finite elapsed-time budget",
+    );
+  }
+  return budget.maximumElapsedMs - elapsedMs;
+}
+
+async function withinWorkingTreeInspectionDeadline<T>(
+  budget: WorkingTreeInspectionBudget,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const remainingMs = remainingWorkingTreeInspectionMs(budget);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(
+      () => {
+        budget.abortController.abort();
+        reject(
+          workingTreeInspectionBudgetExceeded(
+            "the working-tree inspection exceeds the finite elapsed-time budget",
+          ),
+        );
+      },
+      Math.max(1, Math.ceil(remainingMs)),
+    );
+  });
+  try {
+    return await Promise.race([operation(), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function reserveWorkingTreeInspectionBytes(
+  budget: WorkingTreeInspectionBudget,
+  bytes: bigint,
+): void {
+  if (budget.hashedBytes + bytes > budget.maximumHashedBytes) {
+    throw workingTreeInspectionBudgetExceeded(
+      "the working-tree content exceeds the finite inspection byte budget",
+    );
+  }
+  budget.hashedBytes += bytes;
+}
+
+function missingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function snapshotWorkingTreePath(
+  repository: string,
+  path: string,
+  digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
+): Promise<WorkingTreeContentEntry> {
+  remainingWorkingTreeInspectionMs(inspectionBudget);
+  const absolutePath = resolve(repository, path);
+  if (!absolutePath.startsWith(`${repository}${sep}`)) {
+    throw new RealManagedChangeBlockedError(
+      "UNSUPPORTED_PROJECT_PATH",
+      "a repository path escaped the selected physical Git root",
+    );
+  }
+  const before = await lstat(absolutePath, { bigint: true }).catch((error: unknown) => {
+    if (missingFile(error)) return undefined;
+    throw error;
+  });
+  remainingWorkingTreeInspectionMs(inspectionBudget);
+  if (before === undefined) {
+    digestCache.delete(absolutePath);
+    return { path, kind: "MISSING" };
+  }
+  if (before.isSymbolicLink()) {
+    const target = await readlink(absolutePath);
+    remainingWorkingTreeInspectionMs(inspectionBudget);
+    reserveWorkingTreeInspectionBytes(inspectionBudget, BigInt(Buffer.byteLength(target, "utf8")));
+    const after = await lstat(absolutePath, { bigint: true });
+    remainingWorkingTreeInspectionMs(inspectionBudget);
+    if (
+      !after.isSymbolicLink() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mtimeNs !== after.mtimeNs
+    ) {
+      throw new RealManagedChangeBlockedError(
+        "WORKSPACE_DRIFT",
+        "a repository link changed while Hunter Pi inspected it",
+      );
+    }
+    return {
+      path,
+      kind: "SYMLINK",
+      mode: String(before.mode),
+      digest: sha256(`hpi-working-tree-symlink.v1\0${target}`),
+    };
+  }
+  if (!before.isFile()) {
+    throw new RealManagedChangeBlockedError(
+      "UNSUPPORTED_PROJECT_PATH",
+      "a changed or ignored repository entry is not a regular file or symbolic link",
+    );
+  }
+  const statSignature = [
+    before.dev,
+    before.ino,
+    before.mode,
+    before.size,
+    before.mtimeNs,
+    before.ctimeNs,
+  ].join(":");
+  const cached = digestCache.get(absolutePath);
+  let digest = cached?.statSignature === statSignature ? cached.digest : undefined;
+  if (digest === undefined) {
+    reserveWorkingTreeInspectionBytes(inspectionBudget, before.size);
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(absolutePath, {
+      signal: inspectionBudget.abortController.signal,
+    })) {
+      remainingWorkingTreeInspectionMs(inspectionBudget);
+      hash.update(chunk as Buffer);
+    }
+    digest = fingerprintSchema.parse(`sha256:${hash.digest("hex")}`);
+  }
+  const after = await lstat(absolutePath, { bigint: true });
+  remainingWorkingTreeInspectionMs(inspectionBudget);
+  if (
+    !after.isFile() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.ctimeNs !== after.ctimeNs
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "WORKSPACE_DRIFT",
+      "a repository file changed while Hunter Pi inspected it",
+    );
+  }
+  digestCache.set(absolutePath, { statSignature, digest });
+  return {
+    path,
+    kind: "REGULAR_FILE",
+    mode: String(before.mode),
+    digest,
+  };
+}
+
+async function snapshotPaths(
+  repository: string,
+  paths: readonly string[],
+  digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
+): Promise<readonly WorkingTreeContentEntry[]> {
+  return withinWorkingTreeInspectionDeadline(inspectionBudget, async () => {
+    const entries: (WorkingTreeContentEntry | undefined)[] = Array.from({ length: paths.length });
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(16, paths.length) }, async () => {
+      while (nextIndex < paths.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const path = paths[index];
+        if (path !== undefined) {
+          entries[index] = await snapshotWorkingTreePath(
+            repository,
+            path,
+            digestCache,
+            inspectionBudget,
+          );
+        }
+      }
+    });
+    await Promise.all(workers);
+    remainingWorkingTreeInspectionMs(inspectionBudget);
+    if (entries.some((entry) => entry === undefined)) {
+      throw new Error("working-tree snapshot did not inspect every bounded path");
+    }
+    return entries.filter((entry): entry is WorkingTreeContentEntry => entry !== undefined);
+  });
+}
+
+function exactGitPaths(raw: string): readonly string[] {
+  const paths = raw
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .map((path) => {
+      const normalized = normalizeRelativePath(path);
+      if (normalized !== path.replaceAll("\\", "/")) {
+        throw new RealManagedChangeBlockedError(
+          "UNSUPPORTED_PROJECT_PATH",
+          "the repository contains a path that cannot be represented exactly",
+        );
+      }
+      return normalized;
+    });
+  if (paths.length > 100_000 || new Set(paths).size !== paths.length) {
+    throw new RealManagedChangeBlockedError(
+      "UNSUPPORTED_PROJECT_PATH",
+      "the ignored-content inventory exceeds the bounded inspection contract",
+    );
+  }
+  return paths.sort((left, right) => left.localeCompare(right));
+}
+
+async function inspectIgnoredContent(
+  repository: string,
+  digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
+): Promise<IgnoredContentSnapshot> {
+  const paths = exactGitPaths(
+    runGit(repository, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
+  );
+  const entries = await snapshotPaths(repository, paths, digestCache, inspectionBudget);
+  return {
+    fingerprint: sha256(
+      JSON.stringify({ schemaVersion: "hpi-ignored-content-snapshot.v1", entries }),
+    ),
+    entries,
+  };
+}
+
+async function fingerprintWorkingTreeState(
+  repository: string,
+  status: string,
+  ignoredContent: IgnoredContentSnapshot,
+  digestCache: WorkingTreeDigestCache,
+  inspectionBudget: WorkingTreeInspectionBudget,
+): Promise<Fingerprint> {
+  const entries = await snapshotPaths(
+    repository,
+    parseChangedPaths(status).paths,
+    digestCache,
+    inspectionBudget,
+  );
+  return sha256(
+    JSON.stringify({
+      schemaVersion: "hpi-real-working-tree-state.v1",
+      status,
+      entries,
+      ignoredContentFingerprint: ignoredContent.fingerprint,
+    }),
+  );
+}
+
+function changedIgnoredPaths(
+  before: IgnoredContentSnapshot,
+  after: IgnoredContentSnapshot,
+): readonly string[] {
+  const beforeByPath = new Map(before.entries.map((entry) => [entry.path, JSON.stringify(entry)]));
+  const afterByPath = new Map(after.entries.map((entry) => [entry.path, JSON.stringify(entry)]));
+  return [...new Set([...beforeByPath.keys(), ...afterByPath.keys()])]
+    .filter((path) => beforeByPath.get(path) !== afterByPath.get(path))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+async function inspectGitRepository(
+  repositoryInput: string,
+  existingDigestCache?: WorkingTreeDigestCache,
+  inspectionLimits: WorkingTreeInspectionLimits = maximumWorkingTreeInspectionLimits,
+  inspectionMonotonicNow: () => number = () => performance.now(),
+): Promise<GitRepositorySnapshot> {
+  const digestCache: WorkingTreeDigestCache =
+    existingDigestCache ??
+    new Map<string, { readonly statSignature: string; readonly digest: Fingerprint }>();
+  const inspectionBudget: WorkingTreeInspectionBudget = {
+    maximumHashedBytes: BigInt(inspectionLimits.maximumHashedBytes),
+    maximumElapsedMs: inspectionLimits.maximumElapsedMs,
+    startedAt: inspectionMonotonicNow(),
+    monotonicNow: inspectionMonotonicNow,
+    abortController: new AbortController(),
+    hashedBytes: 0n,
+  };
   const resolved = resolve(repositoryInput);
   const status = await lstat(resolved).catch(() => undefined);
   if (status === undefined || !status.isDirectory() || status.isSymbolicLink()) {
@@ -630,6 +1122,14 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     "-z",
     "--untracked-files=all",
   ]);
+  const ignoredContent = await inspectIgnoredContent(repository, digestCache, inspectionBudget);
+  const workingTreeStateFingerprint = await fingerprintWorkingTreeState(
+    repository,
+    workspaceStatus,
+    ignoredContent,
+    digestCache,
+    inspectionBudget,
+  );
   const pilotRepositoryFingerprint = pilotTargetFingerprint({
     schemaVersion: "hpi-pilot-repository-identity.v1",
     canonicalRepositoryIdentity: repository,
@@ -659,6 +1159,11 @@ async function inspectGitRepository(repositoryInput: string): Promise<GitReposit
     baseCommit,
     baseTree,
     status: workspaceStatus,
+    workingTreeStateFingerprint,
+    ignoredContent,
+    digestCache,
+    inspectionLimits,
+    inspectionMonotonicNow,
     sourceFingerprint,
     workspaceFingerprint,
     pilotRepositoryFingerprint,
@@ -689,7 +1194,9 @@ function assertWorkspaceBaseline(
   allowDirty: boolean,
 ): void {
   if (
-    (!allowDirty && current.status.length > 0) ||
+    (!allowDirty &&
+      (current.status.length > 0 ||
+        current.workingTreeStateFingerprint !== baseline.workingTreeStateFingerprint)) ||
     current.baseCommit !== baseline.baseCommit ||
     current.sourceFingerprint !== baseline.sourceFingerprint ||
     current.workspaceFingerprint !== baseline.workspaceFingerprint
@@ -706,9 +1213,39 @@ async function assertTargetReadyForAgent(
   target: RealManagedChangeTarget,
   allowDirty: boolean,
 ): Promise<void> {
-  const current = await inspectGitRepository(baseline.repository);
+  const current = await inspectGitRepository(
+    baseline.repository,
+    baseline.digestCache,
+    baseline.inspectionLimits,
+    baseline.inspectionMonotonicNow,
+  );
   assertTargetIdentity(target, current);
   assertWorkspaceBaseline(baseline, current, allowDirty);
+}
+
+async function assertExactWorkspaceState(
+  baseline: GitRepositorySnapshot,
+  target: RealManagedChangeTarget,
+  expectedWorkingTreeStateFingerprint: Fingerprint,
+): Promise<void> {
+  const current = await inspectGitRepository(
+    baseline.repository,
+    baseline.digestCache,
+    baseline.inspectionLimits,
+    baseline.inspectionMonotonicNow,
+  );
+  assertTargetIdentity(target, current);
+  if (
+    current.baseCommit !== baseline.baseCommit ||
+    current.sourceFingerprint !== baseline.sourceFingerprint ||
+    current.workspaceFingerprint !== baseline.workspaceFingerprint ||
+    current.workingTreeStateFingerprint !== expectedWorkingTreeStateFingerprint
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "WORKSPACE_DRIFT",
+      "the exact working-tree content changed outside the bounded operation",
+    );
+  }
 }
 
 function parseChangedPaths(status: string): {
@@ -849,7 +1386,7 @@ function portablePlanText(value: string, repository: string): string {
 
 function makeEvidence(options: {
   readonly evidenceId: string;
-  readonly kind: "observation" | "verification" | "review";
+  readonly kind: "observation" | "verification" | "review" | "checkpoint";
   readonly runId: string;
   readonly attemptId: string;
   readonly verificationReceiptId?: string;
@@ -895,6 +1432,7 @@ interface AgentRunResult {
   readonly closeReceipt: Awaited<ReturnType<EngineHost["close"]>>;
   readonly observations: readonly EngineObservation[];
   readonly evidence: EvidenceEnvelope;
+  readonly runtimeMs: number;
 }
 
 interface ObservedProviderUsage {
@@ -916,9 +1454,17 @@ function sumSafeNonnegativeIntegers(values: readonly number[]): number | undefin
 function observedProviderUsage(
   observations: readonly EngineObservation[],
 ): ObservedProviderUsage | undefined {
-  const agentReturns = observations.filter((candidate) => candidate.kind === "AGENT_RETURNED");
-  if (agentReturns.length !== 1) return undefined;
-  const observation = agentReturns[0];
+  const interruptedUsageObservations = observations.filter(
+    (candidate) =>
+      candidate.kind === "OPERATION_OBSERVED" &&
+      candidate.summary?.startsWith("QualifiedInterruption=") === true,
+  );
+  const usageObservations =
+    interruptedUsageObservations.length > 0
+      ? interruptedUsageObservations
+      : observations.filter((candidate) => candidate.kind === "AGENT_RETURNED");
+  if (usageObservations.length !== 1) return undefined;
+  const observation = usageObservations[0];
   const usage = observation?.resourceUsage;
   if (
     usage?.externalOperations === undefined ||
@@ -940,6 +1486,19 @@ function observedProviderUsage(
   };
 }
 
+function qualifiedInterruptionObserved(
+  observations: readonly EngineObservation[],
+): RealManagedChangeInterruptionKind | undefined {
+  const matches = observations.flatMap((observation) => {
+    if (observation.kind !== "OPERATION_OBSERVED" || observation.summary === undefined) return [];
+    const match = /^QualifiedInterruption=([^;]+);/u.exec(observation.summary);
+    if (match?.[1] === undefined) return [];
+    const parsed = realManagedChangeInterruptionKindSchema.safeParse(match[1]);
+    return parsed.success ? [parsed.data] : [];
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 async function runAgent(options: {
   readonly engineHost: EngineHost;
   readonly kernel: WorkflowKernel;
@@ -951,6 +1510,8 @@ async function runAgent(options: {
   readonly prompt: string;
   readonly now: () => string;
   readonly beforeStart: () => Promise<void>;
+  readonly beforeProviderSend?: () => Promise<RealManagedChangeProviderReservation>;
+  readonly monotonicNow: () => number;
 }): Promise<AgentRunResult> {
   const capabilityReceipt = capabilityReceiptSchema.parse(
     await options.engineHost.probe({
@@ -1012,8 +1573,27 @@ async function runAgent(options: {
     reason: "Bounded Managed Change Agent operation returned.",
   };
   let sendReceipt: Awaited<ReturnType<EngineHost["send"]>>;
+  const runtimeStartedAt = options.monotonicNow();
+  let externalOperationAuthorized = options.beforeProviderSend === undefined;
   try {
-    sendReceipt = await options.engineHost.send(startReceipt.handle, engineInput);
+    sendReceipt = await options.engineHost.send(
+      startReceipt.handle,
+      engineInput,
+      options.beforeProviderSend === undefined
+        ? undefined
+        : {
+            beforeExternalOperation: async () => {
+              await options.beforeProviderSend?.();
+              externalOperationAuthorized = true;
+            },
+          },
+    );
+    if (!externalOperationAuthorized) {
+      throw new RealManagedChangeBlockedError(
+        "PILOT_RUNTIME_BINDING_REQUIRED",
+        "the Engine Host did not honor the required pre-send pilot authorization boundary",
+      );
+    }
   } catch (error: unknown) {
     try {
       await options.engineHost.close(startReceipt.handle, closeRequest);
@@ -1070,6 +1650,266 @@ async function runAgent(options: {
     closeReceipt,
     observations,
     evidence,
+    runtimeMs: Math.max(0, options.monotonicNow() - runtimeStartedAt),
+  };
+}
+
+async function recoverInterruptedManagedAttempt(options: {
+  readonly kernel: WorkflowKernel;
+  readonly run: Run;
+  readonly plan: PlanRevision;
+  readonly firstAgent: AgentRunResult;
+  readonly writerLease: RealWriterLease;
+  readonly engineHost: EngineHost;
+  readonly repository: GitRepositorySnapshot;
+  readonly target: RealManagedChangeTarget;
+  readonly distributionReleaseId: string;
+  readonly engineRelease: RunRealManagedChangeOptions["engineRelease"];
+  readonly prompt: string;
+  readonly now: () => string;
+  readonly elapsedMs: number;
+}): Promise<{
+  readonly recoveryAttemptId: AttemptId;
+  readonly evidence: readonly EvidenceEnvelope[];
+  readonly interruptedWorkingTreeStateFingerprint: Fingerprint;
+}> {
+  if (options.firstAgent.sendReceipt.outcome !== "UNKNOWN") {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "the interrupted Agent operation did not preserve an UNKNOWN operation Receipt",
+    );
+  }
+  const interruptedWorkspace = await inspectGitRepository(
+    options.repository.repository,
+    options.repository.digestCache,
+    options.repository.inspectionLimits,
+    options.repository.inspectionMonotonicNow,
+  );
+  assertTargetIdentity(options.target, interruptedWorkspace);
+  if (
+    interruptedWorkspace.baseCommit !== options.repository.baseCommit ||
+    interruptedWorkspace.sourceFingerprint !== options.repository.sourceFingerprint ||
+    interruptedWorkspace.workspaceFingerprint !== options.repository.workspaceFingerprint
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "the interrupted Agent changed the frozen repository identity",
+    );
+  }
+  const checkpointId = checkpointIdSchema.parse(
+    `checkpoint_real-${idSuffix(`${options.run.runId}\0${options.firstAgent.attemptId}`)}`,
+  );
+  const engineReleaseId = engineReleaseIdSchema.parse(
+    `engine-release_real-${idSuffix(
+      `${options.engineRelease.packageName}\0${options.engineRelease.version}`,
+    )}`,
+  );
+  const engineReleaseFingerprint = sha256Fingerprint(
+    canonicalJson({
+      schemaVersion: "hpi-real-engine-release.v1",
+      packageName: options.engineRelease.packageName,
+      version: options.engineRelease.version,
+    }),
+  );
+  const checkpoint = await new CheckpointCoordinator({
+    kernel: options.kernel,
+    policy: { everyEvents: 1, everyElapsedMs: 1 },
+    capture: {
+      capture: ({ projection, now }) => {
+        const attempt = projection.attempts.at(-1);
+        if (attempt?.attemptId !== options.firstAgent.attemptId) {
+          throw new Error("interrupted Checkpoint does not bind the active Attempt");
+        }
+        return Promise.resolve({
+          checkpointId,
+          distributionReleaseId: distributionReleaseIdSchema.parse(options.distributionReleaseId),
+          repositoryFingerprint: options.target.repositoryFingerprint,
+          engine: {
+            engineReleaseId,
+            engineReleaseFingerprint,
+            resumeCapability: "UNSUPPORTED" as const,
+          },
+          activeOperationReceiptIds: [options.firstAgent.sendReceipt.operationReceiptId],
+          unknownOperationIds: [options.firstAgent.sendReceipt.operationId],
+          heldWriterLeaseIds: [options.writerLease.leaseId],
+          processReferences: [],
+          remainingResourceBudgets: attempt.remainingResourceBudgets,
+          createdAt: now,
+        });
+      },
+    },
+    now: options.now,
+  }).maybeRecord(options.run.runId, { force: true });
+  if (checkpoint.outcome !== "RECORDED" || checkpoint.checkpointId !== checkpointId) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "the interrupted Managed Attempt did not produce one exact Checkpoint",
+    );
+  }
+
+  const releasedLease = await options.writerLease.release();
+  if (
+    releasedLease.outcome !== "RELEASED" ||
+    releasedLease.state !== "RELEASED" ||
+    releasedLease.leaseId !== options.writerLease.leaseId
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "the interrupted Managed Attempt did not release its exact Writer Lease",
+    );
+  }
+  const evidence: EvidenceEnvelope[] = [];
+  const finalityEvidence = makeEvidence({
+    evidenceId: "evidence_real-finality-1",
+    kind: "checkpoint",
+    runId: options.run.runId,
+    attemptId: options.firstAgent.attemptId,
+    createdAt: releasedLease.observedAt,
+    sourceFingerprint: options.plan.sourceFingerprint,
+    summary: "The interrupted Attempt reached final process and Writer Lease state.",
+    content: canonicalJson({
+      schemaVersion: "hpi-real-interrupted-finality.v1",
+      checkpointId,
+      operationReceiptId: options.firstAgent.sendReceipt.operationReceiptId,
+      closeReceipt: options.firstAgent.closeReceipt,
+      releasedLease,
+    }),
+    repository: options.repository.repository,
+    prompt: options.prompt,
+  });
+  evidence.push(finalityEvidence);
+  const finalityReceipt = attemptFinalityReceiptSchema.parse({
+    schemaVersion: "1.0.0",
+    attemptFinalityReceiptId: `finality_real-${idSuffix(checkpointId)}`,
+    runId: options.run.runId,
+    attemptId: options.firstAgent.attemptId,
+    checkpointId,
+    workspaceId: options.plan.workspaceId,
+    workspaceFingerprint: options.plan.workspaceFingerprint,
+    sourceFingerprint: options.plan.sourceFingerprint,
+    processFinalities: [],
+    releasedWriterLeaseIds: [options.writerLease.leaseId],
+    terminalFinality: "FINAL",
+    evidenceIds: [finalityEvidence.evidenceId],
+    observedAt: releasedLease.observedAt,
+  });
+  const recoveryAttemptId = attemptIdSchema.parse("att_real-2");
+  const recoveryOperationId = operationIdSchema.parse("op_real-recovery-1");
+  const recoveryOperationFingerprint = sha256Fingerprint(
+    canonicalJson({
+      schemaVersion: "hpi-real-recovery-operation.v1",
+      runId: options.run.runId,
+      checkpointId,
+      recoveryAttemptId,
+    }),
+  );
+  const firstUsage = observedProviderUsage(options.firstAgent.observations);
+  if (firstUsage === undefined) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "the interrupted Managed Attempt has no exact Provider usage for recovery",
+    );
+  }
+  const recovery = await new RecoveryCoordinator({
+    kernel: options.kernel,
+    reconciler: {
+      revalidateDistributionRelease: (candidate) =>
+        Promise.resolve({
+          status: "PASS" as const,
+          identity: {
+            kind: "DISTRIBUTION_RELEASE" as const,
+            distributionReleaseId: candidate.distributionReleaseId,
+          },
+        }),
+      revalidateWorkspace: async (candidate) => {
+        await assertExactWorkspaceState(
+          options.repository,
+          options.target,
+          interruptedWorkspace.workingTreeStateFingerprint,
+        );
+        return {
+          status: "PASS" as const,
+          identity: {
+            kind: "WORKSPACE" as const,
+            workspaceId: candidate.workspaceId,
+            repositoryFingerprint: candidate.repositoryFingerprint,
+            workspaceFingerprint: candidate.workspaceFingerprint,
+            sourceFingerprint: candidate.sourceFingerprint,
+          },
+        };
+      },
+      reconcileOperations: async (candidate) => {
+        const receipt = await options.engineHost.reconcile({
+          schemaVersion: "1.0.0",
+          operationId: options.firstAgent.sendReceipt.operationId,
+          fingerprint: options.firstAgent.sendReceipt.fingerprint,
+        });
+        return {
+          activeOperationReceiptIds: candidate.activeOperationReceiptIds,
+          unknownOperationIds: candidate.unknownOperationIds,
+          receipts: [receipt],
+        };
+      },
+      reconcileAttemptFinality: () => Promise.resolve(finalityReceipt),
+      reconcileEngine: (candidate) =>
+        Promise.resolve({
+          status: "PASS" as const,
+          identity: {
+            kind: "ENGINE" as const,
+            engineReleaseId: candidate.engine.engineReleaseId,
+            engineReleaseFingerprint: candidate.engine.engineReleaseFingerprint,
+          },
+        }),
+    },
+    captureEvidence: {
+      capture: (request) => {
+        const fingerprint = sha256Fingerprint(canonicalJson(request));
+        const recoveryEvidence = makeEvidence({
+          evidenceId: "evidence_real-recovery-1",
+          kind: "observation",
+          runId: options.run.runId,
+          attemptId: options.firstAgent.attemptId,
+          createdAt: request.createdAt,
+          sourceFingerprint: options.plan.sourceFingerprint,
+          summary: "The interrupted Attempt was reconciled before same-Run recovery.",
+          content: canonicalJson(request),
+          repository: options.repository.repository,
+          prompt: options.prompt,
+        });
+        evidence.push(recoveryEvidence);
+        return Promise.resolve({ evidenceId: recoveryEvidence.evidenceId, fingerprint });
+      },
+    },
+    now: options.now,
+  }).recover(checkpointId, {
+    attemptId: recoveryAttemptId,
+    operationId: recoveryOperationId,
+    operationFingerprint: recoveryOperationFingerprint,
+    elapsedMs: Math.max(0, Math.round(options.elapsedMs)),
+    consumedResources: {
+      agentTurns: 1,
+      externalOperations: 3,
+      commands: 0,
+      outputBytes: options.firstAgent.observations.reduce(
+        (total, observation) => total + (observation.resourceUsage?.outputBytes ?? 0),
+        0,
+      ),
+      tokens: firstUsage.tokenCount,
+      costMinorUnits: firstUsage.costMinorUnits,
+    },
+    startedAt: options.now(),
+  });
+  if (recovery.status !== "RECOVERED" || recovery.recoveryAttemptId !== recoveryAttemptId) {
+    const detail = recovery.status === "NOT_PROVEN" ? recovery.reasons.join(",") : recovery.status;
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      `the interrupted Managed Attempt did not pass exact same-Run reconciliation (${detail})`,
+    );
+  }
+  return {
+    recoveryAttemptId,
+    evidence,
+    interruptedWorkingTreeStateFingerprint: interruptedWorkspace.workingTreeStateFingerprint,
   };
 }
 
@@ -1094,6 +1934,94 @@ function finalSummary(projection: RunProjection): RealManagedChangeEvidence["fin
   };
 }
 
+function assertExactDurablePreSendAttempt(options: {
+  readonly projection: RunProjection;
+  readonly change: z.infer<typeof managedChangeSchema>;
+  readonly plan: PlanRevision;
+  readonly run: Run;
+  readonly attemptId: AttemptId;
+}): void {
+  const { projection, change, plan, run, attemptId } = options;
+  const {
+    createdAt: existingChangeCreatedAt,
+    lifecycle: existingChangeLifecycle,
+    ...existingChange
+  } = projection.change;
+  const {
+    createdAt: expectedChangeCreatedAt,
+    lifecycle: expectedChangeLifecycle,
+    ...expectedChange
+  } = change;
+  const { createdAt: existingPlanCreatedAt, ...existingPlan } = projection.planRevision;
+  const { createdAt: expectedPlanCreatedAt, ...expectedPlan } = plan;
+  const {
+    startedAt: existingRunStartedAt,
+    lifecycle: existingRunLifecycle,
+    ...existingRun
+  } = projection.run;
+  const { startedAt: expectedRunStartedAt, lifecycle: expectedRunLifecycle, ...expectedRun } = run;
+  const attempt = projection.attempts[0];
+  const { startedAt: existingAttemptStartedAt, ...existingAttempt } = attempt ?? {
+    startedAt: "",
+  };
+  const expectedAttempt = {
+    schemaVersion: "1.0.0",
+    attemptId,
+    runId: run.runId,
+    planRevisionId: plan.planRevisionId,
+    sequence: 1,
+    elapsedMsAtStart: 0,
+    remainingResourceBudgets: plan.loopPolicy.resourceBudgets,
+    executionStatus: "RUNNING",
+    verificationStatus: "NOT_READY",
+  };
+  const expectedChecks = plan.checks.map((check) => ({
+    schemaVersion: "1.0.0",
+    checkId: check.checkId,
+    required: check.required,
+    status: "NOT_RUN",
+  }));
+  const exactPreSendState =
+    existingChangeCreatedAt.length > 0 &&
+    expectedChangeCreatedAt.length > 0 &&
+    existingPlanCreatedAt.length > 0 &&
+    expectedPlanCreatedAt.length > 0 &&
+    existingRunStartedAt.length > 0 &&
+    expectedRunStartedAt.length > 0 &&
+    existingAttemptStartedAt.length > 0 &&
+    existingChangeLifecycle === "RUNNING" &&
+    existingRunLifecycle === "RUNNING" &&
+    expectedChangeLifecycle === "PLANNED" &&
+    expectedRunLifecycle === "PLANNED" &&
+    canonicalJson(existingChange) === canonicalJson(expectedChange) &&
+    canonicalJson(existingPlan) === canonicalJson(expectedPlan) &&
+    canonicalJson(existingRun) === canonicalJson(expectedRun) &&
+    projection.attempts.length === 1 &&
+    canonicalJson(existingAttempt) === canonicalJson(expectedAttempt) &&
+    projection.observations.length === 0 &&
+    projection.attemptFinalityReceipts.length === 0 &&
+    projection.verificationReceipts.length === 0 &&
+    projection.humanReceipts.length === 0 &&
+    projection.reviewReceipts.length === 0 &&
+    projection.checkpoints.length === 0 &&
+    canonicalJson(projection.checks) === canonicalJson(expectedChecks) &&
+    projection.eventCursor === 2;
+  if (!exactPreSendState) {
+    throw new RealManagedChangeBlockedError(
+      "WORKSPACE_DRIFT",
+      "the existing durable Managed Run is not the exact retryable pre-send Attempt",
+    );
+  }
+}
+
+const realPilotInterruptionSchema = z.strictObject({
+  runIdentity: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u),
+  forcedInterruption: realManagedChangeInterruptionKindSchema.optional(),
+});
+
 export interface RunRealManagedChangeOptions {
   readonly repository: string;
   readonly request: RealManagedChangeRequest;
@@ -1111,16 +2039,78 @@ export interface RunRealManagedChangeOptions {
     readonly distributionReleaseId: string;
     readonly operationId: string;
   };
+  readonly pilotInterruption?: {
+    readonly runIdentity: string;
+    readonly forcedInterruption?: RealManagedChangeInterruptionKind;
+  };
+  readonly pilotExecutionRuntime?: unknown;
   readonly now?: () => string;
   readonly monotonicNow?: () => number;
+  readonly workingTreeInspectionLimits?: RealManagedChangeWorkingTreeInspectionLimits;
 }
 
 export async function runRealManagedChange(
   options: RunRealManagedChangeOptions,
 ): Promise<RealManagedChangeEvidence> {
   const inputRequest = realManagedChangeRequestSchema.parse(options.request);
+  const pilotInterruption =
+    options.pilotInterruption === undefined
+      ? undefined
+      : realPilotInterruptionSchema.parse(options.pilotInterruption);
+  const pilotExecution =
+    options.pilotExecutionRuntime === undefined
+      ? undefined
+      : realManagedChangePilotExecutionFor(options.pilotExecutionRuntime, options.engineHost);
+  if (options.pilotExecutionRuntime !== undefined && pilotExecution === undefined) {
+    throw new RealManagedChangeBlockedError(
+      "PILOT_RUNTIME_BINDING_REQUIRED",
+      "pilot execution requires the bundled one-shot runtime bound to this exact Engine Host",
+    );
+  }
+  const pilotExecutionBinding =
+    pilotExecution === undefined
+      ? undefined
+      : realManagedChangePilotExecutionBindingSchema.parse(pilotExecution.binding);
+  if (
+    pilotExecutionBinding !== undefined &&
+    pilotExecutionBinding.targetId !== inputRequest.target.targetId
+  ) {
+    throw new RealManagedChangeBlockedError(
+      "TARGET_IDENTITY_MISMATCH",
+      "the pilot execution binding does not match the request target identity",
+    );
+  }
+  let pilotProviderReservation: RealManagedChangeProviderReservation | undefined;
+  const beforePilotProviderSend =
+    pilotExecution === undefined
+      ? undefined
+      : async (): Promise<RealManagedChangeProviderReservation> => {
+          const reservation = await pilotExecution.beforeProviderSend();
+          if (
+            pilotProviderReservation !== undefined &&
+            (pilotProviderReservation.requests !== reservation.requests ||
+              pilotProviderReservation.tokens !== reservation.tokens ||
+              pilotProviderReservation.costMinor !== reservation.costMinor)
+          ) {
+            throw new RealManagedChangeBlockedError(
+              "PILOT_PROVIDER_BUDGET_EXHAUSTED",
+              "the durable pilot Provider reservation changed during one Managed Run",
+            );
+          }
+          pilotProviderReservation = reservation;
+          return reservation;
+        };
+  if (pilotExecutionBinding?.deliberateFixback === true && pilotInterruption !== undefined) {
+    throw new RealManagedChangeBlockedError(
+      "INTERRUPTION_NOT_PROVEN",
+      "a deliberate Verification fixback task cannot also be an interruption-recovery task",
+    );
+  }
   const now = options.now ?? (() => new Date().toISOString());
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  const workingTreeInspectionLimits = workingTreeInspectionLimitsSchema.parse(
+    options.workingTreeInspectionLimits ?? maximumWorkingTreeInspectionLimits,
+  );
   const overheadStartedAt = monotonicNow();
   if (!options.providerAuthConfigured) {
     throw new RealManagedChangeBlockedError(
@@ -1137,7 +2127,12 @@ export async function runRealManagedChange(
       "the Managed Change requires an exact clean stamped Hunter Pi product",
     );
   }
-  const snapshot = await inspectGitRepository(options.repository);
+  const snapshot = await inspectGitRepository(
+    options.repository,
+    undefined,
+    workingTreeInspectionLimits,
+    monotonicNow,
+  );
   assertTargetIdentity(inputRequest.target, snapshot);
   if (snapshot.status.length > 0) {
     throw new RealManagedChangeBlockedError(
@@ -1174,6 +2169,22 @@ export async function runRealManagedChange(
       request,
       baseCommit: snapshot.baseCommit,
       sourceFingerprint: snapshot.sourceFingerprint,
+      ...(pilotInterruption === undefined
+        ? {}
+        : {
+            pilotRunIdentity: pilotInterruption.runIdentity,
+          }),
+      ...(pilotExecutionBinding === undefined
+        ? {}
+        : {
+            pilotExecutionIdentity: {
+              planFingerprint: pilotExecutionBinding.planFingerprint,
+              taskId: pilotExecutionBinding.taskId,
+              captureSessionId: pilotExecutionBinding.captureSessionId,
+              captureOperationId: pilotExecutionBinding.captureOperationId,
+              acceptanceCheckId: pilotExecutionBinding.acceptanceCheckId,
+            },
+          }),
     }),
   );
   const createdAt = now();
@@ -1193,12 +2204,7 @@ export async function runRealManagedChange(
       allowedPaths: request.allowedPaths,
     }),
   );
-  const checkDefinitionFingerprint = sha256(
-    JSON.stringify({
-      ...request.check,
-      workingDirectoryReference: "workspace-root",
-    }),
-  );
+  const checkDefinitionFingerprint = fingerprintRealManagedChangeCheckDefinition(request);
   const checkConfigurationFingerprint = sha256(
     JSON.stringify({
       allowedPaths: request.allowedPaths,
@@ -1206,6 +2212,8 @@ export async function runRealManagedChange(
       maximumOutputBytes: outputCaptureLimits.verification,
     }),
   );
+  const realCheckId =
+    pilotExecutionBinding?.acceptanceCheckId ?? checkIdSchema.parse("check_real-command");
   const plan = planRevisionSchema.parse({
     schemaVersion: "1.0.0",
     planRevisionId: `plan_real-${suffix}`,
@@ -1242,7 +2250,7 @@ export async function runRealManagedChange(
     ],
     checks: [
       {
-        checkId: "check_real-command",
+        checkId: realCheckId,
         version: 1,
         label: request.check.label,
         kind: "command",
@@ -1278,18 +2286,24 @@ export async function runRealManagedChange(
     archiveStatus: "UNARCHIVED",
     startedAt: createdAt,
   });
-  const writerLease = await acquireRealWriterLease({
+  let activeWriterLease = await acquireRealWriterLease({
     manager: options.writerLeaseManager,
     workspaceId: plan.workspaceId,
     ownerFingerprint: options.writerLeaseOwnerFingerprint,
     runSuffix: suffix,
   });
-  let writerLeaseReleased = false;
+  let activeWriterLeaseReleased = false;
   try {
-    const lockedSnapshot = await inspectGitRepository(snapshot.repository);
+    const lockedSnapshot = await inspectGitRepository(
+      snapshot.repository,
+      snapshot.digestCache,
+      snapshot.inspectionLimits,
+      snapshot.inspectionMonotonicNow,
+    );
     assertTargetIdentity(inputRequest.target, lockedSnapshot);
     if (
       lockedSnapshot.status.length > 0 ||
+      lockedSnapshot.workingTreeStateFingerprint !== snapshot.workingTreeStateFingerprint ||
       lockedSnapshot.baseCommit !== snapshot.baseCommit ||
       lockedSnapshot.sourceFingerprint !== snapshot.sourceFingerprint ||
       lockedSnapshot.workspaceFingerprint !== snapshot.workspaceFingerprint
@@ -1310,28 +2324,44 @@ export async function runRealManagedChange(
       eventStore === undefined
         ? new InMemoryWorkflowKernel()
         : new DurableWorkflowKernel(eventStore);
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "CREATE_RUN",
-      change,
-      planRevision: plan,
-      run,
-    });
-
     const allEvidence: EvidenceEnvelope[] = [];
     const allAgentRuns: AgentRunResult[] = [];
-    const verificationReceipts: Awaited<
-      ReturnType<typeof runDeclaredCommandVerification>
-    >["receipt"][] = [];
+    const verificationReceipts: VerificationReceipt[] = [];
+    const verificationWorkspacePreservation: boolean[] = [];
     const verificationEvidence: EvidenceEnvelope[] = [];
     const attempt1Id = attemptIdSchema.parse("att_real-1");
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "START_ATTEMPT",
-      runId: run.runId,
-      attemptId: attempt1Id,
-      startedAt: now(),
-    });
+    const durableEvents = eventStore === undefined ? [] : await eventStore.read(run.runId);
+    if (durableEvents.length === 0) {
+      await kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "CREATE_RUN",
+        change,
+        planRevision: plan,
+        run,
+      });
+      await kernel.dispatch({
+        schemaVersion: "1.0.0",
+        type: "START_ATTEMPT",
+        runId: run.runId,
+        attemptId: attempt1Id,
+        startedAt: now(),
+      });
+    } else {
+      if (pilotExecution === undefined) {
+        throw new RealManagedChangeBlockedError(
+          "WORKSPACE_DRIFT",
+          "an existing durable non-pilot Managed Run cannot prove that its Provider send was never issued",
+        );
+      }
+      assertExactDurablePreSendAttempt({
+        projection: await kernel.project(run.runId),
+        change,
+        plan,
+        run,
+        attemptId: attempt1Id,
+      });
+      await pilotExecution.assertDurablePreSendRetryable();
+    }
     await assertTargetReadyForAgent(snapshot, inputRequest.target, false);
     const firstAgent = await runAgent({
       engineHost: options.engineHost,
@@ -1344,78 +2374,175 @@ export async function runRealManagedChange(
       prompt,
       now,
       beforeStart: () => assertTargetReadyForAgent(snapshot, inputRequest.target, false),
+      ...(beforePilotProviderSend === undefined
+        ? {}
+        : { beforeProviderSend: beforePilotProviderSend }),
+      monotonicNow,
     });
     allAgentRuns.push(firstAgent);
     allEvidence.push(firstAgent.evidence);
-    const firstVerification = await runDeclaredCommandVerification({
-      planRevision: plan,
-      runId: run.runId,
-      attemptId: attempt1Id,
-      checkId: checkIdSchema.parse("check_real-command"),
-      verificationReceiptId: verificationReceiptIdSchema.parse("verify_real-1"),
-      evidenceId: evidenceIdSchema.parse("evidence_real-verify-1"),
-      repository: snapshot.repository,
-      environmentFingerprint: options.environmentFingerprint,
-      timeoutMs: 30_000,
-      maximumOutputBytes: outputCaptureLimits.verification,
-      now,
-    });
-    verificationReceipts.push(firstVerification.receipt);
-    const firstVerificationEvidence = makeEvidence({
-      evidenceId: "evidence_real-verify-1",
-      kind: "verification",
-      runId: run.runId,
-      attemptId: attempt1Id,
-      verificationReceiptId: firstVerification.receipt.verificationReceiptId,
-      createdAt: now(),
-      sourceFingerprint: plan.sourceFingerprint,
-      summary: `Independent project check returned ${firstVerification.receipt.outcome}.`,
-      content: JSON.stringify(firstVerification.receipt),
-      repository: snapshot.repository,
-      prompt,
-    });
-    verificationEvidence.push(firstVerificationEvidence);
-    allEvidence.push(firstVerificationEvidence);
-    await kernel.dispatch({
-      schemaVersion: "1.0.0",
-      type: "RECORD_VERIFICATION",
-      receipt: firstVerification.receipt,
-    });
-
+    const interruptionObserved = qualifiedInterruptionObserved(firstAgent.observations);
+    if (pilotInterruption?.forcedInterruption !== interruptionObserved) {
+      throw new RealManagedChangeBlockedError(
+        "INTERRUPTION_NOT_PROVEN",
+        "the observed Pi process boundary does not match the frozen pilot interruption",
+      );
+    }
     const firstProviderUsage = observedProviderUsage(firstAgent.observations);
-    const fixbackProviderReserveAvailable =
-      firstProviderUsage !== undefined &&
-      firstProviderUsage.tokenCount <= resourceBudgets.maxTokens - fixbackProviderReserve.tokens &&
-      firstProviderUsage.costMinorUnits <=
-        resourceBudgets.maxCostMinorUnits - fixbackProviderReserve.costMinorUnits;
-    if (firstVerification.receipt.outcome === "FAIL" && fixbackProviderReserveAvailable) {
-      const attempt2Id = attemptIdSchema.parse("att_real-2");
+    let attempt2Id: AttemptId | undefined;
+    let attempt2Prompt: string | undefined;
+    let attempt2WorkingTreeStateFingerprint: Fingerprint | undefined;
+    if (interruptionObserved) {
+      if (options.durableArchive === undefined) {
+        throw new RealManagedChangeBlockedError(
+          "INTERRUPTION_NOT_PROVEN",
+          "same-Run interruption recovery requires the durable Managed Run store",
+        );
+      }
+      const recovery = await recoverInterruptedManagedAttempt({
+        kernel,
+        run,
+        plan,
+        firstAgent,
+        writerLease: activeWriterLease,
+        engineHost: options.engineHost,
+        repository: snapshot,
+        target: inputRequest.target,
+        distributionReleaseId: options.durableArchive.distributionReleaseId,
+        engineRelease: options.engineRelease,
+        prompt,
+        now,
+        elapsedMs: monotonicNow() - overheadStartedAt,
+      });
+      allEvidence.push(...recovery.evidence);
+      activeWriterLeaseReleased = true;
+      activeWriterLease = await acquireRealWriterLease({
+        manager: options.writerLeaseManager,
+        workspaceId: plan.workspaceId,
+        ownerFingerprint: options.writerLeaseOwnerFingerprint,
+        runSuffix: `${suffix}-recovery`,
+      });
+      activeWriterLeaseReleased = false;
+      attempt2Id = recovery.recoveryAttemptId;
+      attempt2WorkingTreeStateFingerprint = recovery.interruptedWorkingTreeStateFingerprint;
+      attempt2Prompt = `${prompt}\nThe preceding Agent process was deliberately interrupted after its exact agent_end marker. Its operation, process finality, and Writer Lease were reconciled. Inspect the preserved working tree and finish the same Run without repeating unrelated work.`;
+    } else {
+      const beforeFirstVerification = await inspectGitRepository(
+        snapshot.repository,
+        snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
+      );
+      const firstVerification = await runDeclaredCommandVerification({
+        planRevision: plan,
+        runId: run.runId,
+        attemptId: attempt1Id,
+        checkId: realCheckId,
+        verificationReceiptId: verificationReceiptIdSchema.parse("verify_real-1"),
+        evidenceId: evidenceIdSchema.parse("evidence_real-verify-1"),
+        repository: snapshot.repository,
+        environmentFingerprint: options.environmentFingerprint,
+        timeoutMs: 30_000,
+        maximumOutputBytes: outputCaptureLimits.verification,
+        now,
+      });
+      const afterFirstVerification = await inspectGitRepository(
+        snapshot.repository,
+        snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
+      );
+      const firstVerificationPreservedWorkspace =
+        afterFirstVerification.workingTreeStateFingerprint ===
+        beforeFirstVerification.workingTreeStateFingerprint;
+      verificationReceipts.push(firstVerification.receipt);
+      verificationWorkspacePreservation.push(firstVerificationPreservedWorkspace);
+      const firstVerificationEvidence = makeEvidence({
+        evidenceId: "evidence_real-verify-1",
+        kind: "verification",
+        runId: run.runId,
+        attemptId: attempt1Id,
+        verificationReceiptId: firstVerification.receipt.verificationReceiptId,
+        createdAt: now(),
+        sourceFingerprint: plan.sourceFingerprint,
+        summary: `Independent project check returned ${firstVerification.receipt.outcome}.`,
+        content: JSON.stringify(firstVerification.receipt),
+        repository: snapshot.repository,
+        prompt,
+      });
+      verificationEvidence.push(firstVerificationEvidence);
+      allEvidence.push(firstVerificationEvidence);
       await kernel.dispatch({
         schemaVersion: "1.0.0",
-        type: "RETRY_ATTEMPT",
-        runId: run.runId,
-        previousAttemptId: attempt1Id,
-        attemptId: attempt2Id,
-        failureEvidenceIds: [firstVerificationEvidence.evidenceId],
-        failureFingerprint: firstVerification.receipt.resultFingerprint,
-        reason: "The first bounded Agent attempt did not pass the declared project check.",
-        elapsedMs: 1,
-        consumedResources: {
-          agentTurns: 1,
-          externalOperations: 3,
-          commands: 1,
-          outputBytes: firstAgent.observations.reduce(
-            (total, observation) => total + (observation.resourceUsage?.outputBytes ?? 0),
-            firstVerification.receipt.output.capturedBytes,
-          ),
-          tokens: firstProviderUsage.tokenCount,
-          costMinorUnits: firstProviderUsage.costMinorUnits,
-        },
-        userInputRequired: false,
-        workspaceDriftDetected: false,
-        startedAt: now(),
+        type: "RECORD_VERIFICATION",
+        receipt: firstVerification.receipt,
       });
-      await assertTargetReadyForAgent(snapshot, inputRequest.target, true);
+      const fixbackProviderReserveAvailable =
+        firstProviderUsage !== undefined &&
+        firstProviderUsage.tokenCount <=
+          resourceBudgets.maxTokens - fixbackProviderReserve.tokens &&
+        firstProviderUsage.costMinorUnits <=
+          resourceBudgets.maxCostMinorUnits - fixbackProviderReserve.costMinorUnits;
+      if (
+        firstVerification.receipt.outcome === "FAIL" &&
+        firstVerificationPreservedWorkspace &&
+        fixbackProviderReserveAvailable
+      ) {
+        attempt2Id = attemptIdSchema.parse("att_real-2");
+        attempt2WorkingTreeStateFingerprint = afterFirstVerification.workingTreeStateFingerprint;
+        attempt2Prompt = `${prompt}\nA previous bounded attempt did not pass the check. Inspect the current state and apply one more minimal fix within the same allowed paths.`;
+        await kernel.dispatch({
+          schemaVersion: "1.0.0",
+          type: "RETRY_ATTEMPT",
+          runId: run.runId,
+          previousAttemptId: attempt1Id,
+          attemptId: attempt2Id,
+          failureEvidenceIds: [firstVerificationEvidence.evidenceId],
+          failureFingerprint: firstVerification.receipt.resultFingerprint,
+          reason: "The first bounded Agent attempt did not pass the declared project check.",
+          elapsedMs: 1,
+          consumedResources: {
+            agentTurns: 1,
+            externalOperations: 3,
+            commands: 1,
+            outputBytes: firstAgent.observations.reduce(
+              (total, observation) => total + (observation.resourceUsage?.outputBytes ?? 0),
+              firstVerification.receipt.output.capturedBytes,
+            ),
+            tokens: firstProviderUsage.tokenCount,
+            costMinorUnits: firstProviderUsage.costMinorUnits,
+          },
+          userInputRequired: false,
+          workspaceDriftDetected: false,
+          startedAt: now(),
+        });
+      }
+    }
+
+    if (attempt2Id !== undefined && attempt2Prompt !== undefined) {
+      if (attempt2WorkingTreeStateFingerprint === undefined) {
+        throw new Error("a second Managed Attempt has no exact working-tree binding");
+      }
+      await assertExactWorkspaceState(
+        snapshot,
+        inputRequest.target,
+        attempt2WorkingTreeStateFingerprint,
+      );
+      if (pilotExecutionBinding !== undefined) {
+        const firstUsage = observedProviderUsage(firstAgent.observations);
+        if (
+          pilotProviderReservation === undefined ||
+          firstUsage === undefined ||
+          firstUsage.requestCount >= pilotProviderReservation.requests ||
+          firstUsage.tokenCount >= pilotProviderReservation.tokens ||
+          firstUsage.costMinorUnits >= pilotProviderReservation.costMinor
+        ) {
+          throw new RealManagedChangeBlockedError(
+            "PILOT_PROVIDER_BUDGET_EXHAUSTED",
+            "the frozen cumulative pilot Provider reservation does not permit another request",
+          );
+        }
+      }
       const secondAgent = await runAgent({
         engineHost: options.engineHost,
         kernel,
@@ -1424,17 +2551,38 @@ export async function runRealManagedChange(
         attemptId: attempt2Id,
         attemptNumber: 2,
         repository: snapshot.repository,
-        prompt: `${prompt}\nA previous bounded attempt did not pass the check. Inspect the current state and apply one more minimal fix within the same allowed paths.`,
+        prompt: attempt2Prompt,
         now,
-        beforeStart: () => assertTargetReadyForAgent(snapshot, inputRequest.target, true),
+        beforeStart: () =>
+          assertExactWorkspaceState(
+            snapshot,
+            inputRequest.target,
+            attempt2WorkingTreeStateFingerprint,
+          ),
+        ...(beforePilotProviderSend === undefined
+          ? {}
+          : { beforeProviderSend: beforePilotProviderSend }),
+        monotonicNow,
       });
       allAgentRuns.push(secondAgent);
       allEvidence.push(secondAgent.evidence);
+      if (qualifiedInterruptionObserved(secondAgent.observations) !== undefined) {
+        throw new RealManagedChangeBlockedError(
+          "INTERRUPTION_NOT_PROVEN",
+          "the bounded recovery Attempt was interrupted again",
+        );
+      }
+      const beforeSecondVerification = await inspectGitRepository(
+        snapshot.repository,
+        snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
+      );
       const secondVerification = await runDeclaredCommandVerification({
         planRevision: plan,
         runId: run.runId,
         attemptId: attempt2Id,
-        checkId: checkIdSchema.parse("check_real-command"),
+        checkId: realCheckId,
         verificationReceiptId: verificationReceiptIdSchema.parse("verify_real-2"),
         evidenceId: evidenceIdSchema.parse("evidence_real-verify-2"),
         repository: snapshot.repository,
@@ -1443,6 +2591,16 @@ export async function runRealManagedChange(
         maximumOutputBytes: outputCaptureLimits.verification,
         now,
       });
+      const afterSecondVerification = await inspectGitRepository(
+        snapshot.repository,
+        snapshot.digestCache,
+        snapshot.inspectionLimits,
+        snapshot.inspectionMonotonicNow,
+      );
+      verificationWorkspacePreservation.push(
+        afterSecondVerification.workingTreeStateFingerprint ===
+          beforeSecondVerification.workingTreeStateFingerprint,
+      );
       verificationReceipts.push(secondVerification.receipt);
       const secondVerificationEvidence = makeEvidence({
         evidenceId: "evidence_real-verify-2",
@@ -1471,12 +2629,30 @@ export async function runRealManagedChange(
     if (latestAttempt === undefined || latestVerification === undefined) {
       throw new Error("Managed Change did not produce a final Agent and Verification pair");
     }
-    const after = await inspectGitRepository(snapshot.repository);
+    const after = await inspectGitRepository(
+      snapshot.repository,
+      snapshot.digestCache,
+      snapshot.inspectionLimits,
+      snapshot.inspectionMonotonicNow,
+    );
     const parsedStatus = parseChangedPaths(after.status);
-    const changedPathsWithinScope = parsedStatus.paths.every((path) =>
+    const verificationPreservedWorkspace =
+      verificationWorkspacePreservation.length === verificationReceipts.length &&
+      verificationWorkspacePreservation.every(Boolean);
+    const reviewedChangedPaths = [
+      ...new Set([
+        ...parsedStatus.paths,
+        ...changedIgnoredPaths(snapshot.ignoredContent, after.ignoredContent),
+      ]),
+    ].sort((left, right) => left.localeCompare(right));
+    const changedPathsWithinScope = reviewedChangedPaths.every((path) =>
       request.allowedPaths.includes(path),
     );
     const baseCommitUnchanged = after.baseCommit === snapshot.baseCommit;
+    const targetReferenceUnchanged =
+      after.branch === snapshot.branch &&
+      after.pilotTargetReferenceFingerprint === snapshot.pilotTargetReferenceFingerprint &&
+      after.pilotTargetReferenceFingerprint === inputRequest.target.targetReferenceFingerprint;
     const agentReturned =
       latestAttempt.sendReceipt.outcome === "APPLIED" &&
       latestAttempt.observations.some((observation) => observation.kind === "AGENT_RETURNED");
@@ -1530,6 +2706,13 @@ export async function runRealManagedChange(
       (providerTokenCount !== undefined && providerTokenCount > resourceBudgets.maxTokens) ||
       (providerCostMinorUnits !== undefined &&
         providerCostMinorUnits > resourceBudgets.maxCostMinorUnits) ||
+      (pilotProviderReservation !== undefined &&
+        (providerRequestCount === undefined ||
+          providerTokenCount === undefined ||
+          providerCostMinorUnits === undefined ||
+          providerRequestCount > pilotProviderReservation.requests ||
+          providerTokenCount > pilotProviderReservation.tokens ||
+          providerCostMinorUnits > pilotProviderReservation.costMinor)) ||
       verificationReceipts.some(
         (receipt) => receipt.output.capturedBytes > outputCaptureLimits.verification,
       );
@@ -1595,6 +2778,18 @@ export async function runRealManagedChange(
             },
           ]
         : []),
+      ...(!verificationPreservedWorkspace
+        ? [
+            {
+              severity: "P1" as const,
+              scope: "verification-workspace-mutation",
+              rationale:
+                "An independent Verification command changed repository content instead of observing it.",
+              evidenceIds: [reviewEvidenceId],
+              confidence: 1,
+            },
+          ]
+        : []),
       ...(!baseCommitUnchanged
         ? [
             {
@@ -1607,7 +2802,19 @@ export async function runRealManagedChange(
             },
           ]
         : []),
-      ...(parsedStatus.paths.length === 0
+      ...(!targetReferenceUnchanged
+        ? [
+            {
+              severity: "P0" as const,
+              scope: "workspace-target-reference-drift",
+              rationale:
+                "The final repository branch no longer matches the frozen target-reference identity.",
+              evidenceIds: [reviewEvidenceId],
+              confidence: 1,
+            },
+          ]
+        : []),
+      ...(reviewedChangedPaths.length === 0
         ? [
             {
               severity: "P1" as const,
@@ -1654,9 +2861,11 @@ export async function runRealManagedChange(
         sourceFingerprint: plan.sourceFingerprint,
         summary: `Deterministic real-project review completed with ${String(findings.length)} blocking finding(s).`,
         content: JSON.stringify({
-          changedPaths: parsedStatus.paths,
+          changedPaths: reviewedChangedPaths,
           allowedPaths: request.allowedPaths,
           baseCommitUnchanged,
+          targetReferenceUnchanged,
+          verificationPreservedWorkspace,
           findings,
           resourceAccounting,
         }),
@@ -1686,7 +2895,7 @@ export async function runRealManagedChange(
             resultFingerprint: sha256(
               JSON.stringify({
                 verificationInputFingerprint: latestVerification.inputFingerprint,
-                changedPaths: parsedStatus.paths,
+                changedPaths: reviewedChangedPaths,
                 findings,
               }),
             ),
@@ -1711,10 +2920,36 @@ export async function runRealManagedChange(
       { privatePathRoots: [snapshot.repository], privatePromptValues: [prompt] },
     );
     allEvidence.push(summaryEvidence);
-    const overheadMs = Math.max(0, Math.round(monotonicNow() - overheadStartedAt));
+    const excludedEngineRuntimeMs = allAgentRuns.reduce(
+      (total, agentRun) => total + agentRun.runtimeMs,
+      0,
+    );
+    const overheadMs = Math.max(
+      0,
+      Math.round(monotonicNow() - overheadStartedAt - excludedEngineRuntimeMs),
+    );
     const sourceLoss = !baseCommitUnchanged;
-    const releasedWriterLease = await writerLease.release();
-    writerLeaseReleased = true;
+    const releasedWriterLease = await activeWriterLease.release();
+    activeWriterLeaseReleased = true;
+    const interruptedAttemptHistoryPreserved = projection.checkpoints.some(
+      (checkpoint) =>
+        checkpoint.attemptId === projection.attempts[0]?.attemptId &&
+        projection.attemptFinalityReceipts.some(
+          (receipt) =>
+            receipt.attemptId === checkpoint.attemptId &&
+            receipt.checkpointId === checkpoint.checkpointId,
+        ) &&
+        projection.attempts[1]?.previousAttemptId === checkpoint.attemptId &&
+        projection.attempts[1]?.recoveryCheckpointId === checkpoint.checkpointId,
+    );
+    const failedAttemptPreserved =
+      projection.attempts.length < 2 ||
+      (projection.attempts[0]?.verificationStatus === "FAILED" &&
+        projection.verificationReceipts[0]?.outcome === "FAIL") ||
+      interruptedAttemptHistoryPreserved;
+    const fixbackPass =
+      latestVerification.outcome === "PASS" &&
+      (projection.attempts.length === 1 || projection.attempts[1]?.verificationStatus === "PASSED");
     const portableBeforeScore = {
       schemaVersion: "hpi-managed-change.v3" as const,
       observedAt: now(),
@@ -1725,7 +2960,8 @@ export async function runRealManagedChange(
         id: options.providerId,
         authStatus: "DETECTED" as const,
         requestStatus:
-          latestAttempt.sendReceipt.outcome === "APPLIED" &&
+          (latestAttempt.sendReceipt.outcome === "APPLIED" ||
+            qualifiedInterruptionObserved(latestAttempt.observations) !== undefined) &&
           providerUsage.status === "PASS" &&
           providerUsage.requestCount > 0
             ? ("DETECTED" as const)
@@ -1743,22 +2979,22 @@ export async function runRealManagedChange(
       },
       plan: {
         planRevisionId: plan.planRevisionId,
-        planFingerprint: sha256(JSON.stringify(plan)),
+        planFingerprint: sha256(JSON.stringify(projection.planRevision)),
         allowedPaths: request.allowedPaths,
-        checkId: "check_real-command",
+        checkId: realCheckId,
         checkDefinitionFingerprint,
       },
       writerLease: {
-        leaseId: writerLease.leaseId,
-        workspaceId: writerLease.workspaceId,
-        resourceSetFingerprint: writerLease.resourceSetFingerprint,
+        leaseId: activeWriterLease.leaseId,
+        workspaceId: activeWriterLease.workspaceId,
+        resourceSetFingerprint: activeWriterLease.resourceSetFingerprint,
         acquireOutcome: "ACQUIRED" as const,
         releaseOutcome: releasedWriterLease.outcome,
       },
       projection,
       evidence: allEvidence,
       review: {
-        changedPaths: parsedStatus.paths,
+        changedPaths: reviewedChangedPaths,
         allowedPaths: request.allowedPaths,
         baseCommitUnchanged,
         agentReturned,
@@ -1771,17 +3007,11 @@ export async function runRealManagedChange(
           projection.change.lifecycle !== "READY" ||
           (latestVerification.outcome === "PASS" &&
             findings.length === 0 &&
-            parsedStatus.paths.length > 0),
+            reviewedChangedPaths.length > 0),
         sourceLoss,
         secretLeak: false,
-        failedAttemptPreserved:
-          projection.attempts.length < 2 ||
-          (projection.attempts[0]?.verificationStatus === "FAILED" &&
-            projection.verificationReceipts[0]?.outcome === "FAIL"),
-        fixbackPass:
-          latestVerification.outcome === "PASS" &&
-          (projection.attempts.length === 1 ||
-            projection.attempts[1]?.verificationStatus === "PASSED"),
+        failedAttemptPreserved,
+        fixbackPass,
         changedPathsWithinScope,
         agentReturnObserved: agentReturned,
         summaryComplete:
@@ -1794,7 +3024,7 @@ export async function runRealManagedChange(
       cleanup: {
         status: "NOT_APPLICABLE" as const,
         targetWorkingTree:
-          parsedStatus.paths.length > 0
+          reviewedChangedPaths.length > 0
             ? ("PRESERVED_CHANGED" as const)
             : ("PRESERVED_CLEAN" as const),
       },
@@ -1809,21 +3039,83 @@ export async function runRealManagedChange(
       projection.change.lifecycle === "READY" &&
       latestVerification.outcome === "PASS" &&
       findings.length === 0 &&
-      parsedStatus.paths.length > 0 &&
+      reviewedChangedPaths.length > 0 &&
       changedPathsWithinScope &&
       baseCommitUnchanged &&
+      targetReferenceUnchanged &&
       agentReturned &&
       resourceAccounting.status === "PASS" &&
       !sourceLoss &&
       !secretLeak;
     const taskResult = correctnessPassed ? "GO" : "STOP";
     if (options.durableArchive !== undefined) {
+      const capturedWorkflowFactSignals: Readonly<
+        Record<RealManagedChangeWorkflowFactId, boolean>
+      > = {
+        TASK_IDENTITY: pilotExecutionBinding !== undefined,
+        REPOSITORY_IDENTITY: fingerprintSchema.safeParse(inputRequest.target.repositoryFingerprint)
+          .success,
+        TARGET_REFERENCE_IDENTITY: fingerprintSchema.safeParse(
+          inputRequest.target.targetReferenceFingerprint,
+        ).success,
+        SOURCE_IDENTITY: fingerprintSchema.safeParse(plan.sourceFingerprint).success,
+        TASK_DEFINITION: fingerprintSchema.safeParse(
+          fingerprintRealManagedChangeTaskDefinition(inputRequest),
+        ).success,
+        ACCEPTANCE_DEFINITION: fingerprintSchema.safeParse(checkDefinitionFingerprint).success,
+        EXECUTION_OBSERVATION:
+          allAgentRuns.length > 0 && allAgentRuns.every((agent) => agent.observations.length > 0),
+        PROCESS_FINALITY: allAgentRuns.every((agent) =>
+          agent.observations.some((observation) => observation.kind === "PROCESS_EXITED"),
+        ),
+        PROCESS_TREE_FINALITY: allAgentRuns.every((agent) =>
+          agent.observations.some(
+            (observation) =>
+              observation.kind === "OUTPUT_CAPTURED" &&
+              observation.summary?.includes("containment=NOT_PROVEN") === false,
+          ),
+        ),
+        OUTPUT_FINALITY:
+          engineOutputMeasured &&
+          allAgentRuns.every((agent) =>
+            agent.observations.some((observation) => observation.kind === "OUTPUT_CAPTURED"),
+          ),
+        WRITER_LEASE_FINALITY: releasedWriterLease.outcome === "RELEASED",
+        PROVIDER_REQUEST_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.requestCount),
+        PROVIDER_TOKEN_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.tokenCount),
+        PROVIDER_COST_USAGE:
+          providerUsage.status === "PASS" && Number.isSafeInteger(providerUsage.costMinorUnits),
+        SOURCE_PRESERVATION: typeof sourceLoss === "boolean",
+        CHANGED_PATH_SCOPE: typeof changedPathsWithinScope === "boolean",
+        INDEPENDENT_ACCEPTANCE:
+          verificationReceipts.length > 0 &&
+          verificationReceipts.every(
+            (receipt) =>
+              receipt.verificationReceiptId.length > 0 && receipt.resultFingerprint.length > 0,
+          ),
+        ACCEPTANCE_WORKSPACE_PRESERVATION:
+          verificationWorkspacePreservation.length === verificationReceipts.length,
+        SECRET_LEAKAGE_OBSERVATION: typeof secretLeak === "boolean",
+        ATTEMPT_HISTORY:
+          projection.attempts.length > 0 &&
+          projection.attempts.every(
+            (attempt) => attempt.attemptId.length > 0 && attempt.executionStatus !== "PENDING",
+          ),
+      };
+      const capturedWorkflowFactIds = realManagedChangeWorkflowFactIdSchema.options.filter(
+        (factId) => capturedWorkflowFactSignals[factId],
+      );
       const taskReceipt = realManagedChangeTaskReceiptSchema.parse({
-        schemaVersion: "hpi-real-managed-change-task-receipt.v1",
+        schemaVersion: "hpi-real-managed-change-task-receipt.v4",
         runId: run.runId,
+        targetId: inputRequest.target.targetId,
         repositoryFingerprint: inputRequest.target.repositoryFingerprint,
         targetReferenceFingerprint: inputRequest.target.targetReferenceFingerprint,
         sourceFingerprint: plan.sourceFingerprint,
+        taskDefinitionFingerprint: fingerprintRealManagedChangeTaskDefinition(inputRequest),
+        interruptionKind: interruptionObserved ?? null,
         mode: "MANAGED",
         acceptanceCheckDefinitionFingerprints: [checkDefinitionFingerprint],
         terminalOutcome: projection.change.lifecycle,
@@ -1831,6 +3123,17 @@ export async function runRealManagedChange(
         sourcePreserved: !sourceLoss,
         rawSecretLeakage: secretLeak,
         providerUsage,
+        pilotExecutionBinding: pilotExecutionBinding ?? null,
+        capturedWorkflowFactIds,
+        verificationHistory: verificationReceipts.map((receipt) => ({
+          attemptId: receipt.attemptId,
+          verificationReceiptId: receipt.verificationReceiptId,
+          checkId: receipt.checkId,
+          outcome: receipt.outcome,
+          resultFingerprint: receipt.resultFingerprint,
+        })),
+        failedAttemptPreserved,
+        fixbackPass,
         reviewP0P1Count: recordedReviewFindings.filter(
           (finding) => finding.severity === "P0" || finding.severity === "P1",
         ).length,
@@ -1889,8 +3192,8 @@ export async function runRealManagedChange(
     }
     return artifact;
   } finally {
-    if (!writerLeaseReleased) {
-      await writerLease.release().catch(() => undefined);
+    if (!activeWriterLeaseReleased) {
+      await activeWriterLease.release().catch(() => undefined);
     }
   }
 }

@@ -132,21 +132,27 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.reasons.join(" ")).toMatch(/Provider.*budget|maximum.*request|token|cost/u);
   });
 
-  it("counts only READY linked replacement Runs as successful interruptions", () => {
+  it("counts only READY same-Run Checkpoint recoveries as successful interruptions", () => {
     const plan = completePilotExecutionPlan();
     const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const failedInterruption = evidence.interruptions[0];
+    if (failedInterruption === undefined) throw new Error("fixture interruption missing");
     const failedRecoveryEvidence = pilotEvidenceSchema.parse({
       ...evidence,
-      taskResults: evidence.taskResults.map((result, index) =>
-        index === 0 ? { ...result, terminalOutcome: "FAILED" as const, correct: false } : result,
+      taskResults: evidence.taskResults.map((result) =>
+        result.taskId === failedInterruption.taskId && result.mode === "MANAGED"
+          ? { ...result, terminalOutcome: "FAILED" as const, correct: false }
+          : result,
       ),
       runArchives: evidence.runArchives.map((run) =>
-        run.runId === "run-pilot-01-replacement"
+        run.runId === failedInterruption.runId
           ? { ...run, terminalOutcome: "FAILED" as const }
           : run,
       ),
-      interruptions: evidence.interruptions.map((interruption, index) =>
-        index === 0 ? { ...interruption, resumeOutcome: "FAILED" as const } : interruption,
+      interruptions: evidence.interruptions.map((interruption) =>
+        interruption.interruptionId === failedInterruption.interruptionId
+          ? { ...interruption, resumeOutcome: "FAILED" as const }
+          : interruption,
       ),
     });
     const decision = new PilotEvaluator().evaluate(
@@ -159,9 +165,9 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.outcome).toBe("GO");
   });
 
-  it("rejects a detached Run cycle that is not part of the single linked chain", () => {
+  it("rejects an extra Managed Archive instead of accepting a detached Run chain", () => {
     const evidence = completeEvidence();
-    const task = evidence.taskOracles[0];
+    const task = evidence.taskOracles.find((candidate) => candidate.mode === "MANAGED");
     if (task === undefined) throw new Error("fixture task oracle missing");
 
     const parsed = pilotEvidenceSchema.safeParse({
@@ -171,7 +177,6 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         {
           runId: "run-pilot-detached-cycle-a",
           taskId: task.taskId,
-          replacementOfRunId: "run-pilot-detached-cycle-b",
           archiveId: "archive-pilot-detached-cycle-a",
           archiveFingerprint: fixtureFingerprint,
           sourceFingerprint: task.sourceFingerprint,
@@ -179,18 +184,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
           providerRequestCount: 0,
           providerTokenCount: 0,
           providerCostMinor: 0,
-        },
-        {
-          runId: "run-pilot-detached-cycle-b",
-          taskId: task.taskId,
-          replacementOfRunId: "run-pilot-detached-cycle-a",
-          archiveId: "archive-pilot-detached-cycle-b",
-          archiveFingerprint: fixtureFingerprint,
-          sourceFingerprint: task.sourceFingerprint,
-          terminalOutcome: "READY",
-          providerRequestCount: 0,
-          providerTokenCount: 0,
-          providerCostMinor: 0,
+          recoveryLinks: [],
         },
       ],
     });
@@ -198,7 +192,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("rejects multiple interruption receipts that reuse one replacement Run", () => {
+  it("rejects an interruption that points at another interruption's Run", () => {
     const evidence = completeEvidence();
     const first = evidence.interruptions[0];
     const second = evidence.interruptions[1];
@@ -214,9 +208,11 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         {
           ...second,
           taskId: first.taskId,
-          interruptedRunId: first.interruptedRunId,
-          replacementRunId: first.replacementRunId,
-          replacementArchiveFingerprint: first.replacementArchiveFingerprint,
+          runId: first.runId,
+          archiveFingerprint: first.archiveFingerprint,
+          checkpointId: first.checkpointId,
+          interruptedAttemptId: first.interruptedAttemptId,
+          recoveryAttemptId: first.recoveryAttemptId,
         },
         third,
       ],
@@ -225,12 +221,16 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("rejects an interruption whose predecessor was already READY", () => {
+  it("rejects an interruption whose Checkpoint is not linked by its Run", () => {
     const evidence = completeEvidence();
+    const first = evidence.interruptions[0];
+    if (first === undefined) throw new Error("fixture interruption missing");
     const parsed = pilotEvidenceSchema.safeParse({
       ...evidence,
-      runArchives: evidence.runArchives.map((run) =>
-        run.runId === "run-pilot-01" ? { ...run, terminalOutcome: "READY" as const } : run,
+      interruptions: evidence.interruptions.map((interruption) =>
+        interruption.interruptionId === first.interruptionId
+          ? { ...interruption, checkpointId: "checkpoint-not-linked" }
+          : interruption,
       ),
     });
 
@@ -327,11 +327,13 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
 
   it("returns STOP for an observed zero-tolerance source-loss failure", () => {
     const evidence = completeEvidence();
+    const managedTask = evidence.taskResults.find((result) => result.mode === "MANAGED");
+    if (managedTask === undefined) throw new Error("fixture Managed result missing");
     const decision = new PilotEvaluator().evaluate(
       {
         ...evidence,
-        taskResults: evidence.taskResults.map((result, index) =>
-          index === 0 ? { ...result, sourcePreserved: false } : result,
+        taskResults: evidence.taskResults.map((result) =>
+          result.taskId === managedTask.taskId ? { ...result, sourcePreserved: false } : result,
         ),
       },
       completePilotExecutionPlan(),
@@ -344,7 +346,9 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const plan = new PilotPlanCompiler().compile({
       ...completePilotPlanInput(),
       tasks: completePilotPlanInput().tasks.map((task, index) =>
-        index === 0 ? { ...task, expectedOutcome: "BLOCKED" as const } : task,
+        index === 1 && task.mode === "MANAGED"
+          ? { ...task, expectedOutcome: "BLOCKED" as const }
+          : task,
       ),
     });
     const decision = new PilotEvaluator().evaluate(completeEvidence(plan), plan);
@@ -355,7 +359,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
   it("requires an explicit no-manual-state-edit receipt before evaluating daily-use readiness", () => {
     const evidence = {
       ...completeEvidence(),
-      schemaVersion: "hpi-pilot-evidence.v6" as const,
+      schemaVersion: "hpi-pilot-evidence.v7" as const,
       manualStateEditingRequired: false,
     };
     expect(() => pilotEvidenceSchema.parse(evidence)).not.toThrow();
@@ -386,7 +390,9 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const forged = {
       ...evidence,
       taskResults: evidence.taskResults.map((result, index) =>
-        index === 0 ? { ...result, terminalOutcome: "BLOCKED" as const, correct: true } : result,
+        index === 0 && result.mode === "QUICK"
+          ? { ...result, executionObservation: "BLOCKED" as const, correct: true }
+          : result,
       ),
       pairedComparators: evidence.pairedComparators.map((comparator, index) =>
         index === 1
@@ -464,13 +470,17 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
 
   it("requires intervention reduction or contained ambiguity and never waives overhead", () => {
     const evidence = completeEvidence(completePilotExecutionPlan(), "LIVE_WINDOWS_PILOT");
+    const pairedTaskIds = new Set(evidence.pairedComparators.map((item) => item.taskId));
     const noComparatorValue = new PilotEvaluator().evaluate(
       {
         ...evidence,
-        taskResults: evidence.taskResults.map((result, index) =>
-          [0, 5, 6].includes(index)
+        taskResults: evidence.taskResults.map((result) =>
+          pairedTaskIds.has(result.taskId)
             ? { ...result, manualInterventions: 1, rawPiManualInterventions: 1 }
             : result,
+        ),
+        quickTaskReceipts: evidence.quickTaskReceipts.map((receipt) =>
+          pairedTaskIds.has(receipt.taskId) ? { ...receipt, manualInterventions: 1 } : receipt,
         ),
         pairedComparators: evidence.pairedComparators.map((comparator) => ({
           ...comparator,
@@ -485,10 +495,15 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     const overheadPlan = completePilotExecutionPlan();
     const overheadEvidence = pilotEvidenceSchema.parse({
       ...evidence,
-      taskResults: evidence.taskResults.map((result, index) =>
-        [0, 5, 6].includes(index)
+      taskResults: evidence.taskResults.map((result) =>
+        pairedTaskIds.has(result.taskId)
           ? { ...result, manualInterventions: 3, hunterOverheadMinutes: 11 }
           : result,
+      ),
+      quickTaskReceipts: evidence.quickTaskReceipts.map((receipt) =>
+        pairedTaskIds.has(receipt.taskId)
+          ? { ...receipt, manualInterventions: 3, hunterOverheadMinutes: 11 }
+          : receipt,
       ),
       pairedComparators: evidence.pairedComparators.map((comparator) => ({
         ...comparator,
@@ -533,13 +548,22 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         repositoryFingerprint: fixtureFingerprint,
         sourceFingerprint: firstSourceFingerprint,
       })),
+      quickTaskReceipts: evidence.quickTaskReceipts.map((receipt) => ({
+        ...receipt,
+        repositoryFingerprint: fixtureFingerprint,
+        sourceFingerprint: firstSourceFingerprint,
+      })),
+      runArchives: evidence.runArchives.map((run) => ({
+        ...run,
+        sourceFingerprint: firstSourceFingerprint,
+      })),
       pairedComparators: evidence.pairedComparators.map((comparator) => ({
         ...comparator,
         repositoryFingerprint: fixtureFingerprint,
         sourceFingerprint: firstSourceFingerprint,
       })),
     };
-    expect(() => pilotEvidenceSchema.parse(oneRepository)).toThrow(/two distinct repository/u);
+    expect(() => pilotEvidenceSchema.parse(oneRepository)).toThrow(/two distinct repositor/u);
   });
 
   it("binds each paired comparator to the exact frozen source and acceptance checks", () => {
@@ -551,7 +575,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
           index === 0 ? { ...comparator, sourceFingerprint: secondSourceFingerprint } : comparator,
         ),
       }),
-    ).toThrow(/comparator.*frozen.*source|acceptance/u);
+    ).toThrow(/comparators.*frozen.*task|acceptance/u);
   });
 
   it("does not produce GO when Evidence is bound to a different frozen plan", () => {
@@ -596,7 +620,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(updateMismatch.reasons.join(" ")).toMatch(/update|candidate/u);
   });
 
-  it("binds task observations to the frozen target reference and check definitions", () => {
+  it("binds task observations to the frozen target identity, reference, and check definitions", () => {
     const evidence = completeEvidence();
     const plan = completePilotExecutionPlan();
     const forged = {
@@ -605,6 +629,7 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         index === 0
           ? {
               ...oracle,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }
@@ -614,15 +639,27 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
         index === 0
           ? {
               ...result,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }
           : result,
       ),
+      quickTaskReceipts: evidence.quickTaskReceipts.map((receipt) =>
+        receipt.taskId === evidence.taskOracles[0]?.taskId
+          ? {
+              ...receipt,
+              targetId: "repository-alias",
+              targetReferenceFingerprint: secondRepositoryFingerprint,
+              acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
+            }
+          : receipt,
+      ),
       pairedComparators: evidence.pairedComparators.map((comparator, index) =>
         index === 0
           ? {
               ...comparator,
+              targetId: "repository-alias",
               targetReferenceFingerprint: secondRepositoryFingerprint,
               acceptanceCheckDefinitionFingerprints: [secondRepositoryFingerprint],
             }

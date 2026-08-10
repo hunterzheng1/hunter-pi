@@ -90,13 +90,19 @@ function recordType(record: Record<string, unknown>): string | undefined {
  */
 export function accountPiProviderUsage(
   records: readonly Record<string, unknown>[],
-  requestBoundary: "TRANSPORT_RETRIES_DISABLED" | "NOT_PROVEN" = "NOT_PROVEN",
+  requestBoundary:
+    | "TRANSPORT_RETRIES_DISABLED"
+    | "TRANSPORT_RETRIES_DISABLED_AND_AGENT_END_MARKER"
+    | "NOT_PROVEN" = "NOT_PROVEN",
 ): PiProviderUsage {
-  if (requestBoundary !== "TRANSPORT_RETRIES_DISABLED") {
+  if (requestBoundary === "NOT_PROVEN") {
     return notProven("PROVIDER_RETRY_POLICY_NOT_PROVEN");
   }
   const terminalRecord = records.at(-1);
-  if (terminalRecord === undefined || recordType(terminalRecord) !== "agent_end") {
+  if (
+    terminalRecord === undefined ||
+    (requestBoundary === "TRANSPORT_RETRIES_DISABLED" && recordType(terminalRecord) !== "agent_end")
+  ) {
     return notProven("EVENT_STREAM_INCOMPLETE");
   }
 

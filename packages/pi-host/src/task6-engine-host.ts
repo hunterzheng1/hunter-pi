@@ -27,6 +27,7 @@ import {
   type EngineHost,
   type EngineInput,
   type EngineObservation,
+  type EngineExternalOperationBoundary,
   type EventCursor,
   type InterruptRequest,
   type ProbeRequest,
@@ -62,6 +63,13 @@ export const task6PiProcessResultSchema = z.strictObject({
   capturedBytes: z.number().int().nonnegative(),
   outputTruncated: z.boolean(),
   providerUsage: piProviderUsageSchema,
+  interruption: z
+    .enum([
+      "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+      "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+      "POWER_LOSS_SIMULATION_AFTER_AGENT_END",
+    ])
+    .optional(),
   containment: z
     .enum(["WINDOWS_JOB_OBJECT", "LINUX_SUBREAPER_PROCESS_TREE", "TEST_CONTAINED"])
     .optional(),
@@ -76,21 +84,36 @@ export interface Task6PiProcessRequest {
   readonly prompt: string;
   readonly timeoutMs: number;
   readonly maximumOutputBytes: number;
+  readonly forcedInterruption?:
+    | "AFTER_AGENT_END"
+    | "AFTER_AGENT_END_PROCESS_KILL"
+    | "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION"
+    | "AFTER_AGENT_END_POWER_LOSS_SIMULATION";
 }
+
+export type Task6PiProcessBoundary = EngineExternalOperationBoundary;
+
+export type Task6PiProcessRunner = (
+  request: Task6PiProcessRequest,
+  boundary?: Task6PiProcessBoundary,
+) => Promise<Task6PiProcessResult>;
 
 export interface Task6PiEngineHostOptions {
   readonly launchPlanForWorkspace: (workspace: string) => Promise<PiLaunchPlan>;
-  readonly runProcess?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly runProcess?: Task6PiProcessRunner;
   readonly now?: () => string;
   readonly processTimeoutMs: number;
   readonly maximumOutputBytes: number;
   readonly requireQualifiedProcess?: boolean;
+  readonly forcedInterruption?: Task6PiProcessRequest["forcedInterruption"];
 }
 
 interface StoredOperation {
   readonly fingerprint: string;
   readonly payloadSignature: string;
   readonly receipt: OperationReceipt;
+  reconciliationOutcome?: OperationReconciliationReceipt["outcome"];
+  reconciliationEffects?: readonly string[];
   reconciliation?: OperationReconciliationReceipt;
 }
 
@@ -149,7 +172,9 @@ export class PiOperationReplayConflictError extends Error {
 
 export async function runTask6PiJsonProcess(
   request: Task6PiProcessRequest,
+  boundary?: Task6PiProcessBoundary,
 ): Promise<Task6PiProcessResult> {
+  await boundary?.beforeExternalOperation();
   return new Promise((resolvePromise) => {
     const child = spawn(
       request.plan.executable,
@@ -243,6 +268,9 @@ export class Task6PiEngineHost implements EngineHost {
   readonly #processTimeoutMs: number;
   readonly #maximumOutputBytes: number;
   readonly #requireQualifiedProcess: boolean;
+  readonly #forcedInterruption: Task6PiEngineHostOptions["forcedInterruption"];
+  #forcedInterruptionConsumed = false;
+  #forcedInterruptionClaimedBy: OperationId | undefined;
   readonly #operations = new Map<OperationId, StoredOperation>();
   readonly #pendingOperations = new Map<OperationId, PendingOperation>();
   readonly #handles = new Map<string, HandleState>();
@@ -262,6 +290,7 @@ export class Task6PiEngineHost implements EngineHost {
     this.#processTimeoutMs = options.processTimeoutMs;
     this.#maximumOutputBytes = options.maximumOutputBytes;
     this.#requireQualifiedProcess = options.requireQualifiedProcess ?? false;
+    this.#forcedInterruption = options.forcedInterruption;
   }
 
   public probe(request: ProbeRequest): Promise<CapabilityReceipt> {
@@ -340,7 +369,11 @@ export class Task6PiEngineHost implements EngineHost {
     });
   }
 
-  public async send(handle: EngineHandle, input: EngineInput): Promise<OperationReceipt> {
+  public async send(
+    handle: EngineHandle,
+    input: EngineInput,
+    boundary?: EngineExternalOperationBoundary,
+  ): Promise<OperationReceipt> {
     const state = this.#requireHandle(handle);
     const parsed = engineInputSchema.parse(input);
     this.#validateOperationBoundary(
@@ -370,10 +403,41 @@ export class Task6PiEngineHost implements EngineHost {
     );
     if (pending !== undefined) return pending;
 
-    const execution = (async (): Promise<OperationReceipt> => {
+    let externalOperationMayHaveStarted = false;
+    const execute = async (): Promise<OperationReceipt> => {
       const deadlineRemaining = Date.parse(parsed.deadline) - Date.parse(this.#now());
-      const processResult = task6PiProcessResultSchema.parse(
-        await this.#runProcess({
+      const forcedInterruption =
+        this.#forcedInterruption !== undefined &&
+        !this.#forcedInterruptionConsumed &&
+        (this.#forcedInterruptionClaimedBy === undefined ||
+          this.#forcedInterruptionClaimedBy === parsed.operationId)
+          ? this.#forcedInterruption
+          : undefined;
+      if (forcedInterruption !== undefined) {
+        this.#forcedInterruptionClaimedBy = parsed.operationId;
+      }
+      const consumeForcedInterruption = (): void => {
+        if (
+          forcedInterruption !== undefined &&
+          this.#forcedInterruptionClaimedBy === parsed.operationId
+        ) {
+          this.#forcedInterruptionConsumed = true;
+          this.#forcedInterruptionClaimedBy = undefined;
+        }
+      };
+      let processBoundaryAuthorization: Promise<void> | undefined;
+      const processBoundary: Task6PiProcessBoundary = {
+        beforeExternalOperation: () => {
+          processBoundaryAuthorization ??= (async () => {
+            await boundary?.beforeExternalOperation();
+            externalOperationMayHaveStarted = true;
+            consumeForcedInterruption();
+          })();
+          return processBoundaryAuthorization;
+        },
+      };
+      const rawProcessResult = await this.#runProcess(
+        {
           plan: state.launchPlan,
           prompt: parsed.content,
           timeoutMs: Math.max(
@@ -385,8 +449,16 @@ export class Task6PiEngineHost implements EngineHost {
             ),
           ),
           maximumOutputBytes: this.#maximumOutputBytes,
-        }),
+          ...(forcedInterruption === undefined ? {} : { forcedInterruption }),
+        },
+        processBoundary,
       );
+      // A custom runner that returns without invoking the mandatory boundary still proves that
+      // its operation ran. Preserve replay safety even though higher layers will reject the
+      // missing caller authorization.
+      externalOperationMayHaveStarted = true;
+      consumeForcedInterruption();
+      const processResult = task6PiProcessResultSchema.parse(rawProcessResult);
       const observations: EngineObservation[] = [
         engineObservationSchema.parse({
           schemaVersion: "1.0.0",
@@ -419,6 +491,26 @@ export class Task6PiEngineHost implements EngineHost {
           }),
         );
       }
+      if (
+        processResult.interruption !== undefined &&
+        processResult.providerUsage.status === "PASS"
+      ) {
+        observations.push(
+          engineObservationSchema.parse({
+            schemaVersion: "1.0.0",
+            cursor: observations.length + 1,
+            attemptId: state.handle.attemptId,
+            kind: "OPERATION_OBSERVED",
+            observedAt: this.#now(),
+            summary: `QualifiedInterruption=${processResult.interruption}; independent Verification did not run.`,
+            resourceUsage: {
+              externalOperations: processResult.providerUsage.requestCount,
+              tokens: processResult.providerUsage.tokenCount,
+              costMinorUnits: processResult.providerUsage.costMinorUnits,
+            },
+          }),
+        );
+      }
       observations.push(
         engineObservationSchema.parse({
           schemaVersion: "1.0.0",
@@ -436,24 +528,64 @@ export class Task6PiEngineHost implements EngineHost {
         processResult.framingValid &&
         processResult.exitCode === 0 &&
         processResult.eventTypes.includes("agent_end") &&
+        processResult.interruption === undefined &&
         (!this.#requireQualifiedProcess || hasQualifiedProcessContainment(processResult));
-      return this.#storeReceipt(
+      const receipt = this.#storeReceipt(
         parsed.operationId,
         parsed.fingerprint,
         payloadSignature,
         applied ? "APPLIED" : "UNKNOWN",
         applied ? ["agent-operation-returned"] : [],
       );
-    })();
+      if (
+        !applied &&
+        this.#requireQualifiedProcess &&
+        processResult.interruption !== undefined &&
+        !processResult.outputTruncated &&
+        processResult.framingValid &&
+        processResult.providerUsage.status === "PASS" &&
+        hasQualifiedProcessContainment(processResult)
+      ) {
+        const stored = this.#operations.get(parsed.operationId);
+        if (stored === undefined) throw new Error("qualified interrupted operation was not stored");
+        stored.reconciliationOutcome = "APPLIED";
+        stored.reconciliationEffects = [
+          "qualified-agent-operation-returned-before-forced-process-finality",
+        ];
+      }
+      return receipt;
+    };
+    const execution = Promise.withResolvers<OperationReceipt>();
     this.#pendingOperations.set(parsed.operationId, {
       fingerprint: parsed.fingerprint,
       payloadSignature,
-      receipt: execution,
+      receipt: execution.promise,
+    });
+    void execute().then(execution.resolve, (error: unknown) => {
+      try {
+        if (externalOperationMayHaveStarted) {
+          if (!this.#operations.has(parsed.operationId)) {
+            this.#storeReceipt(
+              parsed.operationId,
+              parsed.fingerprint,
+              payloadSignature,
+              "UNKNOWN",
+              [],
+            );
+          }
+        } else if (this.#forcedInterruptionClaimedBy === parsed.operationId) {
+          this.#forcedInterruptionClaimedBy = undefined;
+        }
+      } catch (tombstoneError: unknown) {
+        execution.reject(tombstoneError);
+        return;
+      }
+      execution.reject(error);
     });
     try {
-      return await execution;
+      return await execution.promise;
     } finally {
-      if (this.#pendingOperations.get(parsed.operationId)?.receipt === execution) {
+      if (this.#pendingOperations.get(parsed.operationId)?.receipt === execution.promise) {
         this.#pendingOperations.delete(parsed.operationId);
       }
     }
@@ -531,8 +663,8 @@ export class Task6PiEngineHost implements EngineHost {
       operationId: parsed.operationId,
       fingerprint: parsed.fingerprint,
       previousOutcome: "UNKNOWN",
-      outcome: "UNKNOWN",
-      observedEffects: [],
+      outcome: stored.reconciliationOutcome ?? "UNKNOWN",
+      observedEffects: stored.reconciliationEffects ?? [],
       observedAt: this.#now(),
     });
     return Promise.resolve(operationReconciliationReceiptSchema.parse(stored.reconciliation));

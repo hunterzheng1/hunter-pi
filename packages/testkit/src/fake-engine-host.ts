@@ -21,6 +21,7 @@ import {
   type EngineHost,
   type EngineInput,
   type EngineObservation,
+  type EngineExternalOperationBoundary,
   type EventCursor,
   type InterruptRequest,
   type ProbeRequest,
@@ -60,6 +61,12 @@ interface StoredOperation {
   reconciliationReceipt?: OperationReconciliationReceipt;
 }
 
+interface PendingSend {
+  readonly fingerprint: string;
+  readonly payloadSignature: string;
+  readonly receipt: Promise<OperationReceipt>;
+}
+
 function identityBody(identity: string): string {
   return identity.slice(identity.indexOf("_") + 1);
 }
@@ -78,6 +85,7 @@ export class FakeEngineHost implements EngineHost {
   readonly #now: () => string;
   readonly #supportedCapabilities: ReadonlySet<EngineCapability>;
   readonly #operations = new Map<OperationId, StoredOperation>();
+  readonly #pendingSends = new Map<OperationId, PendingSend>();
   readonly #observations = new Map<string, readonly EngineObservation[]>();
   readonly #handles = new Map<string, EngineHandle>();
   readonly #unknownThenReconcilesOperationIds: ReadonlySet<string>;
@@ -144,7 +152,11 @@ export class FakeEngineHost implements EngineHost {
     );
   }
 
-  public send(handle: EngineHandle, input: EngineInput): Promise<OperationReceipt> {
+  public async send(
+    handle: EngineHandle,
+    input: EngineInput,
+    boundary?: EngineExternalOperationBoundary,
+  ): Promise<OperationReceipt> {
     const parsedHandle = this.#requireIssuedHandle(handle);
     const parsed = engineInputSchema.parse(input);
     this.#validateOperationBoundary(
@@ -152,20 +164,53 @@ export class FakeEngineHost implements EngineHost {
       engineHandleTargetNamespace,
       parsedHandle.engineHandleId,
     );
-    return Promise.resolve(
-      this.#recordOperation(
+    const payloadSignature = JSON.stringify([
+      "SEND_INPUT",
+      parsedHandle.engineHandleId,
+      parsed.kind,
+      parsed.content,
+      operationBoundarySignature(parsed),
+    ]);
+    if (this.#operations.has(parsed.operationId)) {
+      return this.#recordOperation(
         parsed.operationId,
         parsed.fingerprint,
-        JSON.stringify([
-          "SEND_INPUT",
-          parsedHandle.engineHandleId,
-          parsed.kind,
-          parsed.content,
-          operationBoundarySignature(parsed),
-        ]),
+        payloadSignature,
         "input-recorded",
-      ),
-    );
+      );
+    }
+    const pending = this.#pendingSends.get(parsed.operationId);
+    if (pending !== undefined) {
+      if (
+        pending.fingerprint !== parsed.fingerprint ||
+        pending.payloadSignature !== payloadSignature
+      ) {
+        throw new OperationReplayConflictError(parsed.operationId);
+      }
+      return pending.receipt;
+    }
+    const execution = Promise.withResolvers<OperationReceipt>();
+    this.#pendingSends.set(parsed.operationId, {
+      fingerprint: parsed.fingerprint,
+      payloadSignature,
+      receipt: execution.promise,
+    });
+    void (async (): Promise<OperationReceipt> => {
+      await boundary?.beforeExternalOperation();
+      return this.#recordOperation(
+        parsed.operationId,
+        parsed.fingerprint,
+        payloadSignature,
+        "input-recorded",
+      );
+    })().then(execution.resolve, execution.reject);
+    try {
+      return await execution.promise;
+    } finally {
+      if (this.#pendingSends.get(parsed.operationId)?.receipt === execution.promise) {
+        this.#pendingSends.delete(parsed.operationId);
+      }
+    }
   }
 
   public async *observe(

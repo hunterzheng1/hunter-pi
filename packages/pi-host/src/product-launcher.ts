@@ -58,6 +58,18 @@ export interface CreatePiLaunchPlanOptions {
   readonly pluginActivation?: QualifiedPiPluginActivation;
 }
 
+export type CreateRawPiLaunchPlanOptions = Omit<
+  CreatePiLaunchPlanOptions,
+  | "purpose"
+  | "safeMode"
+  | "continueSession"
+  | "resumeSession"
+  | "coreExtensionPath"
+  | "displayHeader"
+  | "blockPromptInput"
+  | "pluginActivation"
+>;
+
 export interface PiProviderDestination {
   readonly configuredOrigin: string;
   readonly pristineOrigin: string | null;
@@ -301,6 +313,99 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
     arguments: arguments_,
     cwd: options.cwd,
     environment,
+  };
+}
+
+/**
+ * Builds the raw-Pi side of a paired pilot comparison. It intentionally reuses
+ * the same destination, model, authentication, offline package, and session-tree
+ * gates as Hunter Pi while removing every Hunter and user extension surface.
+ */
+export function createRawPiLaunchPlan(options: CreateRawPiLaunchPlanOptions): PiLaunchPlan {
+  const configuration = hpiConfigurationSchema.parse(options.configuration);
+  if (configuration.setupCompletedAt === null) {
+    throw new HpiLaunchBlockedError(
+      "CONFIGURATION_REQUIRED",
+      "Run `hpi setup` before starting the raw Pi comparator.",
+    );
+  }
+  if (providerDisclosureRequired(configuration)) {
+    throw new HpiLaunchBlockedError(
+      "DISCLOSURE_REQUIRED",
+      "Run `hpi setup` and acknowledge the current Provider data disclosure.",
+    );
+  }
+  const destinationDisposition = classifyPiProviderDestination(
+    configuration,
+    options.resolvedProviderDestination,
+  );
+  if (destinationDisposition === "DISCLOSURE_REQUIRED") {
+    throw new HpiLaunchBlockedError(
+      "DISCLOSURE_REQUIRED",
+      "The resolved Provider origin changed after acknowledgement; rerun `hpi setup`.",
+    );
+  }
+  if (
+    destinationDisposition === "DESTINATION_NOT_ALLOWED" ||
+    options.resolvedProviderDestination === undefined
+  ) {
+    throw new HpiLaunchBlockedError(
+      "PROVIDER_DESTINATION_NOT_ALLOWED",
+      configuration.provider.endpointCategory === "PROVIDER_MANAGED"
+        ? "The configured Provider origin does not match the fixed Pi managed destination."
+        : "The resolved custom/local Provider origin does not match the acknowledged destination.",
+    );
+  }
+  if (!options.providerAuthConfigured) {
+    throw new HpiLaunchBlockedError(
+      "PROVIDER_AUTH_REQUIRED",
+      "Configure authentication for the selected Provider before starting the raw Pi comparator.",
+    );
+  }
+  if (options.sessionTreeInspected !== true) {
+    throw new HpiLaunchBlockedError(
+      "INVALID_LAUNCH_PATH",
+      "Every raw Pi comparator launch requires an isolated physical session-tree inspection before Pi starts.",
+    );
+  }
+  if (configuration.provider.selectedModel === null) {
+    throw new HpiLaunchBlockedError(
+      "MODEL_SELECTION_REQUIRED",
+      "Run `hpi setup --model <exact-model-id>` before starting Pi.",
+    );
+  }
+  const piCliPath = options.piCliPath ?? resolveBundledPiCliPath();
+  requireAbsolutePath(piCliPath, "Pi CLI path");
+  requireAbsolutePath(options.cwd, "Workspace path");
+  const qualifiedModel = `${configuration.provider.id}/${configuration.provider.selectedModel}`;
+  const arguments_: string[] = [
+    piCliPath,
+    "--offline",
+    "--no-approve",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--session-dir",
+    options.paths.sessionDirectory,
+    "--provider",
+    configuration.provider.id,
+    "--model",
+    qualifiedModel,
+    "--models",
+    qualifiedModel,
+  ];
+  return {
+    executable: process.execPath,
+    arguments: arguments_,
+    cwd: options.cwd,
+    environment: {
+      PI_CODING_AGENT_DIR: options.paths.piAgentDirectory,
+      PI_CODING_AGENT_SESSION_DIR: options.paths.sessionDirectory,
+      PI_OFFLINE: "1",
+      PI_TELEMETRY: "0",
+    },
   };
 }
 

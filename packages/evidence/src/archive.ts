@@ -24,6 +24,7 @@ import {
 } from "@hunter-pi/domain";
 import {
   assertRunProjectionIntegrity,
+  recoveryEvidenceRequestSchema,
   replayWorkflowEvents,
   runProjectionSchema,
   workflowEventSchema,
@@ -390,13 +391,8 @@ export const importedArchiveProjectionSchema = z
     const hasLiveAttempt = projection.archiveProjection.attempts.some((attempt) =>
       ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
     );
-    const hasLiveCheckpointState = projection.archiveProjection.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.activeOperationReceiptIds.length > 0 ||
-        checkpoint.unknownOperationIds.length > 0 ||
-        checkpoint.heldWriterLeaseIds.length > 0 ||
-        checkpoint.processReferences.length > 0 ||
-        checkpoint.engine.sessionReference !== undefined,
+    const hasLiveCheckpointState = projection.archiveProjection.checkpoints.some((checkpoint) =>
+      checkpointHasUnreconciledState(projection.archiveProjection, checkpoint),
     );
     if (hasLiveAttempt || hasLiveCheckpointState) {
       context.addIssue({
@@ -657,6 +653,159 @@ function assertOperationIdentity(
 
 const archiveOperationLocks = new Map<string, Promise<void>>();
 
+function checkpointHasUnreconciledState(
+  projection: RunProjection,
+  checkpoint: RunProjection["checkpoints"][number],
+  evidence?: readonly EvidenceEnvelope[],
+): boolean {
+  const carriesExternalState =
+    checkpoint.activeOperationReceiptIds.length > 0 ||
+    checkpoint.unknownOperationIds.length > 0 ||
+    checkpoint.heldWriterLeaseIds.length > 0 ||
+    checkpoint.processReferences.length > 0 ||
+    checkpoint.engine.sessionReference !== undefined;
+  if (!carriesExternalState) return false;
+  const recoveryAttempts = projection.attempts.filter(
+    (attempt) => attempt.recoveryCheckpointId === checkpoint.checkpointId,
+  );
+  const finalities = projection.attemptFinalityReceipts.filter(
+    (receipt) =>
+      receipt.attemptId === checkpoint.attemptId &&
+      receipt.checkpointId === checkpoint.checkpointId,
+  );
+  const recoveryAttempt = recoveryAttempts.length === 1 ? recoveryAttempts[0] : undefined;
+  const finality = finalities.length === 1 ? finalities[0] : undefined;
+  const sameIdentities = (left: readonly unknown[], right: readonly unknown[]): boolean => {
+    const leftSet = new Set(left.map((value) => canonicalJson(value)));
+    const rightSet = new Set(right.map((value) => canonicalJson(value)));
+    return (
+      left.length === right.length &&
+      leftSet.size === left.length &&
+      rightSet.size === right.length &&
+      [...leftSet].every((identity) => rightSet.has(identity))
+    );
+  };
+  const recoveryEvidenceBound =
+    recoveryAttempt?.failureEvidenceIds !== undefined &&
+    projection.observations.some(
+      (observation) =>
+        observation.attemptId === checkpoint.attemptId &&
+        observation.kind === "PROCESS_EXITED" &&
+        recoveryAttempt.failureEvidenceIds?.every((evidenceId) =>
+          observation.evidenceIds.includes(evidenceId),
+        ) === true,
+    );
+  const exactFinality =
+    finality?.runId === checkpoint.runId &&
+    finality.attemptId === checkpoint.attemptId &&
+    finality.checkpointId === checkpoint.checkpointId &&
+    finality.workspaceId === checkpoint.workspaceId &&
+    finality.workspaceFingerprint === checkpoint.workspaceFingerprint &&
+    finality.sourceFingerprint === checkpoint.sourceFingerprint &&
+    sameIdentities(finality.releasedWriterLeaseIds, checkpoint.heldWriterLeaseIds) &&
+    sameIdentities(
+      finality.processFinalities.map(({ processReference }) => processReference),
+      checkpoint.processReferences,
+    ) &&
+    Date.parse(finality.observedAt) >= Date.parse(checkpoint.createdAt);
+  const exactProjectionRecovery =
+    checkpoint.attemptId !== undefined &&
+    recoveryAttempt?.previousAttemptId === checkpoint.attemptId &&
+    recoveryAttempt.recoveryOperationId !== undefined &&
+    recoveryAttempt.recoveryOperationFingerprint !== undefined &&
+    recoveryEvidenceBound &&
+    exactFinality;
+  if (!exactProjectionRecovery) return true;
+
+  // Imported projections are read-only derivatives of an Archive package that was already checked
+  // with its Evidence. The projection schema has no Evidence field, so it can only repeat the exact
+  // projection/finality guard here without pretending to re-prove the recovery payload.
+  if (evidence === undefined) return false;
+
+  const recoveryEvidenceIds = recoveryAttempt.failureEvidenceIds;
+  if (recoveryEvidenceIds?.length !== 1) return true;
+  const matchingEvidence = evidence.filter(
+    (envelope) => envelope.evidenceId === recoveryEvidenceIds[0],
+  );
+  if (matchingEvidence.length !== 1) return true;
+  const recoveryEvidence = matchingEvidence[0];
+  if (
+    recoveryEvidence?.kind !== "observation" ||
+    recoveryEvidence.scope.runId !== checkpoint.runId ||
+    recoveryEvidence.scope.attemptId !== checkpoint.attemptId ||
+    recoveryEvidence.sourceFingerprint !== checkpoint.sourceFingerprint ||
+    recoveryEvidence.capture.retentionStatus !== "RETAINED" ||
+    recoveryEvidence.capture.truncated ||
+    recoveryEvidence.capture.capturedText === undefined
+  ) {
+    return true;
+  }
+
+  let parsedRecoveryEvidence: unknown;
+  try {
+    parsedRecoveryEvidence = JSON.parse(recoveryEvidence.capture.capturedText);
+  } catch {
+    return true;
+  }
+  const recoveryEvidenceResult = recoveryEvidenceRequestSchema.safeParse(parsedRecoveryEvidence);
+  if (!recoveryEvidenceResult.success) return true;
+  const recoveryFacts = recoveryEvidenceResult.data;
+  const canonicalRecoveryFacts = canonicalJson(recoveryFacts);
+  const recoveryFingerprint = sha256Fingerprint(canonicalRecoveryFacts);
+  if (
+    recoveryEvidence.capture.capturedText !== canonicalRecoveryFacts ||
+    recoveryEvidence.contentHash !== recoveryFingerprint ||
+    recoveryAttempt.precedingFailureFingerprint !== recoveryFingerprint ||
+    recoveryEvidence.createdAt !== recoveryFacts.createdAt ||
+    recoveryFacts.runId !== checkpoint.runId ||
+    recoveryFacts.checkpointId !== checkpoint.checkpointId ||
+    recoveryFacts.attemptId !== checkpoint.attemptId ||
+    recoveryFacts.sourceFingerprint !== checkpoint.sourceFingerprint ||
+    Date.parse(recoveryFacts.createdAt) < Date.parse(checkpoint.createdAt)
+  ) {
+    return true;
+  }
+
+  const reconciliation = recoveryFacts.reconciliation;
+  const expectedDistributionIdentity = {
+    kind: "DISTRIBUTION_RELEASE" as const,
+    distributionReleaseId: checkpoint.distributionReleaseId,
+  };
+  const expectedWorkspaceIdentity = {
+    kind: "WORKSPACE" as const,
+    workspaceId: checkpoint.workspaceId,
+    repositoryFingerprint: checkpoint.repositoryFingerprint,
+    workspaceFingerprint: checkpoint.workspaceFingerprint,
+    sourceFingerprint: checkpoint.sourceFingerprint,
+  };
+  const expectedEngineIdentity = {
+    kind: "ENGINE" as const,
+    engineReleaseId: checkpoint.engine.engineReleaseId,
+    engineReleaseFingerprint: checkpoint.engine.engineReleaseFingerprint,
+    ...(checkpoint.engine.sessionReference === undefined
+      ? {}
+      : { sessionReference: checkpoint.engine.sessionReference }),
+  };
+  const operationsAreTerminal =
+    sameIdentities(
+      reconciliation.operations.map(({ operationId }) => operationId),
+      checkpoint.unknownOperationIds,
+    ) && reconciliation.operations.every((receipt) => receipt.outcome !== "UNKNOWN");
+  const exactRecoveryFacts =
+    canonicalJson(reconciliation.distributionIdentity) ===
+      canonicalJson(expectedDistributionIdentity) &&
+    canonicalJson(reconciliation.workspaceIdentity) === canonicalJson(expectedWorkspaceIdentity) &&
+    canonicalJson(reconciliation.engineIdentity) === canonicalJson(expectedEngineIdentity) &&
+    sameIdentities(
+      reconciliation.activeOperationReceiptIds,
+      checkpoint.activeOperationReceiptIds,
+    ) &&
+    sameIdentities(reconciliation.unknownOperationIds, checkpoint.unknownOperationIds) &&
+    operationsAreTerminal &&
+    canonicalJson(reconciliation.attemptFinalityReceipt) === canonicalJson(finality);
+  return !exactRecoveryFacts;
+}
+
 async function withArchiveOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
   const predecessor = archiveOperationLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -705,13 +854,8 @@ export function assertPortableArchive(archive: ArchivePackage): void {
   const projectionHasLiveAttempt = archive.projection.attempts.some((attempt) =>
     ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
   );
-  const projectionHasLiveCheckpointState = archive.projection.checkpoints.some(
-    (checkpoint) =>
-      checkpoint.activeOperationReceiptIds.length > 0 ||
-      checkpoint.unknownOperationIds.length > 0 ||
-      checkpoint.heldWriterLeaseIds.length > 0 ||
-      checkpoint.processReferences.length > 0 ||
-      checkpoint.engine.sessionReference !== undefined,
+  const projectionHasLiveCheckpointState = archive.projection.checkpoints.some((checkpoint) =>
+    checkpointHasUnreconciledState(archive.projection, checkpoint, archive.evidence),
   );
   if (
     projectionHasLiveAttempt ||
@@ -943,16 +1087,19 @@ function packageFor(request: z.infer<typeof archiveFinalizeRequestSchema>): Arch
       ["PENDING", "STARTING", "RUNNING", "WAITING_INPUT"].includes(attempt.executionStatus),
     )
     .map((attempt) => attempt.attemptId);
-  const activeOperationReceiptIds = request.projection.checkpoints.flatMap(
+  const unresolvedCheckpoints = request.projection.checkpoints.filter((checkpoint) =>
+    checkpointHasUnreconciledState(request.projection, checkpoint, request.evidence),
+  );
+  const activeOperationReceiptIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.activeOperationReceiptIds,
   );
-  const unknownOperationIds = request.projection.checkpoints.flatMap(
+  const unknownOperationIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.unknownOperationIds,
   );
-  const heldWriterLeaseIds = request.projection.checkpoints.flatMap(
+  const heldWriterLeaseIds = unresolvedCheckpoints.flatMap(
     (checkpoint) => checkpoint.heldWriterLeaseIds,
   );
-  const processReferences = request.projection.checkpoints.flatMap((checkpoint) => [
+  const processReferences = unresolvedCheckpoints.flatMap((checkpoint) => [
     ...checkpoint.processReferences,
     ...(checkpoint.engine.sessionReference === undefined
       ? []

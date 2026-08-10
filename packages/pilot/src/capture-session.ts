@@ -15,7 +15,13 @@ import {
   withDurableMutationLock,
   writeImmutableAtomically,
 } from "@hunter-pi/evidence/atomic-write";
-import { realManagedChangeTaskReceiptSchema } from "@hunter-pi/managed-change";
+import {
+  fingerprintRealManagedChangeCheckDefinition,
+  fingerprintRealManagedChangeTaskDefinition,
+  realManagedChangeRequestSchema,
+  realManagedChangeTaskReceiptSchema,
+  type RealManagedChangeRequest,
+} from "@hunter-pi/managed-change";
 import { DurableWorkflowKernel } from "@hunter-pi/workflow-kernel";
 
 import { FilePilotArchiveStore, type TrustedPilotArchive } from "./archive.js";
@@ -33,6 +39,8 @@ import {
   pilotInterruptionSchema,
   pilotOutcomeSchema,
   pilotPlanPluginFixtureIdSchema,
+  pilotQuickTaskReceiptSchema,
+  pilotRunRecoveryLinkSchema,
   pilotRunArchiveReceiptSchema,
   pilotTaskOracleSchema,
   pilotTaskResultSchema,
@@ -40,11 +48,17 @@ import {
   type PilotComparator,
   type PilotExecutionPlan,
   type PilotInterruption,
+  type PilotQuickTaskReceipt,
   type PilotRunArchiveReceipt,
   type PilotTaskOracle,
   type PilotTaskResult,
 } from "./contracts.js";
 import { canonicalJson, pilotFingerprint } from "./serialization.js";
+import { pilotRuntimeBindingMatchesPlan, pilotRuntimeBindingSchema } from "./runtime-binding.js";
+import {
+  pilotQuickWorkflowFactChecklist,
+  pilotQuickWorkflowFactChecklistFingerprint,
+} from "./workflow-facts.js";
 
 const stableCaptureIdSchema = z
   .string()
@@ -63,16 +77,21 @@ const finalizationIntentFilename = "finalization-intent.json";
 const finalizationCommitFilename = "finalization-commit.json";
 const productObservationRuntimeKey = Symbol("pilot-product-observation-runtime-key");
 const productObservationRuntimeCapability = Symbol("pilot-product-observation-runtime-capability");
+const productQuickTaskExecutorKey = Symbol("pilot-product-quick-task-executor-key");
+const productRawComparatorExecutorKey = Symbol("pilot-product-raw-comparator-executor-key");
+const providerIntentFilenameSchema = z
+  .string()
+  .regex(/^provider-[A-Za-z][A-Za-z0-9._-]{0,127}\.intent\.json$/u);
 
 const taskRunObservationSchema = z.strictObject({
   runId: stableCaptureIdSchema,
-  replacementOfRunId: stableCaptureIdSchema.nullable(),
   archiveId: stableCaptureIdSchema,
   archiveFingerprint: fingerprintSchema,
   terminalOutcome: pilotOutcomeSchema,
   providerRequestCount: safeNonnegativeIntegerSchema,
   providerTokenCount: safeNonnegativeIntegerSchema,
   providerCostMinor: safeNonnegativeIntegerSchema,
+  recoveryLinks: z.array(pilotRunRecoveryLinkSchema).max(3),
 });
 
 const installationObservationSchema = z.strictObject({
@@ -80,8 +99,8 @@ const installationObservationSchema = z.strictObject({
   cleanProfileFingerprint: fingerprintSchema,
 });
 
-const taskChainObservationSchema = z.strictObject({
-  kind: z.literal("TASK_CHAIN"),
+const managedTaskObservationSchema = z.strictObject({
+  kind: z.literal("MANAGED_TASK"),
   taskId: stableCaptureIdSchema,
   terminalOutcome: pilotOutcomeSchema,
   sourcePreserved: z.boolean(),
@@ -92,21 +111,12 @@ const taskChainObservationSchema = z.strictObject({
   hunterOverheadMinutes: nonnegativeNumberSchema,
   rawPiCapturedFactCount: safeNonnegativeIntegerSchema,
   rawPiManualInterventions: safeNonnegativeIntegerSchema,
-  runs: z.array(taskRunObservationSchema).min(1).max(10),
+  run: taskRunObservationSchema,
 });
 
-const interruptionObservationSchema = z.strictObject({
-  kind: z.literal("INTERRUPTION"),
-  interruptionKind: pilotInterruptionSchema.shape.kind,
-  interruptionId: pilotInterruptionSchema.shape.interruptionId,
-  taskId: pilotInterruptionSchema.shape.taskId,
-  interruptedRunId: pilotInterruptionSchema.shape.interruptedRunId,
-  replacementRunId: pilotInterruptionSchema.shape.replacementRunId,
-  replacementArchiveFingerprint: pilotInterruptionSchema.shape.replacementArchiveFingerprint,
-  historyPreserved: pilotInterruptionSchema.shape.historyPreserved,
-  sourcePreserved: pilotInterruptionSchema.shape.sourcePreserved,
-  resumeOutcome: pilotInterruptionSchema.shape.resumeOutcome,
-  actionableWithinFiveMinutes: pilotInterruptionSchema.shape.actionableWithinFiveMinutes,
+const quickTaskObservationSchema = z.strictObject({
+  kind: z.literal("QUICK_TASK"),
+  receipt: pilotQuickTaskReceiptSchema,
 });
 
 const warmStartObservationSchema = z.strictObject({
@@ -160,19 +170,13 @@ const ciObservationSchema = z.strictObject({
 
 const comparatorObservationSchema = z.strictObject({
   kind: z.literal("RAW_PI_COMPARATOR"),
-  taskId: stableCaptureIdSchema,
-  rawPiCapturedFactCount: safeNonnegativeIntegerSchema,
-  rawPiManualInterventions: safeNonnegativeIntegerSchema,
-  containedFalseCompletion: z.boolean(),
-  rawPiProviderRequestCount: safePositiveIntegerSchema,
-  rawPiProviderTokenCount: safeNonnegativeIntegerSchema,
-  rawPiProviderCostMinor: safeNonnegativeIntegerSchema,
+  comparator: pilotComparatorSchema,
 });
 
 export const pilotCaptureObservationSchema = z.discriminatedUnion("kind", [
   installationObservationSchema,
-  taskChainObservationSchema,
-  interruptionObservationSchema,
+  managedTaskObservationSchema,
+  quickTaskObservationSchema,
   warmStartObservationSchema,
   acknowledgementObservationSchema,
   updateObservationSchema,
@@ -186,7 +190,6 @@ export type PilotCaptureObservation = z.infer<typeof pilotCaptureObservationSche
 
 const pilotCaptureOperatorObservationSchema = z.discriminatedUnion("kind", [
   installationObservationSchema,
-  interruptionObservationSchema,
   warmStartObservationSchema,
   acknowledgementObservationSchema,
   updateObservationSchema,
@@ -196,7 +199,8 @@ const pilotCaptureOperatorObservationSchema = z.discriminatedUnion("kind", [
   ciObservationSchema,
 ]);
 const pilotCaptureProductObservationSchema = z.discriminatedUnion("kind", [
-  taskChainObservationSchema,
+  managedTaskObservationSchema,
+  quickTaskObservationSchema,
   comparatorObservationSchema,
 ]);
 
@@ -227,12 +231,33 @@ type PilotCaptureAnyRecordInput = PilotCaptureRecordInput | PilotCaptureProductR
 
 export interface PilotCaptureProductObservationRuntime {
   readonly [productObservationRuntimeKey]: typeof productObservationRuntimeCapability;
+  readonly [productQuickTaskExecutorKey]?: PilotCaptureQuickTaskExecutor;
+  readonly [productRawComparatorExecutorKey]?: PilotCaptureRawComparatorExecutor;
 }
 
 /** @internal Product runtime and source-level test support; not re-exported from the package entry. */
 export function createPilotCaptureProductObservationRuntime(): PilotCaptureProductObservationRuntime {
   return Object.freeze({
     [productObservationRuntimeKey]: productObservationRuntimeCapability,
+  }) as PilotCaptureProductObservationRuntime;
+}
+
+/** @internal Bundled product execution seam; deliberately absent from the public package entry. */
+export function createPilotCaptureProductExecutionRuntime(options: {
+  readonly quickTask?: PilotCaptureQuickTaskExecutor;
+  readonly rawComparator?: PilotCaptureRawComparatorExecutor;
+}): PilotCaptureProductObservationRuntime {
+  if (options.quickTask === undefined && options.rawComparator === undefined) {
+    throw new Error("a product execution runtime requires one concrete executor");
+  }
+  return Object.freeze({
+    [productObservationRuntimeKey]: productObservationRuntimeCapability,
+    ...(options.quickTask === undefined
+      ? {}
+      : { [productQuickTaskExecutorKey]: options.quickTask }),
+    ...(options.rawComparator === undefined
+      ? {}
+      : { [productRawComparatorExecutorKey]: options.rawComparator }),
   }) as PilotCaptureProductObservationRuntime;
 }
 
@@ -248,6 +273,18 @@ function isPilotCaptureProductObservationRuntime(
   );
 }
 
+function quickTaskExecutorFor(runtime: unknown): PilotCaptureQuickTaskExecutor | undefined {
+  return isPilotCaptureProductObservationRuntime(runtime)
+    ? runtime[productQuickTaskExecutorKey]
+    : undefined;
+}
+
+function rawComparatorExecutorFor(runtime: unknown): PilotCaptureRawComparatorExecutor | undefined {
+  return isPilotCaptureProductObservationRuntime(runtime)
+    ? runtime[productRawComparatorExecutorKey]
+    : undefined;
+}
+
 const pilotManagedTaskMetricsSchema = z.strictObject({
   applicableFactCount: safePositiveIntegerSchema,
   capturedFactCount: safeNonnegativeIntegerSchema,
@@ -256,15 +293,106 @@ const pilotManagedTaskMetricsSchema = z.strictObject({
   rawPiManualInterventions: safeNonnegativeIntegerSchema,
 });
 
-export const pilotCaptureManagedTaskInputSchema = z.strictObject({
+export const pilotCaptureManagedTaskInputV1Schema = z.strictObject({
   schemaVersion: z.literal("hpi-pilot-capture-managed-task.v1"),
   sessionId: stableCaptureIdSchema,
   operationId: stableCaptureIdSchema,
   taskId: stableCaptureIdSchema,
-  archiveIds: z.array(stableCaptureIdSchema).min(1).max(10),
+  archiveIds: z.array(stableCaptureIdSchema).length(1),
   metrics: pilotManagedTaskMetricsSchema,
 });
-export type PilotCaptureManagedTaskInput = z.infer<typeof pilotCaptureManagedTaskInputSchema>;
+export const pilotCaptureManagedTaskInputV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-capture-managed-task.v2"),
+  sessionId: stableCaptureIdSchema,
+  operationId: stableCaptureIdSchema,
+  taskId: stableCaptureIdSchema,
+  archiveIds: z.array(stableCaptureIdSchema).length(1),
+});
+export const pilotCaptureManagedTaskInputSchema = z.discriminatedUnion("schemaVersion", [
+  pilotCaptureManagedTaskInputV1Schema,
+  pilotCaptureManagedTaskInputV2Schema,
+]);
+export type PilotCaptureManagedTaskInput = z.infer<typeof pilotCaptureManagedTaskInputV2Schema>;
+
+export const pilotCaptureManagedProviderReservationInputSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-managed-provider-reservation.v1"),
+  sessionId: stableCaptureIdSchema,
+  operationId: stableCaptureIdSchema,
+  taskId: stableCaptureIdSchema,
+  planFingerprint: fingerprintSchema,
+});
+export type PilotCaptureManagedProviderReservationInput = z.infer<
+  typeof pilotCaptureManagedProviderReservationInputSchema
+>;
+
+export const pilotCaptureQuickTaskInputV1Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-capture-quick-task.v1"),
+  sessionId: stableCaptureIdSchema,
+  operationId: stableCaptureIdSchema,
+  taskId: stableCaptureIdSchema,
+  repository: z
+    .string()
+    .min(1)
+    .max(32_768)
+    .refine(
+      (value) =>
+        !Array.from(value).some((character) => {
+          const codePoint = character.codePointAt(0) ?? 0;
+          return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+        }),
+      "repository path contains a control character",
+    ),
+  request: realManagedChangeRequestSchema,
+});
+export const pilotCaptureQuickTaskInputSchema = pilotCaptureQuickTaskInputV1Schema
+  .omit({ schemaVersion: true })
+  .extend({
+    schemaVersion: z.literal("hpi-pilot-capture-quick-task.v2"),
+    runtimeBinding: pilotRuntimeBindingSchema,
+  });
+export type PilotCaptureQuickTaskInput = z.infer<typeof pilotCaptureQuickTaskInputSchema>;
+
+export interface PilotCaptureQuickTaskExecutionContext {
+  readonly plan: PilotExecutionPlan;
+  readonly oracle: Extract<PilotTaskOracle, { readonly mode: "QUICK" }>;
+  readonly repository: string;
+  readonly request: RealManagedChangeRequest;
+  readonly authorizeProviderSend: () => Promise<void>;
+}
+
+export type PilotCaptureQuickTaskExecutor = (
+  context: PilotCaptureQuickTaskExecutionContext,
+) => Promise<PilotQuickTaskReceipt>;
+
+export const pilotCaptureRawComparatorInputV1Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-capture-raw-comparator.v1"),
+  sessionId: stableCaptureIdSchema,
+  operationId: stableCaptureIdSchema,
+  taskId: stableCaptureIdSchema,
+  repository: pilotCaptureQuickTaskInputV1Schema.shape.repository,
+  request: realManagedChangeRequestSchema,
+});
+export const pilotCaptureRawComparatorInputSchema = pilotCaptureRawComparatorInputV1Schema
+  .omit({ schemaVersion: true })
+  .extend({
+    schemaVersion: z.literal("hpi-pilot-capture-raw-comparator.v2"),
+    runtimeBinding: pilotRuntimeBindingSchema,
+    comparatorConfigurationFingerprint: fingerprintSchema,
+  });
+export type PilotCaptureRawComparatorInput = z.infer<typeof pilotCaptureRawComparatorInputSchema>;
+
+export interface PilotCaptureRawComparatorExecutionContext {
+  readonly plan: PilotExecutionPlan;
+  readonly oracle: PilotTaskOracle;
+  readonly hunterResult: PilotTaskResult;
+  readonly repository: string;
+  readonly request: RealManagedChangeRequest;
+  readonly authorizeProviderSend: () => Promise<void>;
+}
+
+export type PilotCaptureRawComparatorExecutor = (
+  context: PilotCaptureRawComparatorExecutionContext,
+) => Promise<PilotComparator>;
 
 export const pilotCaptureNextActionSchema = z.enum([
   "RECORD_INSTALLATION",
@@ -291,6 +419,34 @@ const providerUsageTotalSchema = z.strictObject({
   costMinor: safeNonnegativeIntegerSchema,
 });
 type ProviderUsageTotal = z.infer<typeof providerUsageTotalSchema>;
+
+const pilotProviderReservationSchema = z.strictObject({
+  requests: safePositiveIntegerSchema,
+  tokens: safePositiveIntegerSchema,
+  costMinor: safePositiveIntegerSchema,
+});
+export type PilotProviderReservation = z.infer<typeof pilotProviderReservationSchema>;
+
+const providerOperationIntentFactsSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-pilot-provider-operation-intent.v1"),
+  sessionId: stableCaptureIdSchema,
+  planFingerprint: fingerprintSchema,
+  operationId: stableCaptureIdSchema,
+  taskId: stableCaptureIdSchema,
+  kind: z.enum(["MANAGED_TASK", "QUICK_TASK", "RAW_PI_COMPARATOR"]),
+  factKey: stableCaptureIdSchema,
+  inputFingerprint: fingerprintSchema,
+  eventCountBefore: safeNonnegativeIntegerSchema,
+  previousEventFingerprint: fingerprintSchema.nullable(),
+  usageBefore: providerUsageTotalSchema,
+  reservation: pilotProviderReservationSchema,
+  observedAt: timestampSchema,
+});
+const providerOperationIntentSchema = providerOperationIntentFactsSchema.extend({
+  intentFingerprint: fingerprintSchema,
+  proof: proofSchema,
+});
+type ProviderOperationIntent = z.infer<typeof providerOperationIntentSchema>;
 
 const captureCountsSchema = z.strictObject({
   installation: z.number().int().min(0).max(1),
@@ -402,6 +558,8 @@ export type PilotCaptureCoordinatorErrorCode =
   | "SESSION_SEALED"
   | "OBSERVATION_INVALID"
   | "PROVIDER_BUDGET_EXCEEDED"
+  | "PROVIDER_USAGE_RECONCILIATION_REQUIRED"
+  | "RUNTIME_BINDING_MISMATCH"
   | "INCOMPLETE"
   | "WINDOWS_REQUIRED"
   | "ARCHIVE_MISMATCH"
@@ -480,6 +638,26 @@ function eventFacts(event: CaptureEvent): z.infer<typeof captureEventFactsSchema
   };
 }
 
+function providerIntentFacts(
+  intent: ProviderOperationIntent,
+): z.infer<typeof providerOperationIntentFactsSchema> {
+  return {
+    schemaVersion: intent.schemaVersion,
+    sessionId: intent.sessionId,
+    planFingerprint: intent.planFingerprint,
+    operationId: intent.operationId,
+    taskId: intent.taskId,
+    kind: intent.kind,
+    factKey: intent.factKey,
+    inputFingerprint: intent.inputFingerprint,
+    eventCountBefore: intent.eventCountBefore,
+    previousEventFingerprint: intent.previousEventFingerprint,
+    usageBefore: intent.usageBefore,
+    reservation: intent.reservation,
+    observedAt: intent.observedAt,
+  };
+}
+
 function safeUsageSum(values: readonly number[]): number | undefined {
   let total = 0;
   for (const value of values) {
@@ -494,10 +672,10 @@ function factKeyFor(observation: PilotCaptureObservation): string {
   switch (observation.kind) {
     case "INSTALLATION":
       return "installation";
-    case "TASK_CHAIN":
+    case "MANAGED_TASK":
       return `task.${observation.taskId}`;
-    case "INTERRUPTION":
-      return `interruption.${observation.interruptionId}`;
+    case "QUICK_TASK":
+      return `task.${observation.receipt.taskId}`;
     case "WARM_START_SAMPLES":
       return "samples.warm-start";
     case "ACKNOWLEDGEMENT_SAMPLES":
@@ -513,11 +691,12 @@ function factKeyFor(observation: PilotCaptureObservation): string {
     case "CI":
       return `ci.${observation.platform.toLowerCase()}`;
     case "RAW_PI_COMPARATOR":
-      return `comparator.${observation.taskId}`;
+      return `comparator.${observation.comparator.taskId}`;
   }
 }
 
-type TaskChainObservation = Extract<PilotCaptureObservation, { readonly kind: "TASK_CHAIN" }>;
+type ManagedTaskObservation = Extract<PilotCaptureObservation, { readonly kind: "MANAGED_TASK" }>;
+type QuickTaskObservation = Extract<PilotCaptureObservation, { readonly kind: "QUICK_TASK" }>;
 type ComparatorObservation = Extract<
   PilotCaptureObservation,
   { readonly kind: "RAW_PI_COMPARATOR" }
@@ -540,16 +719,26 @@ function taskOraclesFor(plan: PilotExecutionPlan): PilotTaskOracle[] {
     if (definitions.some((fingerprint) => fingerprint === undefined)) {
       throw coordinatorError("SESSION_CORRUPT", "pilot capture plan check binding is invalid");
     }
-    return pilotTaskOracleSchema.parse({
+    const binding = {
       taskId: task.taskId,
+      targetId: task.targetId,
       repositoryFingerprint: target.repositoryFingerprint,
       targetReferenceFingerprint: target.targetReferenceFingerprint,
       sourceFingerprint: task.sourceFingerprint,
-      mode: task.mode,
-      expectedOutcome: task.expectedOutcome,
+      taskDefinitionFingerprint: task.taskDefinitionFingerprint,
       acceptanceCheckIds: task.acceptanceCheckIds,
       acceptanceCheckDefinitionFingerprints: definitions,
-    });
+    };
+    return pilotTaskOracleSchema.parse(
+      task.mode === "QUICK"
+        ? {
+            ...binding,
+            mode: "QUICK",
+            expectedExecutionObservation: task.expectedExecutionObservation,
+            expectedAcceptanceObservation: task.expectedAcceptanceObservation,
+          }
+        : { ...binding, mode: "MANAGED", expectedOutcome: task.expectedOutcome },
+    );
   });
 }
 
@@ -561,65 +750,76 @@ function oracleFor(plan: PilotExecutionPlan, taskId: string): PilotTaskOracle {
   return oracle;
 }
 
-function runReceiptsFor(
+function resolvedBinding(oracle: PilotTaskOracle) {
+  return {
+    taskId: oracle.taskId,
+    targetId: oracle.targetId,
+    repositoryFingerprint: oracle.repositoryFingerprint,
+    targetReferenceFingerprint: oracle.targetReferenceFingerprint,
+    sourceFingerprint: oracle.sourceFingerprint,
+    taskDefinitionFingerprint: oracle.taskDefinitionFingerprint,
+    acceptanceCheckIds: oracle.acceptanceCheckIds,
+    acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
+  };
+}
+
+function processInterruptionForPlanKind(
+  kind: PilotExecutionPlan["interruptionTasks"][number]["kind"],
+) {
+  switch (kind) {
+    case "FORCED_PROCESS_KILL":
+      return "FORCED_PROCESS_KILL_AFTER_AGENT_END" as const;
+    case "TERMINAL_CLOSE_SIMULATION":
+      return "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END" as const;
+    case "POWER_LOSS_SIMULATION":
+      return "POWER_LOSS_SIMULATION_AFTER_AGENT_END" as const;
+  }
+}
+
+function runReceiptFor(
   plan: PilotExecutionPlan,
-  observation: TaskChainObservation,
-): PilotRunArchiveReceipt[] {
+  observation: ManagedTaskObservation,
+): PilotRunArchiveReceipt {
   const oracle = oracleFor(plan, observation.taskId);
+  if (oracle.mode !== "MANAGED") {
+    throw coordinatorError("OBSERVATION_INVALID", "Managed Archive does not bind a Managed task");
+  }
   try {
-    return observation.runs.map((run) =>
-      pilotRunArchiveReceiptSchema.parse({
-        runId: run.runId,
-        taskId: observation.taskId,
-        replacementOfRunId: run.replacementOfRunId,
-        archiveId: run.archiveId,
-        archiveFingerprint: run.archiveFingerprint,
-        sourceFingerprint: oracle.sourceFingerprint,
-        terminalOutcome: run.terminalOutcome,
-        providerRequestCount: run.providerRequestCount,
-        providerTokenCount: run.providerTokenCount,
-        providerCostMinor: run.providerCostMinor,
-      }),
-    );
+    return pilotRunArchiveReceiptSchema.parse({
+      ...observation.run,
+      taskId: observation.taskId,
+      sourceFingerprint: oracle.sourceFingerprint,
+    });
   } catch {
     throw coordinatorError("OBSERVATION_INVALID", "pilot capture Run receipt is invalid");
   }
 }
 
-function usageForTaskObservation(observation: TaskChainObservation): ProviderUsageTotal {
-  const requests = safeUsageSum(observation.runs.map((run) => run.providerRequestCount));
-  const tokens = safeUsageSum(observation.runs.map((run) => run.providerTokenCount));
-  const costMinor = safeUsageSum(observation.runs.map((run) => run.providerCostMinor));
-  if (requests === undefined || tokens === undefined || costMinor === undefined) {
-    throw coordinatorError("OBSERVATION_INVALID", "pilot capture Provider usage is invalid");
-  }
-  return providerUsageTotalSchema.parse({ requests, tokens, costMinor });
-}
-
-function taskResultFor(
+function taskResultForManaged(
   plan: PilotExecutionPlan,
-  observation: TaskChainObservation,
+  observation: ManagedTaskObservation,
 ): PilotTaskResult {
   const oracle = oracleFor(plan, observation.taskId);
-  const usage = usageForTaskObservation(observation);
+  if (oracle.mode !== "MANAGED") {
+    throw coordinatorError(
+      "OBSERVATION_INVALID",
+      "Managed observation does not bind a Managed task",
+    );
+  }
+  const run = runReceiptFor(plan, observation);
   try {
     return pilotTaskResultSchema.parse({
-      taskId: oracle.taskId,
-      repositoryFingerprint: oracle.repositoryFingerprint,
-      targetReferenceFingerprint: oracle.targetReferenceFingerprint,
-      sourceFingerprint: oracle.sourceFingerprint,
-      mode: oracle.mode,
-      acceptanceCheckIds: oracle.acceptanceCheckIds,
-      acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
+      ...resolvedBinding(oracle),
+      mode: "MANAGED",
       terminalOutcome: observation.terminalOutcome,
       oracleOutcome: oracle.expectedOutcome,
       correct: observation.terminalOutcome === oracle.expectedOutcome,
       sourcePreserved: observation.sourcePreserved,
       rawSecretLeakage: observation.rawSecretLeakage,
-      providerSendAcknowledged: usage.requests > 0,
-      providerRequestCount: usage.requests,
-      providerTokenCount: usage.tokens,
-      providerCostMinor: usage.costMinor,
+      providerSendAcknowledged: run.providerRequestCount > 0,
+      providerRequestCount: run.providerRequestCount,
+      providerTokenCount: run.providerTokenCount,
+      providerCostMinor: run.providerCostMinor,
       applicableFactCount: observation.applicableFactCount,
       capturedFactCount: observation.capturedFactCount,
       manualInterventions: observation.manualInterventions,
@@ -628,85 +828,133 @@ function taskResultFor(
       rawPiManualInterventions: observation.rawPiManualInterventions,
     });
   } catch {
-    throw coordinatorError("OBSERVATION_INVALID", "pilot capture task observation is invalid");
+    throw coordinatorError("OBSERVATION_INVALID", "pilot Managed task observation is invalid");
   }
 }
 
-function assertLinearTaskChain(plan: PilotExecutionPlan, observation: TaskChainObservation): void {
-  const runs = runReceiptsFor(plan, observation);
-  const byId = new Map(runs.map((run) => [run.runId, run]));
-  const roots = runs.filter((run) => run.replacementOfRunId === null);
-  const children = runs.filter(
-    (
-      run,
-    ): run is PilotRunArchiveReceipt & {
-      readonly replacementOfRunId: string;
-    } => run.replacementOfRunId !== null,
-  );
-  const childByParent = new Map(children.map((run) => [run.replacementOfRunId, run] as const));
-  const archiveIds = new Set(runs.map((run) => run.archiveId));
+function quickReceiptFor(plan: PilotExecutionPlan, observation: QuickTaskObservation) {
+  const oracle = oracleFor(plan, observation.receipt.taskId);
   if (
-    byId.size !== runs.length ||
-    archiveIds.size !== runs.length ||
-    roots.length !== 1 ||
-    childByParent.size !== children.length ||
-    children.some((run) => !byId.has(run.replacementOfRunId))
+    oracle.mode !== "QUICK" ||
+    canonicalJson(resolvedBinding(oracle)) !==
+      canonicalJson({
+        taskId: observation.receipt.taskId,
+        targetId: observation.receipt.targetId,
+        repositoryFingerprint: observation.receipt.repositoryFingerprint,
+        targetReferenceFingerprint: observation.receipt.targetReferenceFingerprint,
+        sourceFingerprint: observation.receipt.sourceFingerprint,
+        taskDefinitionFingerprint: observation.receipt.taskDefinitionFingerprint,
+        acceptanceCheckIds: observation.receipt.acceptanceCheckIds,
+        acceptanceCheckDefinitionFingerprints:
+          observation.receipt.acceptanceCheckDefinitionFingerprints,
+      })
   ) {
-    throw coordinatorError("OBSERVATION_INVALID", "pilot capture Run chain is invalid");
+    throw coordinatorError("OBSERVATION_INVALID", "Quick receipt does not bind its frozen task");
   }
-  const reachable = new Set<string>();
-  let current = roots[0];
-  while (current !== undefined && !reachable.has(current.runId)) {
-    reachable.add(current.runId);
-    current = childByParent.get(current.runId);
+  return pilotQuickTaskReceiptSchema.parse(observation.receipt);
+}
+
+function taskResultForQuick(
+  plan: PilotExecutionPlan,
+  observation: QuickTaskObservation,
+  rawMeasurements?: {
+    readonly capturedFactCount: number;
+    readonly manualInterventions: number;
+  },
+): PilotTaskResult {
+  const oracle = oracleFor(plan, observation.receipt.taskId);
+  if (oracle.mode !== "QUICK") {
+    throw coordinatorError("OBSERVATION_INVALID", "Quick receipt does not bind a Quick task");
   }
-  const terminalRuns = runs.filter((run) => !childByParent.has(run.runId));
-  if (
-    reachable.size !== runs.length ||
-    terminalRuns.length !== 1 ||
-    terminalRuns[0]?.terminalOutcome !== observation.terminalOutcome
-  ) {
-    throw coordinatorError("OBSERVATION_INVALID", "pilot capture Run chain is invalid");
-  }
-  taskResultFor(plan, observation);
+  const receipt = quickReceiptFor(plan, observation);
+  return pilotTaskResultSchema.parse({
+    ...resolvedBinding(oracle),
+    mode: "QUICK",
+    quickReceiptId: receipt.receiptId,
+    executionObservation: receipt.executionObservation,
+    oracleExecutionObservation: oracle.expectedExecutionObservation,
+    acceptanceObservation: receipt.acceptanceObservation,
+    oracleAcceptanceObservation: oracle.expectedAcceptanceObservation,
+    verifiedChangeClaimed: false,
+    correct:
+      receipt.executionObservation === oracle.expectedExecutionObservation &&
+      receipt.acceptanceObservation === oracle.expectedAcceptanceObservation,
+    sourcePreserved: receipt.sourcePreserved,
+    rawSecretLeakage: receipt.rawSecretLeakage,
+    providerSendAcknowledged: receipt.providerSendAcknowledged,
+    providerRequestCount: receipt.providerRequestCount,
+    providerTokenCount: receipt.providerTokenCount,
+    providerCostMinor: receipt.providerCostMinor,
+    applicableFactCount: receipt.applicableFactCount,
+    capturedFactCount: receipt.capturedFactCount,
+    manualInterventions: receipt.manualInterventions,
+    hunterOverheadMinutes: receipt.hunterOverheadMinutes,
+    rawPiCapturedFactCount: rawMeasurements?.capturedFactCount ?? 0,
+    rawPiManualInterventions: rawMeasurements?.manualInterventions ?? 0,
+  });
+}
+
+function taskResultFor(
+  plan: PilotExecutionPlan,
+  observation: ManagedTaskObservation | QuickTaskObservation,
+  rawMeasurements?: {
+    readonly capturedFactCount: number;
+    readonly manualInterventions: number;
+  },
+): PilotTaskResult {
+  return observation.kind === "MANAGED_TASK"
+    ? taskResultForManaged(plan, {
+        ...observation,
+        ...(rawMeasurements === undefined
+          ? {}
+          : {
+              rawPiCapturedFactCount: rawMeasurements.capturedFactCount,
+              rawPiManualInterventions: rawMeasurements.manualInterventions,
+            }),
+      })
+    : taskResultForQuick(plan, observation, rawMeasurements);
 }
 
 function comparatorFor(
   plan: PilotExecutionPlan,
   observation: ComparatorObservation,
-  taskObservation: TaskChainObservation,
+  taskObservation: ManagedTaskObservation | QuickTaskObservation,
 ): PilotComparator {
-  if (!plan.pairedTaskIds.includes(observation.taskId)) {
+  const comparator = pilotComparatorSchema.parse(observation.comparator);
+  if (
+    !plan.pairedTaskIds.includes(comparator.taskId) ||
+    comparator.comparatorConfigurationFingerprint !== plan.comparatorConfigurationFingerprint ||
+    comparator.workflowFactChecklistFingerprint !== plan.workflowFactChecklistFingerprint
+  ) {
     throw coordinatorError(
       "OBSERVATION_INVALID",
-      "pilot comparator is outside the frozen paired tasks",
+      "pilot comparator is outside the frozen paired task or configuration",
     );
   }
-  const oracle = oracleFor(plan, observation.taskId);
+  const oracle = oracleFor(plan, comparator.taskId);
   const taskResult = taskResultFor(plan, taskObservation);
-  try {
-    return pilotComparatorSchema.parse({
-      taskId: oracle.taskId,
-      repositoryFingerprint: oracle.repositoryFingerprint,
-      targetReferenceFingerprint: oracle.targetReferenceFingerprint,
-      sourceFingerprint: oracle.sourceFingerprint,
-      mode: oracle.mode,
-      acceptanceCheckIds: oracle.acceptanceCheckIds,
-      acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
-      applicableFactCount: taskResult.applicableFactCount,
-      rawPiCapturedFactCount: observation.rawPiCapturedFactCount,
-      hunterCapturedFactCount: taskResult.capturedFactCount,
-      rawPiManualInterventions: observation.rawPiManualInterventions,
-      hunterManualInterventions: taskResult.manualInterventions,
-      hunterAdditionalOverheadMinutes: taskResult.hunterOverheadMinutes,
-      containedFalseCompletion: observation.containedFalseCompletion,
-      rawPiProviderRequestCount: observation.rawPiProviderRequestCount,
-      rawPiProviderTokenCount: observation.rawPiProviderTokenCount,
-      rawPiProviderCostMinor: observation.rawPiProviderCostMinor,
-    });
-  } catch {
+  if (
+    canonicalJson(resolvedBinding(oracle)) !==
+      canonicalJson({
+        taskId: comparator.taskId,
+        targetId: comparator.targetId,
+        repositoryFingerprint: comparator.repositoryFingerprint,
+        targetReferenceFingerprint: comparator.targetReferenceFingerprint,
+        sourceFingerprint: comparator.sourceFingerprint,
+        taskDefinitionFingerprint: comparator.taskDefinitionFingerprint,
+        acceptanceCheckIds: comparator.acceptanceCheckIds,
+        acceptanceCheckDefinitionFingerprints: comparator.acceptanceCheckDefinitionFingerprints,
+      }) ||
+    comparator.mode !== oracle.mode ||
+    comparator.applicableFactCount !== taskResult.applicableFactCount ||
+    comparator.hunterCapturedFactCount !== taskResult.capturedFactCount ||
+    comparator.hunterManualInterventions !== taskResult.manualInterventions ||
+    comparator.hunterAdditionalOverheadMinutes !== taskResult.hunterOverheadMinutes ||
+    comparator.rawPiCapturedFactCount > comparator.applicableFactCount
+  ) {
     throw coordinatorError("OBSERVATION_INVALID", "pilot comparator observation is invalid");
   }
+  return comparator;
 }
 
 function updateCycleFor(
@@ -780,19 +1028,23 @@ function observationsOfKind<K extends PilotCaptureObservation["kind"]>(
 function usageForObservations(
   observations: readonly PilotCaptureObservation[],
 ): ProviderUsageTotal {
-  const tasks = observationsOfKind(observations, "TASK_CHAIN");
+  const managedTasks = observationsOfKind(observations, "MANAGED_TASK");
+  const quickTasks = observationsOfKind(observations, "QUICK_TASK");
   const comparators = observationsOfKind(observations, "RAW_PI_COMPARATOR");
   const requests = safeUsageSum([
-    ...tasks.map((task) => usageForTaskObservation(task).requests),
-    ...comparators.map((comparator) => comparator.rawPiProviderRequestCount),
+    ...managedTasks.map((task) => task.run.providerRequestCount),
+    ...quickTasks.map((task) => task.receipt.providerRequestCount),
+    ...comparators.map((item) => item.comparator.rawPiProviderRequestCount),
   ]);
   const tokens = safeUsageSum([
-    ...tasks.map((task) => usageForTaskObservation(task).tokens),
-    ...comparators.map((comparator) => comparator.rawPiProviderTokenCount),
+    ...managedTasks.map((task) => task.run.providerTokenCount),
+    ...quickTasks.map((task) => task.receipt.providerTokenCount),
+    ...comparators.map((item) => item.comparator.rawPiProviderTokenCount),
   ]);
   const costMinor = safeUsageSum([
-    ...tasks.map((task) => usageForTaskObservation(task).costMinor),
-    ...comparators.map((comparator) => comparator.rawPiProviderCostMinor),
+    ...managedTasks.map((task) => task.run.providerCostMinor),
+    ...quickTasks.map((task) => task.receipt.providerCostMinor),
+    ...comparators.map((item) => item.comparator.rawPiProviderCostMinor),
   ]);
   if (requests === undefined || tokens === undefined || costMinor === undefined) {
     throw coordinatorError("PROVIDER_BUDGET_EXCEEDED", "pilot Provider usage cannot be bounded");
@@ -823,13 +1075,45 @@ function assertProviderBudget(
   }
 }
 
+function remainingProviderBudget(
+  plan: PilotExecutionPlan,
+  usage: ProviderUsageTotal,
+): ProviderOperationIntent["reservation"] {
+  const scope = plan.operatorScope;
+  if (
+    scope.providerRequestPolicy !== "EXPLICIT_OPERATOR_AUTHORIZED" ||
+    scope.maxProviderRequests === null ||
+    scope.maxProviderTokens === null ||
+    scope.maxProviderCostMinor === null
+  ) {
+    throw coordinatorError(
+      "PROVIDER_BUDGET_EXCEEDED",
+      "the frozen pilot scope does not authorize a bounded Provider operation",
+    );
+  }
+  const reservation = {
+    requests: scope.maxProviderRequests - usage.requests,
+    tokens: scope.maxProviderTokens - usage.tokens,
+    costMinor: scope.maxProviderCostMinor - usage.costMinor,
+  };
+  try {
+    return providerOperationIntentFactsSchema.shape.reservation.parse(reservation);
+  } catch {
+    throw coordinatorError(
+      "PROVIDER_BUDGET_EXCEEDED",
+      "the frozen pilot scope has no complete remaining Provider budget",
+    );
+  }
+}
+
 function countsFor(observations: readonly PilotCaptureObservation[]): PilotCaptureCounts {
-  const tasks = observationsOfKind(observations, "TASK_CHAIN");
+  const managedTasks = observationsOfKind(observations, "MANAGED_TASK");
+  const quickTasks = observationsOfKind(observations, "QUICK_TASK");
   return captureCountsSchema.parse({
     installation: observationsOfKind(observations, "INSTALLATION").length,
-    taskChains: tasks.length,
-    runArchives: tasks.reduce((total, task) => total + task.runs.length, 0),
-    interruptions: observationsOfKind(observations, "INTERRUPTION").length,
+    taskChains: managedTasks.length + quickTasks.length,
+    runArchives: managedTasks.length,
+    interruptions: managedTasks.reduce((total, task) => total + task.run.recoveryLinks.length, 0),
     warmStartSamples:
       observationsOfKind(observations, "WARM_START_SAMPLES")[0]?.samplesMs.length ?? 0,
     acknowledgementSamples:
@@ -843,11 +1127,11 @@ function countsFor(observations: readonly PilotCaptureObservation[]): PilotCaptu
   });
 }
 
-function countsAreComplete(counts: PilotCaptureCounts): boolean {
+function countsAreComplete(plan: PilotExecutionPlan, counts: PilotCaptureCounts): boolean {
   return (
     counts.installation === 1 &&
     counts.taskChains === 10 &&
-    counts.runArchives >= 10 &&
+    counts.runArchives === plan.tasks.filter((task) => task.mode === "MANAGED").length &&
     counts.interruptions === 3 &&
     counts.warmStartSamples >= 20 &&
     counts.acknowledgementSamples >= 30 &&
@@ -901,11 +1185,24 @@ function assertObservationValid(
     case "MEMORY_SAMPLES":
     case "GATES":
       break;
-    case "TASK_CHAIN": {
-      assertLinearTaskChain(plan, candidate);
-      const tasks = observationsOfKind(observations, "TASK_CHAIN");
-      const runIds = tasks.flatMap((task) => task.runs.map((run) => run.runId));
-      const archiveIds = tasks.flatMap((task) => task.runs.map((run) => run.archiveId));
+    case "MANAGED_TASK": {
+      taskResultForManaged(plan, candidate);
+      const plannedInterruptionIds = plan.interruptionTasks
+        .filter((item) => item.taskId === candidate.taskId)
+        .map((item) => item.interruptionId)
+        .toSorted();
+      const actualInterruptionIds = candidate.run.recoveryLinks
+        .map((item) => item.interruptionId)
+        .toSorted();
+      if (canonicalJson(plannedInterruptionIds) !== canonicalJson(actualInterruptionIds)) {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "Managed recovery links do not match the frozen interruption task",
+        );
+      }
+      const tasks = observationsOfKind(observations, "MANAGED_TASK");
+      const runIds = tasks.map((task) => task.run.runId);
+      const archiveIds = tasks.map((task) => task.run.archiveId);
       if (
         new Set(runIds).size !== runIds.length ||
         new Set(archiveIds).size !== archiveIds.length
@@ -914,36 +1211,8 @@ function assertObservationValid(
       }
       break;
     }
-    case "INTERRUPTION": {
-      const task = observationsOfKind(observations, "TASK_CHAIN").find(
-        (entry) => entry.taskId === candidate.taskId,
-      );
-      if (task === undefined) {
-        throw coordinatorError(
-          "OBSERVATION_INVALID",
-          "pilot interruption requires its completed Run chain",
-        );
-      }
-      const runs = runReceiptsFor(plan, task);
-      const interrupted = runs.find((run) => run.runId === candidate.interruptedRunId);
-      const replacement = runs.find((run) => run.runId === candidate.replacementRunId);
-      if (
-        interrupted === undefined ||
-        (interrupted.terminalOutcome !== "INCOMPLETE" &&
-          interrupted.terminalOutcome !== "CANCELLED") ||
-        replacement?.replacementOfRunId !== interrupted.runId ||
-        replacement.archiveFingerprint !== candidate.replacementArchiveFingerprint ||
-        replacement.terminalOutcome !== candidate.resumeOutcome
-      ) {
-        throw coordinatorError("OBSERVATION_INVALID", "pilot interruption Run binding is invalid");
-      }
-      const interruptions = observationsOfKind(observations, "INTERRUPTION");
-      if (
-        new Set(interruptions.map((item) => item.interruptedRunId)).size !== interruptions.length ||
-        new Set(interruptions.map((item) => item.replacementRunId)).size !== interruptions.length
-      ) {
-        throw coordinatorError("OBSERVATION_INVALID", "pilot interruption Runs must be unique");
-      }
+    case "QUICK_TASK": {
+      taskResultForQuick(plan, candidate);
       break;
     }
     case "UPDATE_ROLLBACK": {
@@ -973,8 +1242,13 @@ function assertObservationValid(
       break;
     }
     case "RAW_PI_COMPARATOR": {
-      const task = observationsOfKind(observations, "TASK_CHAIN").find(
-        (entry) => entry.taskId === candidate.taskId,
+      const task = [
+        ...observationsOfKind(observations, "MANAGED_TASK"),
+        ...observationsOfKind(observations, "QUICK_TASK"),
+      ].find((entry) =>
+        entry.kind === "MANAGED_TASK"
+          ? entry.taskId === candidate.comparator.taskId
+          : entry.receipt.taskId === candidate.comparator.taskId,
       );
       if (task === undefined) {
         throw coordinatorError(
@@ -988,7 +1262,7 @@ function assertObservationValid(
   }
 
   assertProviderBudget(plan, observations);
-  if (countsAreComplete(counts)) {
+  if (countsAreComplete(plan, counts)) {
     buildEvidenceDraft(plan, observations, "2000-01-01T00:00:00.000Z");
   }
 }
@@ -1010,40 +1284,65 @@ function buildEvidenceDraft(
   observedAt: string,
 ): PilotEvidenceDraft {
   const counts = countsFor(observations);
-  if (!countsAreComplete(counts)) {
+  if (!countsAreComplete(plan, counts)) {
     throw coordinatorError("INCOMPLETE", "pilot capture observations are incomplete");
   }
   const taskOracles = taskOraclesFor(plan);
-  const taskObservations = observationsOfKind(observations, "TASK_CHAIN");
-  const taskById = new Map(taskObservations.map((task) => [task.taskId, task]));
+  const managedTaskObservations = observationsOfKind(observations, "MANAGED_TASK");
+  const quickTaskObservations = observationsOfKind(observations, "QUICK_TASK");
+  const taskById = new Map<string, ManagedTaskObservation | QuickTaskObservation>([
+    ...managedTaskObservations.map((task) => [task.taskId, task] as const),
+    ...quickTaskObservations.map((task) => [task.receipt.taskId, task] as const),
+  ]);
+  const comparatorObservationByTaskId = new Map(
+    observationsOfKind(observations, "RAW_PI_COMPARATOR").map((item) => [
+      item.comparator.taskId,
+      item.comparator,
+    ]),
+  );
   const taskResults = taskOracles.map((oracle) => {
     const task = taskById.get(oracle.taskId);
     if (task === undefined) {
       throw coordinatorError("INCOMPLETE", "pilot task observations are incomplete");
     }
-    return taskResultFor(plan, task);
-  });
-  const runArchives = taskOracles.flatMap((oracle) => {
-    const task = taskById.get(oracle.taskId);
-    if (task === undefined) return [];
-    return runReceiptsFor(plan, task);
-  });
-  const interruptions = observationsOfKind(observations, "INTERRUPTION")
-    .toSorted((left, right) => left.interruptionId.localeCompare(right.interruptionId))
-    .map((observation): PilotInterruption =>
-      pilotInterruptionSchema.parse({
-        kind: observation.interruptionKind,
-        interruptionId: observation.interruptionId,
-        taskId: observation.taskId,
-        interruptedRunId: observation.interruptedRunId,
-        replacementRunId: observation.replacementRunId,
-        replacementArchiveFingerprint: observation.replacementArchiveFingerprint,
-        historyPreserved: observation.historyPreserved,
-        sourcePreserved: observation.sourcePreserved,
-        resumeOutcome: observation.resumeOutcome,
-        actionableWithinFiveMinutes: observation.actionableWithinFiveMinutes,
-      }),
+    const comparator = comparatorObservationByTaskId.get(oracle.taskId);
+    return taskResultFor(
+      plan,
+      task,
+      comparator === undefined
+        ? undefined
+        : {
+            capturedFactCount: comparator.rawPiCapturedFactCount,
+            manualInterventions: comparator.rawPiManualInterventions,
+          },
     );
+  });
+  const runArchives = managedTaskObservations.map((task) => runReceiptFor(plan, task));
+  const quickTaskReceipts = quickTaskObservations.map((task) => quickReceiptFor(plan, task));
+  const managedTaskById = new Map(managedTaskObservations.map((task) => [task.taskId, task]));
+  const interruptions = plan.interruptionTasks.map((planned): PilotInterruption => {
+    const task = managedTaskById.get(planned.taskId);
+    const link = task?.run.recoveryLinks.find(
+      (candidate) => candidate.interruptionId === planned.interruptionId,
+    );
+    if (task === undefined || link === undefined) {
+      throw coordinatorError("INCOMPLETE", "pilot interruption observations are incomplete");
+    }
+    return pilotInterruptionSchema.parse({
+      interruptionId: planned.interruptionId,
+      taskId: planned.taskId,
+      kind: planned.kind,
+      runId: task.run.runId,
+      archiveFingerprint: task.run.archiveFingerprint,
+      checkpointId: link.checkpointId,
+      interruptedAttemptId: link.interruptedAttemptId,
+      recoveryAttemptId: link.recoveryAttemptId,
+      historyPreserved: true,
+      sourcePreserved: task.sourcePreserved,
+      resumeOutcome: task.run.terminalOutcome,
+      actionableWithinFiveMinutes: link.actionableWithinFiveMinutes,
+    });
+  });
   const warmStart = requiredSingle(observations, "WARM_START_SAMPLES");
   const acknowledgement = requiredSingle(observations, "ACKNOWLEDGEMENT_SAMPLES");
   const memory = requiredSingle(observations, "MEMORY_SAMPLES");
@@ -1077,7 +1376,10 @@ function buildEvidenceDraft(
     throw coordinatorError("INCOMPLETE", "pilot CI observations are incomplete");
   }
   const comparatorByTaskId = new Map(
-    observationsOfKind(observations, "RAW_PI_COMPARATOR").map((item) => [item.taskId, item]),
+    observationsOfKind(observations, "RAW_PI_COMPARATOR").map((item) => [
+      item.comparator.taskId,
+      item,
+    ]),
   );
   const pairedComparators = plan.pairedTaskIds.map((taskId) => {
     const comparator = comparatorByTaskId.get(taskId);
@@ -1089,7 +1391,7 @@ function buildEvidenceDraft(
   });
   const installation = requiredSingle(observations, "INSTALLATION");
   const draft: PilotEvidenceDraft = {
-    schemaVersion: "hpi-pilot-evidence.v6",
+    schemaVersion: "hpi-pilot-evidence.v7",
     planFingerprint: plan.planFingerprint,
     operatorScope: plan.operatorScope,
     machine: plan.machineProfile,
@@ -1101,6 +1403,7 @@ function buildEvidenceDraft(
     },
     taskOracles,
     taskResults,
+    quickTaskReceipts,
     runArchives,
     interruptions,
     discardedWarmups: warmStart.discardedWarmups,
@@ -1150,7 +1453,7 @@ function statusFor(
   } else if (intent !== undefined) {
     state = "FINALIZING";
     nextActions = ["RETRY_FINALIZE"];
-  } else if (countsAreComplete(counts)) {
+  } else if (countsAreComplete(header.plan, counts)) {
     buildEvidenceDraft(header.plan, observations, "2000-01-01T00:00:00.000Z");
     state = "READY_TO_FINALIZE";
     nextActions = ["FINALIZE_ARCHIVE"];
@@ -1175,6 +1478,7 @@ interface LoadedCaptureSession {
   readonly key: Uint8Array;
   readonly header: SessionHeader;
   readonly events: readonly CaptureEvent[];
+  readonly providerIntents: readonly ProviderOperationIntent[];
   readonly intent: FinalizationIntent | undefined;
   readonly commit: FinalizationCommit | undefined;
   readonly directory: string;
@@ -1382,6 +1686,118 @@ async function readCaptureEvents(
   return events;
 }
 
+function providerIntentFilename(operationId: string): string {
+  return providerIntentFilenameSchema.parse(`provider-${operationId}.intent.json`);
+}
+
+function providerObservationTaskId(observation: PilotCaptureObservation): string | undefined {
+  return observation.kind === "MANAGED_TASK"
+    ? observation.taskId
+    : observation.kind === "QUICK_TASK"
+      ? observation.receipt.taskId
+      : observation.kind === "RAW_PI_COMPARATOR"
+        ? observation.comparator.taskId
+        : undefined;
+}
+
+function verifyProviderIntent(
+  intent: ProviderOperationIntent,
+  filename: string,
+  key: Uint8Array,
+  header: SessionHeader,
+  events: readonly CaptureEvent[],
+): void {
+  const facts = providerIntentFacts(intent);
+  const priorEvents = events.slice(0, intent.eventCountBefore);
+  const priorUsage = usageForObservations(priorEvents.map((event) => event.observation));
+  let expectedReservation: ProviderOperationIntent["reservation"];
+  try {
+    expectedReservation = remainingProviderBudget(header.plan, priorUsage);
+  } catch {
+    throw coordinatorError("SESSION_CORRUPT", "pilot Provider intent budget is invalid");
+  }
+  const precedingEvent = priorEvents.at(-1);
+  const completionEvent = events[intent.eventCountBefore];
+  const completionUsage =
+    completionEvent === undefined ? undefined : usageForObservations([completionEvent.observation]);
+  if (
+    filename !== providerIntentFilename(intent.operationId) ||
+    intent.sessionId !== header.sessionId ||
+    intent.planFingerprint !== header.plan.planFingerprint ||
+    intent.eventCountBefore > events.length ||
+    intent.previousEventFingerprint !== (precedingEvent?.eventFingerprint ?? null) ||
+    canonicalJson(intent.usageBefore) !== canonicalJson(priorUsage) ||
+    canonicalJson(intent.reservation) !== canonicalJson(expectedReservation) ||
+    intent.intentFingerprint !== pilotFingerprint(facts) ||
+    intent.proof !==
+      captureProof(key, "PROVIDER_OPERATION_INTENT", {
+        ...facts,
+        intentFingerprint: intent.intentFingerprint,
+      }) ||
+    Date.parse(intent.observedAt) < Date.parse(precedingEvent?.observedAt ?? header.createdAt) ||
+    (completionEvent !== undefined &&
+      (completionEvent.operationId !== intent.operationId ||
+        completionEvent.factKey !== intent.factKey ||
+        completionEvent.observation.kind !== intent.kind ||
+        providerObservationTaskId(completionEvent.observation) !== intent.taskId ||
+        Date.parse(completionEvent.observedAt) < Date.parse(intent.observedAt) ||
+        completionUsage === undefined ||
+        completionUsage.requests > intent.reservation.requests ||
+        completionUsage.tokens > intent.reservation.tokens ||
+        completionUsage.costMinor > intent.reservation.costMinor))
+  ) {
+    throw coordinatorError("SESSION_CORRUPT", "pilot Provider operation intent is invalid");
+  }
+}
+
+async function readProviderIntents(
+  directory: string,
+  key: Uint8Array,
+  header: SessionHeader,
+  events: readonly CaptureEvent[],
+): Promise<ProviderOperationIntent[]> {
+  const filenames = (await readdir(directory, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && providerIntentFilenameSchema.safeParse(entry.name).success)
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+  const intents: ProviderOperationIntent[] = [];
+  const operationIds = new Set<string>();
+  for (const filename of filenames) {
+    const intent = await readExactJsonFile(
+      join(directory, filename),
+      providerOperationIntentSchema,
+    );
+    if (operationIds.has(intent.operationId)) {
+      throw coordinatorError("SESSION_CORRUPT", "pilot Provider intent identity is duplicated");
+    }
+    verifyProviderIntent(intent, filename, key, header, events);
+    intents.push(intent);
+    operationIds.add(intent.operationId);
+  }
+  return intents;
+}
+
+function unresolvedProviderIntent(
+  loaded: Pick<LoadedCaptureSession, "events" | "providerIntents">,
+): ProviderOperationIntent | undefined {
+  return loaded.providerIntents.find(
+    (intent) => loaded.events[intent.eventCountBefore]?.operationId !== intent.operationId,
+  );
+}
+
+function assertNoUnresolvedProviderIntent(
+  loaded: Pick<LoadedCaptureSession, "events" | "providerIntents">,
+  completingOperationId?: string,
+): void {
+  const unresolved = unresolvedProviderIntent(loaded);
+  if (unresolved !== undefined && unresolved.operationId !== completingOperationId) {
+    throw coordinatorError(
+      "PROVIDER_USAGE_RECONCILIATION_REQUIRED",
+      "a started pilot Provider operation has no exact durable usage receipt and will not be retried",
+    );
+  }
+}
+
 function verifyIntent(
   intent: FinalizationIntent,
   key: Uint8Array,
@@ -1447,6 +1863,12 @@ async function validateSessionDirectoryEntries(directory: string): Promise<void>
       }
       continue;
     }
+    if (providerIntentFilenameSchema.safeParse(entry.name).success) {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw coordinatorError("SESSION_CORRUPT", "pilot Provider intent path is invalid");
+      }
+      continue;
+    }
     if (!files.has(entry.name) || !entry.isFile() || entry.isSymbolicLink()) {
       throw coordinatorError("SESSION_CORRUPT", "pilot capture session contains unknown state");
     }
@@ -1472,6 +1894,7 @@ async function loadCaptureSession(
   }
   const eventsDirectory = join(directory, eventsDirectoryName);
   const events = await readCaptureEvents(eventsDirectory, key, header);
+  const providerIntents = await readProviderIntents(directory, key, header, events);
   const intentPath = join(directory, finalizationIntentFilename);
   const commitPath = join(directory, finalizationCommitFilename);
   const intent = (await pathExists(intentPath))
@@ -1482,7 +1905,7 @@ async function loadCaptureSession(
     ? await readExactJsonFile(commitPath, finalizationCommitSchema)
     : undefined;
   if (commit !== undefined) verifyCommit(commit, key, header, intent);
-  return { key, header, events, intent, commit, directory, eventsDirectory };
+  return { key, header, events, providerIntents, intent, commit, directory, eventsDirectory };
 }
 
 function assertArchiveMatches(
@@ -1504,12 +1927,69 @@ function assertArchiveMatches(
   }
 }
 
+async function publishProviderOperationIntent(options: {
+  readonly loaded: LoadedCaptureSession;
+  readonly operationId: string;
+  readonly taskId: string;
+  readonly kind: "MANAGED_TASK" | "QUICK_TASK" | "RAW_PI_COMPARATOR";
+  readonly factKey: string;
+  readonly inputFingerprint: Fingerprint;
+  readonly now: () => string;
+}): Promise<PilotProviderReservation> {
+  assertNoUnresolvedProviderIntent(options.loaded);
+  if (options.loaded.providerIntents.some((intent) => intent.operationId === options.operationId)) {
+    throw coordinatorError(
+      "OPERATION_CONFLICT",
+      "pilot Provider operation identity already has an immutable intent",
+    );
+  }
+  const usageBefore = usageForObservations(options.loaded.events.map((event) => event.observation));
+  const observedAt = timestampFrom(options.now);
+  if (
+    Date.parse(observedAt) <
+    Date.parse(options.loaded.events.at(-1)?.observedAt ?? options.loaded.header.createdAt)
+  ) {
+    throw coordinatorError("STORE_FAILURE", "pilot capture clock moved before durable history");
+  }
+  const facts = providerOperationIntentFactsSchema.parse({
+    schemaVersion: "hpi-pilot-provider-operation-intent.v1",
+    sessionId: options.loaded.header.sessionId,
+    planFingerprint: options.loaded.header.plan.planFingerprint,
+    operationId: options.operationId,
+    taskId: options.taskId,
+    kind: options.kind,
+    factKey: options.factKey,
+    inputFingerprint: options.inputFingerprint,
+    eventCountBefore: options.loaded.events.length,
+    previousEventFingerprint: options.loaded.events.at(-1)?.eventFingerprint ?? null,
+    usageBefore,
+    reservation: remainingProviderBudget(options.loaded.header.plan, usageBefore),
+    observedAt,
+  });
+  const intentFingerprint = pilotFingerprint(facts);
+  const intent = providerOperationIntentSchema.parse({
+    ...facts,
+    intentFingerprint,
+    proof: captureProof(options.loaded.key, "PROVIDER_OPERATION_INTENT", {
+      ...facts,
+      intentFingerprint,
+    }),
+  });
+  await writeCaptureFile(
+    options.loaded.directory,
+    providerIntentFilename(options.operationId),
+    intent,
+  );
+  return intent.reservation;
+}
+
 export class FilePilotCaptureCoordinator {
   readonly #stateRoot: string;
   readonly #archiveStore: FilePilotArchiveStore;
   readonly #managedRunStateRoot: string | undefined;
   readonly #now: () => string;
   readonly #mutationLockPath: string;
+  readonly #providerOperationLockPath: string;
 
   public constructor(options: FilePilotCaptureCoordinatorOptions) {
     this.#stateRoot = resolve(options.stateRoot);
@@ -1520,6 +2000,7 @@ export class FilePilotCaptureCoordinator {
       options.managedRunStateRoot === undefined ? undefined : resolve(options.managedRunStateRoot);
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#mutationLockPath = join(this.#stateRoot, ".pilot-capture-mutation.lock");
+    this.#providerOperationLockPath = join(this.#stateRoot, ".pilot-provider-operation.lock");
   }
 
   async #withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -1528,6 +2009,15 @@ export class FilePilotCaptureCoordinator {
     } catch (error) {
       if (error instanceof PilotCaptureCoordinatorError) throw error;
       throw coordinatorError("STORE_FAILURE", "pilot capture store operation failed");
+    }
+  }
+
+  async #withProviderOperationLock<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await withDurableMutationLock(this.#providerOperationLockPath, operation);
+    } catch (error) {
+      if (error instanceof PilotCaptureCoordinatorError) throw error;
+      throw coordinatorError("STORE_FAILURE", "pilot Provider operation lock failed");
     }
   }
 
@@ -1549,6 +2039,7 @@ export class FilePilotCaptureCoordinator {
   }
 
   #statusFromLoaded(loaded: LoadedCaptureSession): PilotCaptureStatus {
+    assertNoUnresolvedProviderIntent(loaded);
     if (loaded.commit !== undefined) this.#readCommittedArchive(loaded);
     return statusFor(loaded.header, loaded.events, loaded.intent, loaded.commit);
   }
@@ -1618,10 +2109,106 @@ export class FilePilotCaptureCoordinator {
     });
   }
 
+  public async assertManagedProviderOperationRetryable(input: unknown): Promise<void> {
+    let parsed: PilotCaptureManagedProviderReservationInput;
+    try {
+      parsed = pilotCaptureManagedProviderReservationInputSchema.parse(input);
+    } catch {
+      throw coordinatorError(
+        "OBSERVATION_INVALID",
+        "pilot Managed Provider retry proof request is invalid",
+      );
+    }
+    await this.#withMutationLock(async () => {
+      const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+      if (loaded.intent !== undefined || loaded.commit !== undefined) {
+        throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+      }
+      if (loaded.header.plan.planFingerprint !== parsed.planFingerprint) {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot Managed Provider retry proof does not bind the frozen plan",
+        );
+      }
+      const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+      if (oracle.mode !== "MANAGED") {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot Managed Provider retry proof does not bind a Managed task",
+        );
+      }
+      assertNoUnresolvedProviderIntent(loaded);
+      if (
+        loaded.events.some(
+          (event) =>
+            event.operationId === parsed.operationId || event.factKey === `task.${parsed.taskId}`,
+        )
+      ) {
+        throw coordinatorError(
+          "OPERATION_CONFLICT",
+          "pilot Managed Provider retry identity is already completed",
+        );
+      }
+    });
+  }
+
+  public async reserveManagedProviderOperation(input: unknown): Promise<PilotProviderReservation> {
+    let parsed: PilotCaptureManagedProviderReservationInput;
+    try {
+      parsed = pilotCaptureManagedProviderReservationInputSchema.parse(input);
+    } catch {
+      throw coordinatorError(
+        "OBSERVATION_INVALID",
+        "pilot Managed Provider reservation request is invalid",
+      );
+    }
+    return this.#withProviderOperationLock(() =>
+      this.#withMutationLock(async () => {
+        const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+        if (loaded.intent !== undefined || loaded.commit !== undefined) {
+          throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+        }
+        if (loaded.header.plan.planFingerprint !== parsed.planFingerprint) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "pilot Managed Provider reservation does not bind the frozen plan",
+          );
+        }
+        const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+        if (oracle.mode !== "MANAGED") {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "pilot Managed Provider reservation does not bind a Managed task",
+          );
+        }
+        if (
+          loaded.events.some(
+            (event) =>
+              event.operationId === parsed.operationId || event.factKey === `task.${parsed.taskId}`,
+          )
+        ) {
+          throw coordinatorError(
+            "OPERATION_CONFLICT",
+            "pilot Managed Provider reservation identity is already completed",
+          );
+        }
+        return publishProviderOperationIntent({
+          loaded,
+          operationId: parsed.operationId,
+          taskId: parsed.taskId,
+          kind: "MANAGED_TASK",
+          factKey: `task.${parsed.taskId}`,
+          inputFingerprint: pilotFingerprint(parsed),
+          now: this.#now,
+        });
+      }),
+    );
+  }
+
   public async recordManagedTask(input: unknown): Promise<PilotCaptureRecordReceipt> {
     let parsed: PilotCaptureManagedTaskInput;
     try {
-      parsed = pilotCaptureManagedTaskInputSchema.parse(input);
+      parsed = pilotCaptureManagedTaskInputV2Schema.parse(input);
       if (new Set(parsed.archiveIds).size !== parsed.archiveIds.length) {
         throw new Error("duplicate Archive identity");
       }
@@ -1632,8 +2219,9 @@ export class FilePilotCaptureCoordinator {
     if (managedRunStateRoot === undefined) {
       throw coordinatorError("STORE_FAILURE", "pilot managed Run store is not configured");
     }
-    const observation = await this.#withMutationLock(async (): Promise<TaskChainObservation> => {
+    const observation = await this.#withMutationLock(async (): Promise<ManagedTaskObservation> => {
       const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+      assertNoUnresolvedProviderIntent(loaded, parsed.operationId);
       if (loaded.intent !== undefined || loaded.commit !== undefined) {
         throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
       }
@@ -1652,107 +2240,211 @@ export class FilePilotCaptureCoordinator {
         stateRoot: join(managedRunStateRoot, "archive"),
         kernel,
       });
-      const runs: TaskChainObservation["runs"] = [];
-      let sourcePreserved = true;
-      let rawSecretLeakage = false;
-      let overheadMs = 0;
-      for (const [index, archiveId] of parsed.archiveIds.entries()) {
-        let package_;
-        try {
-          package_ = await archiveStore.readCanonicalPackage(archiveId);
-        } catch {
-          throw coordinatorError(
-            "OBSERVATION_INVALID",
-            "pilot managed Run Archive is unavailable or invalid",
-          );
-        }
-        const receiptEvidence = package_.evidence.filter(
-          (evidence) => evidence.evidenceId === "evidence_real-task-receipt",
+      const archiveId = parsed.archiveIds[0];
+      if (archiveId === undefined) {
+        throw coordinatorError("OBSERVATION_INVALID", "pilot managed-task Archive is missing");
+      }
+      let package_;
+      try {
+        package_ = await archiveStore.readCanonicalPackage(archiveId);
+      } catch {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot managed Run Archive is unavailable or invalid",
         );
-        const capturedText = receiptEvidence[0]?.capture.capturedText;
-        let receipt: z.infer<typeof realManagedChangeTaskReceiptSchema>;
-        try {
-          if (receiptEvidence.length !== 1 || capturedText === undefined) {
-            throw new Error("task receipt missing");
-          }
-          receipt = realManagedChangeTaskReceiptSchema.parse(JSON.parse(capturedText) as unknown);
-        } catch {
-          throw coordinatorError(
-            "OBSERVATION_INVALID",
-            "pilot managed Run Archive has no exact product task receipt",
-          );
+      }
+      const receiptEvidence = package_.evidence.filter(
+        (evidence) => evidence.evidenceId === "evidence_real-task-receipt",
+      );
+      const capturedText = receiptEvidence[0]?.capture.capturedText;
+      let receipt: z.infer<typeof realManagedChangeTaskReceiptSchema>;
+      try {
+        if (receiptEvidence.length !== 1 || capturedText === undefined) {
+          throw new Error("task receipt missing");
         }
-        if (receipt.providerUsage.status !== "PASS" || receipt.providerUsage.requestCount <= 0) {
-          throw coordinatorError(
-            "OBSERVATION_INVALID",
-            "pilot managed Run Archive has no exact Provider usage",
-          );
-        }
-        const providerUsage = receipt.providerUsage;
-        const actualCheckFingerprints = package_.projection.planRevision.checks.map(
-          (check) => check.definitionFingerprint,
+        receipt = realManagedChangeTaskReceiptSchema.parse(JSON.parse(capturedText) as unknown);
+      } catch {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot managed Run Archive has no exact product task receipt",
         );
-        const expectedPrevious = runs.at(-1)?.runId ?? null;
-        const actualPrevious = package_.projection.run.predecessorRunId ?? null;
-        const precedingOutcome = runs.at(-1)?.terminalOutcome;
-        const bindingFailure = [
-          package_.manifest.archiveId !== archiveId,
-          package_.manifest.runId !== receipt.runId,
-          package_.manifest.sourceFingerprint !== oracle.sourceFingerprint,
-          package_.manifest.sourceFingerprint !== receipt.sourceFingerprint,
-          package_.manifest.outcome !== receipt.terminalOutcome,
-          package_.projection.change.lifecycle !== package_.manifest.outcome,
-          receipt.repositoryFingerprint !== oracle.repositoryFingerprint,
-          receipt.targetReferenceFingerprint !== oracle.targetReferenceFingerprint,
-          canonicalJson(receipt.acceptanceCheckDefinitionFingerprints) !==
-            canonicalJson(actualCheckFingerprints),
-          canonicalJson(receipt.acceptanceCheckDefinitionFingerprints) !==
-            canonicalJson(oracle.acceptanceCheckDefinitionFingerprints),
-          receipt.reviewP0P1Count > 0,
-          (receipt.taskResult === "GO") !== (receipt.terminalOutcome === "READY"),
-          actualPrevious !== expectedPrevious,
-          index > 0 && precedingOutcome !== "INCOMPLETE" && precedingOutcome !== "CANCELLED",
-        ].some(Boolean);
-        if (bindingFailure) {
+      }
+      if (receipt.providerUsage.status !== "PASS" || receipt.providerUsage.requestCount <= 0) {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot managed Run Archive has no exact Provider usage",
+        );
+      }
+      const actualCheckFingerprints = package_.projection.planRevision.checks.map(
+        (check) => check.definitionFingerprint,
+      );
+      const actualVerificationHistory = package_.projection.verificationReceipts.map((item) => ({
+        attemptId: item.attemptId,
+        verificationReceiptId: item.verificationReceiptId,
+        checkId: item.checkId,
+        outcome: item.outcome,
+        resultFingerprint: item.resultFingerprint,
+      }));
+      const executionBinding = receipt.pilotExecutionBinding;
+      const managedProviderIntent = loaded.providerIntents.find(
+        (intent) => intent.operationId === parsed.operationId,
+      );
+      const expectedManagedProviderInputFingerprint = pilotFingerprint({
+        schemaVersion: "hpi-pilot-managed-provider-reservation.v1",
+        sessionId: parsed.sessionId,
+        operationId: parsed.operationId,
+        taskId: parsed.taskId,
+        planFingerprint: loaded.header.plan.planFingerprint,
+      });
+      const expectedDeliberateFixback =
+        loaded.header.plan.deliberateFixbackTaskId === parsed.taskId;
+      const expectedManagedFactIds =
+        pilotQuickWorkflowFactChecklist.profiles.managedRequiredFactIds;
+      const bindingFailure = [
+        package_.manifest.archiveId !== archiveId,
+        package_.manifest.runId !== receipt.runId,
+        package_.manifest.sourceFingerprint !== oracle.sourceFingerprint,
+        package_.manifest.sourceFingerprint !== receipt.sourceFingerprint,
+        package_.manifest.outcome !== receipt.terminalOutcome,
+        package_.projection.change.lifecycle !== package_.manifest.outcome,
+        package_.projection.run.predecessorRunId !== undefined,
+        receipt.repositoryFingerprint !== oracle.repositoryFingerprint,
+        receipt.targetId !== oracle.targetId,
+        receipt.targetReferenceFingerprint !== oracle.targetReferenceFingerprint,
+        receipt.taskDefinitionFingerprint !== oracle.taskDefinitionFingerprint,
+        canonicalJson(receipt.acceptanceCheckDefinitionFingerprints) !==
+          canonicalJson(actualCheckFingerprints),
+        canonicalJson(receipt.acceptanceCheckDefinitionFingerprints) !==
+          canonicalJson(oracle.acceptanceCheckDefinitionFingerprints),
+        executionBinding === null,
+        executionBinding?.planFingerprint !== loaded.header.plan.planFingerprint,
+        executionBinding?.taskId !== parsed.taskId,
+        executionBinding?.targetId !== oracle.targetId,
+        executionBinding?.captureSessionId !== parsed.sessionId,
+        executionBinding?.captureOperationId !== parsed.operationId,
+        oracle.acceptanceCheckIds.length !== 1,
+        executionBinding?.acceptanceCheckId !== oracle.acceptanceCheckIds[0],
+        package_.projection.planRevision.checks.length !== 1,
+        package_.projection.planRevision.checks[0]?.checkId !== executionBinding?.acceptanceCheckId,
+        managedProviderIntent?.kind !== "MANAGED_TASK",
+        managedProviderIntent?.taskId !== parsed.taskId,
+        managedProviderIntent?.factKey !== `task.${parsed.taskId}`,
+        managedProviderIntent?.inputFingerprint !== expectedManagedProviderInputFingerprint,
+        executionBinding?.workflowFactChecklistFingerprint !==
+          loaded.header.plan.workflowFactChecklistFingerprint,
+        executionBinding?.workflowFactChecklistFingerprint !==
+          pilotQuickWorkflowFactChecklistFingerprint,
+        executionBinding?.deliberateFixback !== expectedDeliberateFixback,
+        executionBinding === null ||
+          !pilotRuntimeBindingMatchesPlan(loaded.header.plan, executionBinding.runtimeBinding),
+        canonicalJson(receipt.capturedWorkflowFactIds) !== canonicalJson(expectedManagedFactIds),
+        canonicalJson(receipt.verificationHistory) !== canonicalJson(actualVerificationHistory),
+        receipt.reviewP0P1Count > 0,
+        (receipt.taskResult === "GO") !== (receipt.terminalOutcome === "READY"),
+      ].some(Boolean);
+      if (bindingFailure) {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot managed Run Archive does not bind the frozen task facts",
+        );
+      }
+      const plannedInterruptions = loaded.header.plan.interruptionTasks.filter(
+        (item) => item.taskId === parsed.taskId,
+      );
+      const recoveryAttempts = package_.projection.attempts.filter(
+        (attempt) => attempt.recoveryCheckpointId !== undefined,
+      );
+      if (expectedDeliberateFixback) {
+        const [failedAttempt, fixbackAttempt] = package_.projection.attempts;
+        const [failedVerification, fixbackVerification] = package_.projection.verificationReceipts;
+        if (
+          package_.projection.attempts.length !== 2 ||
+          package_.projection.verificationReceipts.length !== 2 ||
+          failedAttempt?.verificationStatus !== "FAILED" ||
+          failedVerification?.attemptId !== failedAttempt.attemptId ||
+          failedVerification.outcome !== "FAIL" ||
+          fixbackAttempt?.previousAttemptId !== failedAttempt.attemptId ||
+          fixbackAttempt.verificationStatus !== "PASSED" ||
+          fixbackVerification?.attemptId !== fixbackAttempt.attemptId ||
+          fixbackVerification.outcome !== "PASS" ||
+          !receipt.failedAttemptPreserved ||
+          !receipt.fixbackPass
+        ) {
           throw coordinatorError(
             "OBSERVATION_INVALID",
-            "pilot managed Run Archive does not bind the frozen task facts",
+            "pilot deliberate fixback Archive does not preserve exact FAIL then PASS history",
           );
         }
-        overheadMs += receipt.overheadMs;
-        if (!Number.isSafeInteger(overheadMs)) {
-          throw coordinatorError("OBSERVATION_INVALID", "pilot managed-task overhead is invalid");
+      }
+      const expectedProcessInterruption = plannedInterruptions[0];
+      if (
+        plannedInterruptions.length !== recoveryAttempts.length ||
+        (expectedProcessInterruption === undefined
+          ? receipt.interruptionKind !== null
+          : receipt.interruptionKind !==
+            processInterruptionForPlanKind(expectedProcessInterruption.kind))
+      ) {
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "pilot Managed Archive recovery history does not match the frozen task",
+        );
+      }
+      const recoveryLinks = recoveryAttempts.map((attempt, index) => {
+        const planned = plannedInterruptions[index];
+        const checkpoint = package_.projection.checkpoints.find(
+          (candidate) => candidate.checkpointId === attempt.recoveryCheckpointId,
+        );
+        if (
+          planned === undefined ||
+          checkpoint === undefined ||
+          attempt.previousAttemptId === undefined ||
+          checkpoint.attemptId !== attempt.previousAttemptId
+        ) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "pilot Managed Archive has an invalid Checkpoint recovery link",
+          );
         }
-        sourcePreserved &&= receipt.sourcePreserved;
-        rawSecretLeakage ||= receipt.rawSecretLeakage;
-        runs.push({
+        const recoveryDelayMs = Date.parse(attempt.startedAt) - Date.parse(checkpoint.createdAt);
+        return pilotRunRecoveryLinkSchema.parse({
+          interruptionId: planned.interruptionId,
+          kind: planned.kind,
+          checkpointId: checkpoint.checkpointId,
+          interruptedAttemptId: attempt.previousAttemptId,
+          recoveryAttemptId: attempt.attemptId,
+          actionableWithinFiveMinutes: recoveryDelayMs >= 0 && recoveryDelayMs <= 300_000,
+        });
+      });
+      const providerUsage = receipt.providerUsage;
+      const metrics = {
+        applicableFactCount: expectedManagedFactIds.length,
+        capturedFactCount: receipt.capturedWorkflowFactIds.length,
+        manualInterventions: 0,
+        rawPiCapturedFactCount: 0,
+        rawPiManualInterventions: 0,
+      };
+      return managedTaskObservationSchema.parse({
+        kind: "MANAGED_TASK",
+        taskId: parsed.taskId,
+        terminalOutcome: package_.manifest.outcome,
+        sourcePreserved: receipt.sourcePreserved,
+        rawSecretLeakage: receipt.rawSecretLeakage,
+        applicableFactCount: metrics.applicableFactCount,
+        capturedFactCount: metrics.capturedFactCount,
+        manualInterventions: metrics.manualInterventions,
+        hunterOverheadMinutes: receipt.overheadMs / 60_000,
+        rawPiCapturedFactCount: metrics.rawPiCapturedFactCount,
+        rawPiManualInterventions: metrics.rawPiManualInterventions,
+        run: {
           runId: package_.manifest.runId,
-          replacementOfRunId: actualPrevious,
           archiveId: package_.manifest.archiveId,
           archiveFingerprint: fingerprintSchema.parse(archivePackageFingerprint(package_)),
           terminalOutcome: package_.manifest.outcome,
           providerRequestCount: providerUsage.requestCount,
           providerTokenCount: providerUsage.tokenCount,
           providerCostMinor: providerUsage.costMinorUnits,
-        });
-      }
-      const terminal = runs.at(-1);
-      if (terminal === undefined) {
-        throw coordinatorError("OBSERVATION_INVALID", "pilot managed-task Archive chain is empty");
-      }
-      return taskChainObservationSchema.parse({
-        kind: "TASK_CHAIN",
-        taskId: parsed.taskId,
-        terminalOutcome: terminal.terminalOutcome,
-        sourcePreserved,
-        rawSecretLeakage,
-        applicableFactCount: parsed.metrics.applicableFactCount,
-        capturedFactCount: parsed.metrics.capturedFactCount,
-        manualInterventions: parsed.metrics.manualInterventions,
-        hunterOverheadMinutes: overheadMs / 60_000,
-        rawPiCapturedFactCount: parsed.metrics.rawPiCapturedFactCount,
-        rawPiManualInterventions: parsed.metrics.rawPiManualInterventions,
-        runs,
+          recoveryLinks,
+        },
       });
     });
     return this.#recordParsed(
@@ -1762,7 +2454,384 @@ export class FilePilotCaptureCoordinator {
         operationId: parsed.operationId,
         observation,
       }),
+      parsed.operationId,
     );
+  }
+
+  public async recordQuickTask(
+    runtime: unknown,
+    input: unknown,
+  ): Promise<PilotCaptureRecordReceipt> {
+    const execute = quickTaskExecutorFor(runtime);
+    if (execute === undefined) {
+      throw coordinatorError(
+        "OBSERVATION_INVALID",
+        "pilot Quick-task execution requires the bundled product runtime",
+      );
+    }
+    let parsed: PilotCaptureQuickTaskInput;
+    try {
+      parsed = pilotCaptureQuickTaskInputSchema.parse(input);
+    } catch {
+      throw coordinatorError("OBSERVATION_INVALID", "pilot Quick-task request is invalid");
+    }
+    return this.#withProviderOperationLock(async () => {
+      const prepared = await this.#withMutationLock(async () => {
+        const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+        assertNoUnresolvedProviderIntent(loaded);
+        if (loaded.intent !== undefined || loaded.commit !== undefined) {
+          throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+        }
+        const existingOperation = loaded.events.find(
+          (event) => event.operationId === parsed.operationId,
+        );
+        if (existingOperation !== undefined) {
+          if (
+            existingOperation.observation.kind !== "QUICK_TASK" ||
+            existingOperation.observation.receipt.taskId !== parsed.taskId ||
+            loaded.providerIntents.find((intent) => intent.operationId === parsed.operationId)
+              ?.inputFingerprint !== pilotFingerprint(parsed)
+          ) {
+            throw coordinatorError(
+              "OPERATION_CONFLICT",
+              "pilot capture operation identity is already bound to other facts",
+            );
+          }
+          return {
+            replay: pilotCaptureRecordReceiptSchema.parse({
+              schemaVersion: "hpi-pilot-capture-record-receipt.v1",
+              sessionId: parsed.sessionId,
+              operationId: parsed.operationId,
+              outcome: "REPLAYED",
+              sequence: existingOperation.sequence,
+              eventFingerprint: existingOperation.eventFingerprint,
+              status: this.#statusFromLoaded(loaded),
+            }),
+          } as const;
+        }
+        if (loaded.events.some((event) => event.factKey === `task.${parsed.taskId}`)) {
+          throw coordinatorError(
+            "FACT_CONFLICT",
+            "pilot task identity is already bound to another operation",
+          );
+        }
+        const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+        if (
+          oracle.mode !== "QUICK" ||
+          !pilotRuntimeBindingMatchesPlan(loaded.header.plan, parsed.runtimeBinding) ||
+          loaded.header.plan.workflowFactChecklistFingerprint !==
+            pilotQuickWorkflowFactChecklistFingerprint ||
+          parsed.request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
+          parsed.request.target.targetId !== oracle.targetId ||
+          parsed.request.target.sourceFingerprint !== oracle.sourceFingerprint ||
+          parsed.request.target.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
+          fingerprintRealManagedChangeTaskDefinition(parsed.request) !==
+            oracle.taskDefinitionFingerprint ||
+          oracle.acceptanceCheckDefinitionFingerprints.length !== 1 ||
+          fingerprintRealManagedChangeCheckDefinition(parsed.request) !==
+            oracle.acceptanceCheckDefinitionFingerprints[0]
+        ) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "pilot Quick-task input does not bind the frozen plan",
+          );
+        }
+        remainingProviderBudget(
+          loaded.header.plan,
+          usageForObservations(loaded.events.map((event) => event.observation)),
+        );
+        return { plan: loaded.header.plan, oracle } as const;
+      });
+      if ("replay" in prepared) return prepared.replay;
+      let providerAuthorized = false;
+      const authorizeProviderSend = async (): Promise<void> => {
+        if (providerAuthorized) return;
+        await this.#withMutationLock(async () => {
+          const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+          if (loaded.intent !== undefined || loaded.commit !== undefined) {
+            throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+          }
+          const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+          if (
+            loaded.events.some(
+              (event) =>
+                event.operationId === parsed.operationId ||
+                event.factKey === `task.${parsed.taskId}`,
+            ) ||
+            oracle.mode !== "QUICK" ||
+            !pilotRuntimeBindingMatchesPlan(loaded.header.plan, parsed.runtimeBinding) ||
+            loaded.header.plan.workflowFactChecklistFingerprint !==
+              pilotQuickWorkflowFactChecklistFingerprint ||
+            parsed.request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
+            parsed.request.target.targetId !== oracle.targetId ||
+            parsed.request.target.sourceFingerprint !== oracle.sourceFingerprint ||
+            parsed.request.target.targetReferenceFingerprint !==
+              oracle.targetReferenceFingerprint ||
+            fingerprintRealManagedChangeTaskDefinition(parsed.request) !==
+              oracle.taskDefinitionFingerprint ||
+            oracle.acceptanceCheckDefinitionFingerprints.length !== 1 ||
+            fingerprintRealManagedChangeCheckDefinition(parsed.request) !==
+              oracle.acceptanceCheckDefinitionFingerprints[0]
+          ) {
+            throw coordinatorError(
+              "OBSERVATION_INVALID",
+              "pilot Quick-task input changed before Provider send",
+            );
+          }
+          await publishProviderOperationIntent({
+            loaded,
+            operationId: parsed.operationId,
+            taskId: parsed.taskId,
+            kind: "QUICK_TASK",
+            factKey: `task.${parsed.taskId}`,
+            inputFingerprint: pilotFingerprint(parsed),
+            now: this.#now,
+          });
+        });
+        providerAuthorized = true;
+      };
+      let receipt: PilotQuickTaskReceipt;
+      try {
+        receipt = await execute({
+          plan: prepared.plan,
+          oracle: prepared.oracle,
+          repository: parsed.repository,
+          request: parsed.request,
+          authorizeProviderSend,
+        });
+        quickReceiptFor(prepared.plan, { kind: "QUICK_TASK", receipt });
+      } catch (error) {
+        if (error instanceof PilotCaptureCoordinatorError) throw error;
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "the product could not derive one valid Quick-task receipt",
+        );
+      }
+      return this.#recordParsed(
+        pilotCaptureProductRecordInputSchema.parse({
+          schemaVersion: "hpi-pilot-capture-record.v1",
+          sessionId: parsed.sessionId,
+          operationId: parsed.operationId,
+          observation: { kind: "QUICK_TASK", receipt },
+        }),
+        parsed.operationId,
+      );
+    });
+  }
+
+  public async recordRawComparator(
+    runtime: unknown,
+    input: unknown,
+  ): Promise<PilotCaptureRecordReceipt> {
+    const execute = rawComparatorExecutorFor(runtime);
+    if (execute === undefined) {
+      throw coordinatorError(
+        "OBSERVATION_INVALID",
+        "pilot raw-comparator execution requires the bundled product runtime",
+      );
+    }
+    let parsed: PilotCaptureRawComparatorInput;
+    try {
+      parsed = pilotCaptureRawComparatorInputSchema.parse(input);
+    } catch {
+      throw coordinatorError("OBSERVATION_INVALID", "pilot raw-comparator request is invalid");
+    }
+    return this.#withProviderOperationLock(async () => {
+      const prepared = await this.#withMutationLock(async () => {
+        const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+        assertNoUnresolvedProviderIntent(loaded);
+        if (loaded.intent !== undefined || loaded.commit !== undefined) {
+          throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+        }
+        const existingOperation = loaded.events.find(
+          (event) => event.operationId === parsed.operationId,
+        );
+        if (existingOperation !== undefined) {
+          if (
+            existingOperation.observation.kind !== "RAW_PI_COMPARATOR" ||
+            existingOperation.observation.comparator.taskId !== parsed.taskId ||
+            loaded.providerIntents.find((intent) => intent.operationId === parsed.operationId)
+              ?.inputFingerprint !== pilotFingerprint(parsed)
+          ) {
+            throw coordinatorError(
+              "OPERATION_CONFLICT",
+              "pilot capture operation identity is already bound to other facts",
+            );
+          }
+          return {
+            replay: pilotCaptureRecordReceiptSchema.parse({
+              schemaVersion: "hpi-pilot-capture-record-receipt.v1",
+              sessionId: parsed.sessionId,
+              operationId: parsed.operationId,
+              outcome: "REPLAYED",
+              sequence: existingOperation.sequence,
+              eventFingerprint: existingOperation.eventFingerprint,
+              status: this.#statusFromLoaded(loaded),
+            }),
+          } as const;
+        }
+        if (loaded.events.some((event) => event.factKey === `comparator.${parsed.taskId}`)) {
+          throw coordinatorError(
+            "FACT_CONFLICT",
+            "pilot comparator identity is already bound to another operation",
+          );
+        }
+        if (!loaded.header.plan.pairedTaskIds.includes(parsed.taskId)) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "the raw comparator task is outside the frozen paired set",
+          );
+        }
+        const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+        const taskObservation = [
+          ...observationsOfKind(
+            loaded.events.map((event) => event.observation),
+            "MANAGED_TASK",
+          ),
+          ...observationsOfKind(
+            loaded.events.map((event) => event.observation),
+            "QUICK_TASK",
+          ),
+        ].find((entry) =>
+          entry.kind === "MANAGED_TASK"
+            ? entry.taskId === parsed.taskId
+            : entry.receipt.taskId === parsed.taskId,
+        );
+        if (taskObservation === undefined) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "the product-derived Hunter task must be recorded before its raw comparator",
+          );
+        }
+        if (
+          !pilotRuntimeBindingMatchesPlan(loaded.header.plan, parsed.runtimeBinding) ||
+          loaded.header.plan.workflowFactChecklistFingerprint !==
+            pilotQuickWorkflowFactChecklistFingerprint ||
+          loaded.header.plan.comparatorConfigurationFingerprint !==
+            parsed.comparatorConfigurationFingerprint ||
+          parsed.request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
+          parsed.request.target.targetId !== oracle.targetId ||
+          parsed.request.target.sourceFingerprint !== oracle.sourceFingerprint ||
+          parsed.request.target.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
+          fingerprintRealManagedChangeTaskDefinition(parsed.request) !==
+            oracle.taskDefinitionFingerprint ||
+          oracle.acceptanceCheckDefinitionFingerprints.length !== 1 ||
+          fingerprintRealManagedChangeCheckDefinition(parsed.request) !==
+            oracle.acceptanceCheckDefinitionFingerprints[0]
+        ) {
+          throw coordinatorError(
+            "OBSERVATION_INVALID",
+            "pilot raw-comparator input does not bind the frozen plan",
+          );
+        }
+        remainingProviderBudget(
+          loaded.header.plan,
+          usageForObservations(loaded.events.map((event) => event.observation)),
+        );
+        return {
+          plan: loaded.header.plan,
+          oracle,
+          taskObservation,
+          hunterResult: taskResultFor(loaded.header.plan, taskObservation),
+        } as const;
+      });
+      if ("replay" in prepared) return prepared.replay;
+      let providerAuthorized = false;
+      const authorizeProviderSend = async (): Promise<void> => {
+        if (providerAuthorized) return;
+        await this.#withMutationLock(async () => {
+          const loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
+          if (loaded.intent !== undefined || loaded.commit !== undefined) {
+            throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+          }
+          const oracle = oracleFor(loaded.header.plan, parsed.taskId);
+          const taskObservation = [
+            ...observationsOfKind(
+              loaded.events.map((event) => event.observation),
+              "MANAGED_TASK",
+            ),
+            ...observationsOfKind(
+              loaded.events.map((event) => event.observation),
+              "QUICK_TASK",
+            ),
+          ].find((entry) =>
+            entry.kind === "MANAGED_TASK"
+              ? entry.taskId === parsed.taskId
+              : entry.receipt.taskId === parsed.taskId,
+          );
+          if (
+            loaded.events.some(
+              (event) =>
+                event.operationId === parsed.operationId ||
+                event.factKey === `comparator.${parsed.taskId}`,
+            ) ||
+            !loaded.header.plan.pairedTaskIds.includes(parsed.taskId) ||
+            taskObservation === undefined ||
+            !pilotRuntimeBindingMatchesPlan(loaded.header.plan, parsed.runtimeBinding) ||
+            loaded.header.plan.workflowFactChecklistFingerprint !==
+              pilotQuickWorkflowFactChecklistFingerprint ||
+            loaded.header.plan.comparatorConfigurationFingerprint !==
+              parsed.comparatorConfigurationFingerprint ||
+            parsed.request.target.repositoryFingerprint !== oracle.repositoryFingerprint ||
+            parsed.request.target.targetId !== oracle.targetId ||
+            parsed.request.target.sourceFingerprint !== oracle.sourceFingerprint ||
+            parsed.request.target.targetReferenceFingerprint !==
+              oracle.targetReferenceFingerprint ||
+            fingerprintRealManagedChangeTaskDefinition(parsed.request) !==
+              oracle.taskDefinitionFingerprint ||
+            oracle.acceptanceCheckDefinitionFingerprints.length !== 1 ||
+            fingerprintRealManagedChangeCheckDefinition(parsed.request) !==
+              oracle.acceptanceCheckDefinitionFingerprints[0]
+          ) {
+            throw coordinatorError(
+              "OBSERVATION_INVALID",
+              "pilot raw-comparator input changed before Provider send",
+            );
+          }
+          await publishProviderOperationIntent({
+            loaded,
+            operationId: parsed.operationId,
+            taskId: parsed.taskId,
+            kind: "RAW_PI_COMPARATOR",
+            factKey: `comparator.${parsed.taskId}`,
+            inputFingerprint: pilotFingerprint(parsed),
+            now: this.#now,
+          });
+        });
+        providerAuthorized = true;
+      };
+      let comparator: PilotComparator;
+      try {
+        comparator = await execute({
+          plan: prepared.plan,
+          oracle: prepared.oracle,
+          hunterResult: prepared.hunterResult,
+          repository: parsed.repository,
+          request: parsed.request,
+          authorizeProviderSend,
+        });
+        comparatorFor(
+          prepared.plan,
+          { kind: "RAW_PI_COMPARATOR", comparator },
+          prepared.taskObservation,
+        );
+      } catch (error) {
+        if (error instanceof PilotCaptureCoordinatorError) throw error;
+        throw coordinatorError(
+          "OBSERVATION_INVALID",
+          "the product could not derive one valid raw Pi comparator receipt",
+        );
+      }
+      return this.#recordParsed(
+        pilotCaptureProductRecordInputSchema.parse({
+          schemaVersion: "hpi-pilot-capture-record.v1",
+          sessionId: parsed.sessionId,
+          operationId: parsed.operationId,
+          observation: { kind: "RAW_PI_COMPARATOR", comparator },
+        }),
+        parsed.operationId,
+      );
+    });
   }
 
   public async record(input: unknown): Promise<PilotCaptureRecordReceipt> {
@@ -1792,15 +2861,42 @@ export class FilePilotCaptureCoordinator {
     return this.#recordParsed(parsed);
   }
 
-  async #recordParsed(parsed: PilotCaptureAnyRecordInput): Promise<PilotCaptureRecordReceipt> {
+  async #recordParsed(
+    parsed: PilotCaptureAnyRecordInput,
+    completingProviderOperationId?: string,
+  ): Promise<PilotCaptureRecordReceipt> {
     return this.#withMutationLock(async () => {
       let loaded = await loadCaptureSession(this.#stateRoot, parsed.sessionId);
-      if (loaded.intent !== undefined || loaded.commit !== undefined) {
-        throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
-      }
+      assertNoUnresolvedProviderIntent(loaded, completingProviderOperationId);
+      const pendingProviderIntent = unresolvedProviderIntent(loaded);
       const existingOperation = loaded.events.find(
         (event) => event.operationId === parsed.operationId,
       );
+      const completingProviderIntent =
+        completingProviderOperationId === undefined
+          ? undefined
+          : loaded.providerIntents.find(
+              (intent) => intent.operationId === completingProviderOperationId,
+            );
+      if (
+        completingProviderOperationId !== undefined &&
+        (completingProviderIntent === undefined ||
+          parsed.operationId !== completingProviderOperationId ||
+          completingProviderIntent.factKey !== factKeyFor(parsed.observation) ||
+          completingProviderIntent.kind !== parsed.observation.kind ||
+          completingProviderIntent.taskId !== providerObservationTaskId(parsed.observation) ||
+          (pendingProviderIntent === undefined
+            ? existingOperation?.operationId !== completingProviderOperationId
+            : pendingProviderIntent.operationId !== completingProviderOperationId))
+      ) {
+        throw coordinatorError(
+          "PROVIDER_USAGE_RECONCILIATION_REQUIRED",
+          "the completed pilot Provider operation does not match its durable intent",
+        );
+      }
+      if (loaded.intent !== undefined || loaded.commit !== undefined) {
+        throw coordinatorError("SESSION_SEALED", "pilot capture session is sealed");
+      }
       if (existingOperation !== undefined) {
         if (canonicalJson(existingOperation.observation) !== canonicalJson(parsed.observation)) {
           throw coordinatorError(
@@ -1879,6 +2975,7 @@ export class FilePilotCaptureCoordinator {
     }
     return this.#withMutationLock(async () => {
       let loaded = await loadCaptureSession(this.#stateRoot, parsedSessionId);
+      assertNoUnresolvedProviderIntent(loaded);
       if (loaded.commit !== undefined) return this.#readCommittedArchive(loaded);
       const observations = loaded.events.map((event) => event.observation);
       let intent = loaded.intent;

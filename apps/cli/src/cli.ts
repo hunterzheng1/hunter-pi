@@ -5,6 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
+import { z } from "zod";
+
 import {
   FilePiPackageBindingStore,
   PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
@@ -20,6 +22,7 @@ import {
   createDefaultHpiConfiguration,
   createInteractiveTuiConfigurationFingerprint,
   createPiLaunchPlan,
+  createRawPiLaunchPlan,
   createLocalPiPluginSource,
   createQualifiedPiJsonProcess,
   createQuickSessionHeader,
@@ -49,8 +52,7 @@ import {
   type PiPluginActivationCompatibilityContext,
   type PiProviderDestination,
   type PiProviderAuthMetadata,
-  type Task6PiProcessRequest,
-  type Task6PiProcessResult,
+  type Task6PiProcessRunner,
 } from "@hunter-pi/pi-host";
 import { createFileLeaseManager } from "@hunter-pi/execution";
 import {
@@ -66,6 +68,9 @@ import {
 } from "@hunter-pi/plugin-manager";
 import {
   RealManagedChangeBlockedError,
+  fingerprintRealManagedChangeCheckDefinition,
+  fingerprintRealManagedChangeTaskDefinition,
+  realManagedChangePilotExecutionBindingSchema,
   realManagedChangeRequestSchema,
   runRealManagedChange,
   runTask6ManagedChange,
@@ -74,6 +79,7 @@ import {
 import {
   createPilotRepositoryTargetBlockedReceipt,
   createPilotRepositoryTargetReceipt,
+  createPilotRuntimeBinding,
   FilePilotArchiveStore,
   FilePilotCaptureCoordinator,
   PilotCaptureCoordinatorError,
@@ -81,13 +87,24 @@ import {
   PilotPlanCompiler,
   pilotCaptureObservationSchema,
   pilotExecutionPlanSchema,
+  pilotFingerprint,
+  pilotQuickWorkflowFactChecklistFingerprint,
+  pilotRuntimeBindingSchema,
+  pilotRuntimeBindingMatchesPlan,
   pilotTargetIdSchema,
+  fingerprintPilotRawComparatorConfiguration,
+  runPilotRawComparator,
+  runPilotQuickTask,
   type PilotPlanInput,
   type PilotRepositoryTargetReceipt,
+  type PilotRuntimeBinding,
   type PilotPreflightFailure,
   type TrustedPilotArchive,
 } from "@hunter-pi/pilot";
-import { archiveIdSchema, operationIdSchema } from "@hunter-pi/domain";
+import { createPilotCaptureProductExecutionRuntime } from "@hunter-pi/pilot/internal-capture";
+import { createRealManagedChangePilotExecutionRuntime } from "@hunter-pi/managed-change/internal-pilot-execution";
+import { createQualifiedControlledCommandRunner } from "@hunter-pi/verification";
+import { archiveIdSchema, fingerprintSchema, operationIdSchema } from "@hunter-pi/domain";
 import {
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
@@ -141,13 +158,119 @@ export interface HpiCliDependencies {
   readonly coreExtensionPath?: string;
   readonly platform: string;
   readonly getVersionInfo?: () => Promise<HpiVersionInfo>;
-  readonly runTask6Process?: (request: Task6PiProcessRequest) => Promise<Task6PiProcessResult>;
+  readonly runTask6Process?: Task6PiProcessRunner;
   readonly readTextFile?: (path: string) => Promise<string>;
   readonly readBinaryFile?: (path: string) => Promise<Uint8Array>;
   readonly createUpdateManager?: (options: {
     readonly paths: HpiPaths;
     readonly artifactPath?: string;
   }) => Promise<UpdateManager | undefined>;
+}
+
+const pilotPortableManifestSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-windows-portable.v2"),
+  product: z.literal("Hunter Pi"),
+  platform: z.literal("win32-x64"),
+  nodeVersion: z.string().min(1).max(64),
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  sourceState: z.literal("CLEAN"),
+  updateChannel: z.literal("developer-preview"),
+  installer: z.literal("PORTABLE_DIRECTORY"),
+  signed: z.boolean(),
+  releaseId: z.string().min(1).max(256),
+  productVersion: z.string().min(1).max(128),
+  engineReleaseId: z.string().min(1).max(256),
+  engineReleaseFingerprint: fingerprintSchema,
+  artifactFingerprint: fingerprintSchema,
+  artifactByteLength: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  versionDirectory: z.string().min(1).max(1_024),
+  cliPackageFingerprint: fingerprintSchema,
+  productShellIntegrity: fingerprintSchema,
+  coreExtensionIntegrity: fingerprintSchema,
+  nodeRuntimeIntegrity: fingerprintSchema,
+});
+
+async function readInstalledPilotRuntimeBinding(options: {
+  readonly dependencies: HpiCliDependencies;
+  readonly version: HpiVersionInfo;
+  readonly configuration: HpiConfiguration;
+  readonly auth: PiProviderAuthMetadata;
+  readonly destination: PiProviderDestination;
+}): Promise<PilotRuntimeBinding> {
+  const portableRoot = options.dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
+  const modelId = options.configuration.provider.selectedModel;
+  if (
+    portableRoot === undefined ||
+    !isAbsolute(portableRoot) ||
+    modelId === null ||
+    !options.auth.configured ||
+    options.auth.source === undefined
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot runtime identity is incomplete",
+    );
+  }
+  const manifestPath = join(resolve(portableRoot), "portable-manifest.json");
+  let stats;
+  try {
+    stats = await lstat(manifestPath);
+  } catch {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is unavailable",
+    );
+  }
+  if (
+    !stats.isFile() ||
+    stats.isSymbolicLink() ||
+    stats.nlink !== 1 ||
+    !Number.isSafeInteger(stats.size) ||
+    stats.size <= 0 ||
+    stats.size > 64 * 1024
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is not one exact bounded file",
+    );
+  }
+  let manifest: z.infer<typeof pilotPortableManifestSchema>;
+  try {
+    const text =
+      options.dependencies.readTextFile === undefined
+        ? await readFile(manifestPath, "utf8")
+        : await options.dependencies.readTextFile(manifestPath);
+    manifest = pilotPortableManifestSchema.parse(JSON.parse(text) as unknown);
+  } catch {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest is invalid",
+    );
+  }
+  const binding = createPilotRuntimeBinding({
+    sourceCommit: options.version.sourceCommit,
+    artifactFingerprint: manifest.artifactFingerprint,
+    enginePackageName: options.version.engine.packageName,
+    engineVersion: options.version.engine.version,
+    providerId: options.configuration.provider.id,
+    modelId,
+    configuredOrigin: options.destination.configuredOrigin,
+    pristineOrigin: options.destination.pristineOrigin,
+    credentialSource: options.auth.source,
+  });
+  if (
+    manifest.sourceCommit !== options.version.sourceCommit ||
+    manifest.productVersion !== options.version.productVersion ||
+    manifest.engineReleaseFingerprint !== binding.engineReleaseFingerprint ||
+    manifest.productShellIntegrity !== options.version.productShellIntegrity ||
+    manifest.coreExtensionIntegrity !== options.version.coreExtensionIntegrity
+  ) {
+    throw new PilotCaptureCoordinatorError(
+      "RUNTIME_BINDING_MISMATCH",
+      "pilot portable manifest does not match the running product",
+    );
+  }
+  return pilotRuntimeBindingSchema.parse(binding);
 }
 
 export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {
@@ -750,6 +873,74 @@ function assertPilotTargetOptions(arguments_: readonly string[]): void {
   }
 }
 
+function assertPilotQuickTaskOptions(arguments_: readonly string[]): void {
+  const required = new Set(["--session-id", "--operation-id", "--task-id", "--repo", "--request"]);
+  const seen = new Set<string>();
+  let jsonSeen = false;
+  let providerAuthorizationSeen = false;
+  for (let index = 0; index < arguments_.length;) {
+    const option = arguments_[index];
+    if (option === "--json") {
+      if (jsonSeen) throw new HpiCliUsageError();
+      jsonSeen = true;
+      index += 1;
+      continue;
+    }
+    if (option === "--allow-provider-request") {
+      if (providerAuthorizationSeen) throw new HpiCliUsageError();
+      providerAuthorizationSeen = true;
+      index += 1;
+      continue;
+    }
+    const value = arguments_[index + 1];
+    if (
+      option === undefined ||
+      value === undefined ||
+      !required.has(option) ||
+      seen.has(option) ||
+      value.startsWith("-")
+    ) {
+      throw new HpiCliUsageError();
+    }
+    seen.add(option);
+    index += 2;
+  }
+  if (!jsonSeen || !providerAuthorizationSeen || seen.size !== required.size) {
+    throw new HpiCliUsageError();
+  }
+}
+
+const realChangePilotInterruptionOptions = {
+  FORCED_PROCESS_KILL: {
+    plan: "FORCED_PROCESS_KILL",
+    process: "AFTER_AGENT_END_PROCESS_KILL",
+    receipt: "FORCED_PROCESS_KILL_AFTER_AGENT_END",
+  },
+  TERMINAL_CLOSE_SIMULATION: {
+    plan: "TERMINAL_CLOSE_SIMULATION",
+    process: "AFTER_AGENT_END_TERMINAL_CLOSE_SIMULATION",
+    receipt: "TERMINAL_CLOSE_SIMULATION_AFTER_AGENT_END",
+  },
+  POWER_LOSS_SIMULATION: {
+    plan: "POWER_LOSS_SIMULATION",
+    process: "AFTER_AGENT_END_POWER_LOSS_SIMULATION",
+    receipt: "POWER_LOSS_SIMULATION_AFTER_AGENT_END",
+  },
+} as const;
+
+function realChangePilotInterruption(
+  arguments_: readonly string[],
+):
+  | (typeof realChangePilotInterruptionOptions)[keyof typeof realChangePilotInterruptionOptions]
+  | undefined {
+  const value = optionValue(arguments_, "--pilot-interruption");
+  if (value === undefined) return undefined;
+  if (!Object.hasOwn(realChangePilotInterruptionOptions, value)) throw new HpiCliUsageError();
+  return realChangePilotInterruptionOptions[
+    value as keyof typeof realChangePilotInterruptionOptions
+  ];
+}
+
 function assertChangeOptions(arguments_: readonly string[]): void {
   const seen = new Set<string>();
   let jsonSeen = false;
@@ -772,7 +963,16 @@ function assertChangeOptions(arguments_: readonly string[]): void {
     if (
       option === undefined ||
       value === undefined ||
-      !new Set(["--repo", "--plan", "--run-archive-id"]).has(option) ||
+      !new Set([
+        "--repo",
+        "--plan",
+        "--run-archive-id",
+        "--pilot-interruption",
+        "--pilot-plan",
+        "--pilot-task-id",
+        "--pilot-session-id",
+        "--pilot-operation-id",
+      ]).has(option) ||
       seen.has(option) ||
       value.startsWith("-")
     ) {
@@ -781,11 +981,28 @@ function assertChangeOptions(arguments_: readonly string[]): void {
     seen.add(option);
     index += 2;
   }
-  if (!jsonSeen || !seen.has("--repo") || !seen.has("--plan") || seen.size > 3) {
+  if (!jsonSeen || !seen.has("--repo") || !seen.has("--plan") || seen.size > 8) {
     throw new HpiCliUsageError();
   }
   const runArchiveId = optionValue(arguments_, "--run-archive-id");
   if (runArchiveId !== undefined && !archiveIdSchema.safeParse(runArchiveId).success) {
+    throw new HpiCliUsageError();
+  }
+  const pilotInterruption = realChangePilotInterruption(arguments_);
+  if (pilotInterruption !== undefined && runArchiveId === undefined) {
+    throw new HpiCliUsageError();
+  }
+  const pilotPlanPath = optionValue(arguments_, "--pilot-plan");
+  const pilotTaskId = optionValue(arguments_, "--pilot-task-id");
+  const pilotSessionId = optionValue(arguments_, "--pilot-session-id");
+  const pilotOperationId = optionValue(arguments_, "--pilot-operation-id");
+  const pilotOptionCount = [pilotPlanPath, pilotTaskId, pilotSessionId, pilotOperationId].filter(
+    (value) => value !== undefined,
+  ).length;
+  if (
+    (pilotOptionCount !== 0 && pilotOptionCount !== 4) ||
+    (pilotOptionCount === 4 && runArchiveId === undefined)
+  ) {
     throw new HpiCliUsageError();
   }
 }
@@ -872,6 +1089,11 @@ function validateCliArguments(arguments_: readonly string[]): void {
     assertPilotJsonOptions(arguments_.slice(2), new Set(["--input"]));
     return;
   }
+  if (command === "pilot" && arguments_[1] === "runtime-sample") {
+    assertUniqueFlags(arguments_.slice(2), new Set(["--json"]));
+    if (arguments_.length !== 3 || arguments_[2] !== "--json") throw new HpiCliUsageError();
+    return;
+  }
   if (command === "pilot" && arguments_[1] === "capture") {
     const action = arguments_[2];
     const options = arguments_.slice(3);
@@ -886,8 +1108,12 @@ function validateCliArguments(arguments_: readonly string[]): void {
     if (action === "managed-task") {
       assertPilotJsonOptions(
         options,
-        new Set(["--session-id", "--operation-id", "--task-id", "--archive-ids", "--metrics"]),
+        new Set(["--session-id", "--operation-id", "--task-id", "--archive-ids"]),
       );
+      return;
+    }
+    if (action === "quick-task" || action === "raw-pi") {
+      assertPilotQuickTaskOptions(options);
       return;
     }
     if (action === "status" || action === "finalize") {
@@ -1414,6 +1640,7 @@ async function realChangeCommand(
   dependencies: HpiCliDependencies,
   paths: HpiPaths,
 ): Promise<number> {
+  const pilotInterruption = realChangePilotInterruption(arguments_);
   const configuration = await loadHpiConfiguration(paths);
   if (configuration?.setupCompletedAt == null) {
     errorLine(
@@ -1455,6 +1682,70 @@ async function realChangeCommand(
     );
     return 2;
   }
+  const pilotPlanPath = optionValue(arguments_, "--pilot-plan");
+  const pilotTaskId = optionValue(arguments_, "--pilot-task-id");
+  const pilotSessionId = optionValue(arguments_, "--pilot-session-id");
+  const pilotOperationId = optionValue(arguments_, "--pilot-operation-id");
+  let pilotPlan: z.infer<typeof pilotExecutionPlanSchema> | undefined;
+  if (pilotPlanPath !== undefined && pilotTaskId !== undefined) {
+    const pilotPlanFile = await readPilotJsonFile(pilotPlanPath, dependencies);
+    const parsedPilotPlan = pilotExecutionPlanSchema.safeParse(pilotPlanFile.value);
+    if (pilotPlanFile.failure !== undefined || !parsedPilotPlan.success) {
+      errorLine(
+        dependencies.io,
+        "ManagedChangeStatus=BLOCKED Reason=PILOT_PLAN_INVALID NextAction=Use one exact current frozen pilot execution plan.",
+      );
+      return 2;
+    }
+    const selectedTask = parsedPilotPlan.data.tasks.find((task) => task.taskId === pilotTaskId);
+    const selectedTarget = parsedPilotPlan.data.repositoryTargets.find(
+      (target) => target.targetId === selectedTask?.targetId,
+    );
+    const selectedCheck =
+      selectedTask?.acceptanceCheckIds.length === 1
+        ? parsedPilotPlan.data.acceptanceChecks.find(
+            (check) => check.checkId === selectedTask.acceptanceCheckIds[0],
+          )
+        : undefined;
+    const plannedInterruption = parsedPilotPlan.data.interruptionTasks.find(
+      (item) => item.taskId === pilotTaskId,
+    );
+    if (
+      selectedTask?.mode !== "MANAGED" ||
+      selectedTarget?.targetId !== parsedPlan.data.target.targetId ||
+      selectedTarget.repositoryFingerprint !== parsedPlan.data.target.repositoryFingerprint ||
+      selectedTarget.targetReferenceFingerprint !==
+        parsedPlan.data.target.targetReferenceFingerprint ||
+      selectedTarget.sourceFingerprint !== parsedPlan.data.target.sourceFingerprint ||
+      selectedTask.sourceFingerprint !== parsedPlan.data.target.sourceFingerprint ||
+      selectedTask.taskDefinitionFingerprint !==
+        fingerprintRealManagedChangeTaskDefinition(parsedPlan.data) ||
+      selectedCheck?.definitionFingerprint !==
+        fingerprintRealManagedChangeCheckDefinition(parsedPlan.data) ||
+      parsedPilotPlan.data.workflowFactChecklistFingerprint !==
+        pilotQuickWorkflowFactChecklistFingerprint ||
+      (plannedInterruption?.kind ?? null) !== (pilotInterruption?.plan ?? null) ||
+      (parsedPilotPlan.data.deliberateFixbackTaskId === pilotTaskId &&
+        plannedInterruption !== undefined)
+    ) {
+      errorLine(
+        dependencies.io,
+        "ManagedChangeStatus=BLOCKED Reason=PILOT_TASK_BINDING_MISMATCH NextAction=Use the exact frozen Managed task, target, check, and interruption declaration.",
+      );
+      return 2;
+    }
+    if (
+      dependencies.platform !== parsedPilotPlan.data.platform ||
+      process.arch !== parsedPilotPlan.data.architecture
+    ) {
+      errorLine(
+        dependencies.io,
+        "ManagedChangeStatus=BLOCKED Reason=PILOT_HOST_MISMATCH NextAction=Run the frozen real pilot only on its Windows x64 host.",
+      );
+      return 2;
+    }
+    pilotPlan = parsedPilotPlan.data;
+  }
   let repositoryPath: string;
   try {
     repositoryPath = await realpath(resolve(repositoryInput));
@@ -1481,8 +1772,16 @@ async function realChangeCommand(
     );
     return 2;
   }
+  const pilotProviderScope = pilotPlan?.operatorScope;
+  const providerExecutionScope =
+    pilotProviderScope?.maxProviderRequests !== null &&
+    pilotProviderScope?.maxProviderRequests !== undefined &&
+    pilotProviderScope.maxProviderTokens !== null &&
+    pilotProviderScope.maxProviderCostMinor !== null
+      ? `may consume the frozen pilot allowance of ${String(pilotProviderScope.maxProviderRequests)} Provider requests, ${String(pilotProviderScope.maxProviderTokens)} tokens, and ${String(pilotProviderScope.maxProviderCostMinor)} minor-cost units across the full pilot`
+      : "may execute up to two bounded Agent Attempts that can issue Provider requests";
   const confirmed = await dependencies.io.confirm(
-    `This explicitly selected ${repository.name} repository on ${repository.branch} may send one bounded Provider request and modify only the declared paths. Continue?`,
+    `This explicitly selected ${repository.name} repository on ${repository.branch} ${providerExecutionScope} and modify only the declared paths. Continue?`,
   );
   if (!confirmed) {
     errorLine(
@@ -1506,6 +1805,46 @@ async function realChangeCommand(
     dependencies,
     paths,
   );
+  let pilotExecutionBinding:
+    z.infer<typeof realManagedChangePilotExecutionBindingSchema> | undefined;
+  if (pilotPlan !== undefined && pilotTaskId !== undefined) {
+    let runtimeBinding: PilotRuntimeBinding;
+    try {
+      runtimeBinding = await readInstalledPilotRuntimeBinding({
+        dependencies,
+        version,
+        configuration,
+        auth,
+        destination: resolvedProviderDestination,
+      });
+    } catch {
+      errorLine(
+        dependencies.io,
+        "ManagedChangeStatus=BLOCKED Reason=RUNTIME_BINDING_MISMATCH NextAction=Use the exact clean portable artifact, Engine, Provider endpoint, model, and credential scope frozen in the pilot plan.",
+      );
+      return 2;
+    }
+    if (!pilotRuntimeBindingMatchesPlan(pilotPlan, runtimeBinding)) {
+      errorLine(
+        dependencies.io,
+        "ManagedChangeStatus=BLOCKED Reason=RUNTIME_BINDING_MISMATCH NextAction=Use the exact clean portable artifact, Engine, Provider endpoint, model, and credential scope frozen in the pilot plan.",
+      );
+      return 2;
+    }
+    pilotExecutionBinding = realManagedChangePilotExecutionBindingSchema.parse({
+      schemaVersion: "hpi-real-managed-change-pilot-execution-binding.v1",
+      planFingerprint: pilotPlan.planFingerprint,
+      taskId: pilotTaskId,
+      targetId: pilotPlan.tasks.find((task) => task.taskId === pilotTaskId)?.targetId,
+      captureSessionId: pilotSessionId,
+      captureOperationId: pilotOperationId,
+      acceptanceCheckId: pilotPlan.tasks.find((task) => task.taskId === pilotTaskId)
+        ?.acceptanceCheckIds[0],
+      runtimeBinding,
+      workflowFactChecklistFingerprint: pilotPlan.workflowFactChecklistFingerprint,
+      deliberateFixback: pilotPlan.deliberateFixbackTaskId === pilotTaskId,
+    });
+  }
   const managedConfiguration = hpiConfigurationSchema.parse({
     ...configuration,
     permissionProfile: "FULL_ACCESS",
@@ -1549,7 +1888,8 @@ async function realChangeCommand(
     now: dependencies.now,
     processTimeoutMs: 300_000,
     maximumOutputBytes: 229_376,
-    requireQualifiedProcess: dependencies.runTask6Process === undefined,
+    requireQualifiedProcess: true,
+    ...(pilotInterruption === undefined ? {} : { forcedInterruption: pilotInterruption.process }),
   });
   const environmentFingerprint = sha256(
     JSON.stringify({
@@ -1564,9 +1904,75 @@ async function realChangeCommand(
       permissionProfile: "FULL_ACCESS",
       executionScope: "EXPLICIT_OPERATOR_SELECTED",
       repositoryBranch: repository.branch,
+      pilotInterruption: pilotInterruption?.receipt ?? null,
     }),
   );
   const runArchiveId = optionValue(arguments_, "--run-archive-id");
+  const pilotExecutionRuntime =
+    pilotExecutionBinding === undefined ||
+    pilotPlan === undefined ||
+    pilotTaskId === undefined ||
+    pilotSessionId === undefined ||
+    pilotOperationId === undefined
+      ? undefined
+      : createRealManagedChangePilotExecutionRuntime({
+          binding: pilotExecutionBinding,
+          engineHost: host,
+          assertDurablePreSendRetryable: async () => {
+            const coordinator = new FilePilotCaptureCoordinator({
+              stateRoot: join(paths.root, "pilot", "capture"),
+              archiveStateRoot: join(paths.root, "pilot", "archive-store"),
+              managedRunStateRoot: join(paths.root, "pilot", "managed-runs"),
+              now: dependencies.now,
+            });
+            try {
+              await coordinator.assertManagedProviderOperationRetryable({
+                schemaVersion: "hpi-pilot-managed-provider-reservation.v1",
+                sessionId: pilotSessionId,
+                operationId: pilotOperationId,
+                taskId: pilotTaskId,
+                planFingerprint: pilotPlan.planFingerprint,
+              });
+            } catch (error) {
+              if (error instanceof PilotCaptureCoordinatorError) {
+                throw new RealManagedChangeBlockedError(
+                  error.code === "PROVIDER_BUDGET_EXCEEDED"
+                    ? "PILOT_PROVIDER_BUDGET_EXHAUSTED"
+                    : "PILOT_CAPTURE_SESSION_NOT_READY",
+                  pilotCaptureNextAction(error),
+                );
+              }
+              throw error;
+            }
+          },
+          beforeProviderSend: async () => {
+            const coordinator = new FilePilotCaptureCoordinator({
+              stateRoot: join(paths.root, "pilot", "capture"),
+              archiveStateRoot: join(paths.root, "pilot", "archive-store"),
+              managedRunStateRoot: join(paths.root, "pilot", "managed-runs"),
+              now: dependencies.now,
+            });
+            try {
+              return await coordinator.reserveManagedProviderOperation({
+                schemaVersion: "hpi-pilot-managed-provider-reservation.v1",
+                sessionId: pilotSessionId,
+                operationId: pilotOperationId,
+                taskId: pilotTaskId,
+                planFingerprint: pilotPlan.planFingerprint,
+              });
+            } catch (error) {
+              if (error instanceof PilotCaptureCoordinatorError) {
+                throw new RealManagedChangeBlockedError(
+                  error.code === "PROVIDER_BUDGET_EXCEEDED"
+                    ? "PILOT_PROVIDER_BUDGET_EXHAUSTED"
+                    : "PILOT_CAPTURE_SESSION_NOT_READY",
+                  pilotCaptureNextAction(error),
+                );
+              }
+              throw error;
+            }
+          },
+        });
   const artifact = await runRealManagedChange({
     repository: repository.root,
     request: parsedPlan.data,
@@ -1591,6 +1997,15 @@ async function realChangeCommand(
             )}`,
           },
         }),
+    ...(pilotInterruption === undefined || runArchiveId === undefined
+      ? {}
+      : {
+          pilotInterruption: {
+            runIdentity: runArchiveId,
+            forcedInterruption: pilotInterruption.receipt,
+          },
+        }),
+    ...(pilotExecutionRuntime === undefined ? {} : { pilotExecutionRuntime }),
     now: dependencies.now,
   });
   line(dependencies.io, JSON.stringify(artifact));
@@ -2168,7 +2583,7 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi smoke tui");
   line(
     io,
-    "       hpi change --repo <directory> --plan <file> [--run-archive-id <id>] --json --allow-provider-request",
+    "       hpi change --repo <directory> --plan <file> [--run-archive-id <id> [--pilot-plan <file> --pilot-task-id <id> --pilot-session-id <id> --pilot-operation-id <id>] [--pilot-interruption FORCED_PROCESS_KILL|TERMINAL_CLOSE_SIMULATION|POWER_LOSS_SIMULATION]] --json --allow-provider-request",
   );
   line(io, "       hpi managed fixture --json [--allow-provider-request]");
   line(io, "       hpi plugin list | plugin doctor | plugin disable <id> | plugin remove <id>");
@@ -2189,6 +2604,7 @@ function printHelp(io: HpiCliIo): void {
     "       hpi plugin import-pi <directory> --package <name@version> --integrity <sha256> --acknowledge-provenance --allow-process-authority",
   );
   line(io, "       hpi pilot compile --input <file> --json");
+  line(io, "       hpi pilot runtime-sample --json");
   line(io, "       hpi pilot target --repo <directory> --target-id <id> --json");
   line(
     io,
@@ -2200,7 +2616,15 @@ function printHelp(io: HpiCliIo): void {
   );
   line(
     io,
-    "       hpi pilot capture managed-task --session-id <id> --operation-id <id> --task-id <id> --archive-ids <id[,id]> --metrics <file> --json",
+    "       hpi pilot capture managed-task --session-id <id> --operation-id <id> --task-id <id> --archive-ids <id[,id]> --json",
+  );
+  line(
+    io,
+    "       hpi pilot capture quick-task --session-id <id> --operation-id <id> --task-id <id> --repo <directory> --request <file> --json --allow-provider-request",
+  );
+  line(
+    io,
+    "       hpi pilot capture raw-pi --session-id <id> --operation-id <id> --task-id <id> --repo <clean-comparator-directory> --request <file> --json --allow-provider-request",
   );
   line(io, "       hpi pilot capture status --session-id <id> --json");
   line(io, "       hpi pilot capture finalize --session-id <id> --json");
@@ -2322,6 +2746,10 @@ function pilotCaptureBlocked(
   return 2;
 }
 
+function isFrozenWindowsPilotHost(dependencies: HpiCliDependencies): boolean {
+  return dependencies.platform === "win32" && process.arch === "x64";
+}
+
 function pilotCaptureNextAction(error: PilotCaptureCoordinatorError): string {
   switch (error.code) {
     case "SESSION_NOT_FOUND":
@@ -2339,6 +2767,10 @@ function pilotCaptureNextAction(error: PilotCaptureCoordinatorError): string {
       return "Provide one strict plan-bound capture observation without paths or credentials.";
     case "PROVIDER_BUDGET_EXCEEDED":
       return "Stop Provider work; the frozen pilot authorization budget is exhausted.";
+    case "PROVIDER_USAGE_RECONCILIATION_REQUIRED":
+      return "Do not retry the Provider operation; preserve the session for exact usage reconciliation.";
+    case "RUNTIME_BINDING_MISMATCH":
+      return "Use the exact clean Windows artifact, Engine, Provider endpoint, model, and credential scope frozen in the pilot plan.";
     case "INCOMPLETE":
       return "Record every next action reported by capture status before finalizing.";
     case "WINDOWS_REQUIRED":
@@ -2427,7 +2859,11 @@ async function pilotCaptureCommand(
           "Provide one strict plan-bound capture observation without paths or credentials.",
         );
       }
-      if (observation.data.kind === "TASK_CHAIN" || observation.data.kind === "RAW_PI_COMPARATOR") {
+      if (
+        observation.data.kind === "MANAGED_TASK" ||
+        observation.data.kind === "QUICK_TASK" ||
+        observation.data.kind === "RAW_PI_COMPARATOR"
+      ) {
         return pilotCaptureBlocked(
           dependencies,
           "PRODUCT_CAPTURE_REQUIRED",
@@ -2443,38 +2879,353 @@ async function pilotCaptureCommand(
       line(dependencies.io, JSON.stringify(receipt));
       return 0;
     }
+    if (
+      (action === "quick-task" || action === "raw-pi") &&
+      !isFrozenWindowsPilotHost(dependencies)
+    ) {
+      return pilotCaptureBlocked(
+        dependencies,
+        "PILOT_HOST_MISMATCH",
+        "Run Provider-backed pilot tasks only on the frozen Windows x64 pilot host.",
+      );
+    }
     if (action === "managed-task") {
       const operationId = optionValue(options, "--operation-id");
       const taskId = optionValue(options, "--task-id");
       const archiveIdsValue = optionValue(options, "--archive-ids");
-      const metricsPath = optionValue(options, "--metrics");
-      if (
-        operationId === undefined ||
-        taskId === undefined ||
-        archiveIdsValue === undefined ||
-        metricsPath === undefined
-      ) {
+      if (operationId === undefined || taskId === undefined || archiveIdsValue === undefined) {
         throw new HpiCliUsageError();
       }
       const archiveIds = archiveIdsValue.split(",");
       if (archiveIds.some((archiveId) => !archiveIdSchema.safeParse(archiveId).success)) {
         throw new HpiCliUsageError();
       }
-      const metrics = await readPilotJsonFile(metricsPath, dependencies);
-      if (metrics.failure !== undefined) {
-        return pilotCaptureBlocked(
-          dependencies,
-          `METRICS_${metrics.failure}`,
-          "Provide one readable strict task-metrics JSON file.",
-        );
-      }
       const receipt = await coordinator.recordManagedTask({
-        schemaVersion: "hpi-pilot-capture-managed-task.v1",
+        schemaVersion: "hpi-pilot-capture-managed-task.v2",
         sessionId,
         operationId,
         taskId,
         archiveIds,
-        metrics: metrics.value,
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return 0;
+    }
+    if (action === "quick-task") {
+      const operationId = optionValue(options, "--operation-id");
+      const taskId = optionValue(options, "--task-id");
+      const repository = optionValue(options, "--repo");
+      const requestPath = optionValue(options, "--request");
+      if (
+        operationId === undefined ||
+        taskId === undefined ||
+        repository === undefined ||
+        requestPath === undefined ||
+        !options.includes("--allow-provider-request")
+      ) {
+        throw new HpiCliUsageError();
+      }
+      const configuration = await loadHpiConfiguration(paths);
+      if (configuration?.setupCompletedAt == null) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "SETUP_REQUIRED",
+          "Run `hpi setup` before executing a pilot Quick task.",
+        );
+      }
+      if (providerDisclosureRequired(configuration)) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PROVIDER_DISCLOSURE_REQUIRED",
+          "Rerun setup and acknowledge the current Provider disclosure.",
+        );
+      }
+      const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
+      if (!auth.configured) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PROVIDER_AUTH_REQUIRED",
+          "Run `hpi login` for the frozen Provider scope.",
+        );
+      }
+      const requestFile = await readPilotJsonFile(requestPath, dependencies);
+      const request = realManagedChangeRequestSchema.safeParse(requestFile.value);
+      if (requestFile.failure !== undefined || !request.success) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "REQUEST_INVALID",
+          "Provide one strict plan-bound Managed Change request for the Quick task.",
+        );
+      }
+      const version = await assertCoreExtensionIntegrity(dependencies);
+      if (!/^[a-f0-9]{40}$/u.test(version.sourceCommit) || version.sourceState !== "CLEAN") {
+        return pilotCaptureBlocked(
+          dependencies,
+          "UNSTAMPED_OR_DIRTY_PRODUCT",
+          "Use the exact clean packaged Hunter Pi artifact bound by the pilot plan.",
+        );
+      }
+      await prepareRuntimeDirectories(paths);
+      await assertHpiSessionTreeSafe(paths);
+      const resolvedProviderDestination = await resolveLaunchDestination(
+        configuration,
+        dependencies,
+        paths,
+      );
+      const runtimeBinding = await readInstalledPilotRuntimeBinding({
+        dependencies,
+        version,
+        configuration,
+        auth,
+        destination: resolvedProviderDestination,
+      });
+      const quickConfiguration = hpiConfigurationSchema.parse({
+        ...configuration,
+        permissionProfile: "FULL_ACCESS",
+      });
+      const leaseRoot = join(paths.root, "leases");
+      const commandLeaseRoot = join(paths.root, "pilot", "command-leases");
+      await Promise.all([
+        mkdir(leaseRoot, { recursive: true }),
+        mkdir(commandLeaseRoot, { recursive: true }),
+      ]);
+      const writerLeaseManager = await createFileLeaseManager({
+        leaseRoot,
+        now: dependencies.now,
+      });
+      const commandRunner = await createQualifiedControlledCommandRunner({
+        leaseRoot: commandLeaseRoot,
+        now: dependencies.now,
+      });
+      const runProcess =
+        dependencies.runTask6Process ??
+        (await createQualifiedPiJsonProcess({ leaseRoot, now: dependencies.now }));
+      const environmentFingerprint = sha256(
+        JSON.stringify({
+          schemaVersion: "hpi-pilot-quick-environment.v1",
+          platform: dependencies.platform,
+          node: process.version,
+          productVersion: version.productVersion,
+          productShellIntegrity: version.productShellIntegrity,
+          coreExtensionIntegrity: version.coreExtensionIntegrity,
+          engine: version.engine,
+          provider: configuration.provider.id,
+          model: configuration.provider.selectedModel,
+          permissionProfile: "FULL_ACCESS",
+        }),
+      );
+      const quickRuntime = createPilotCaptureProductExecutionRuntime({
+        quickTask: async (context) => {
+          const launchPlan = createPiLaunchPlan({
+            paths,
+            configuration: quickConfiguration,
+            cwd: context.repository,
+            purpose: "QUICK",
+            safeMode: false,
+            providerAuthConfigured: true,
+            sessionTreeInspected: true,
+            resolvedProviderDestination,
+            displayHeader: [
+              "Hunter Pi | Mode=QUICK_PILOT Permission=FULL_ACCESS",
+              "Scope=FROZEN_PILOT_TASK VerifiedChange=NOT_CLAIMED",
+              "IndependentAcceptance=REQUIRED CommitPushPublishDeploy=PROHIBITED",
+            ].join("\n"),
+            ...(dependencies.piCliPath === undefined ? {} : { piCliPath: dependencies.piCliPath }),
+            ...(dependencies.coreExtensionPath === undefined
+              ? {}
+              : { coreExtensionPath: dependencies.coreExtensionPath }),
+          });
+          return runPilotQuickTask({
+            taskId: context.oracle.taskId,
+            repository: context.repository,
+            request: context.request,
+            oracle: context.oracle,
+            launchPlan,
+            runProcess,
+            commandRunner,
+            writerLeaseManager,
+            writerLeaseOwnerFingerprint: sha256(
+              `hpi-pilot-quick-owner\0${sessionId}\0${operationId}`,
+            ),
+            environmentFingerprint,
+            runtimeConfigurationFingerprint: pilotFingerprint({
+              schemaVersion: "hpi-pilot-quick-runtime.v1",
+              arguments: launchPlan.arguments,
+              environment: launchPlan.environment,
+              environmentFingerprint,
+            }),
+            beforeProviderSend: context.authorizeProviderSend,
+            now: dependencies.now,
+          });
+        },
+      });
+      const receipt = await coordinator.recordQuickTask(quickRuntime, {
+        schemaVersion: "hpi-pilot-capture-quick-task.v2",
+        sessionId,
+        operationId,
+        taskId,
+        repository,
+        request: request.data,
+        runtimeBinding,
+      });
+      line(dependencies.io, JSON.stringify(receipt));
+      return 0;
+    }
+    if (action === "raw-pi") {
+      const operationId = optionValue(options, "--operation-id");
+      const taskId = optionValue(options, "--task-id");
+      const repository = optionValue(options, "--repo");
+      const requestPath = optionValue(options, "--request");
+      if (
+        operationId === undefined ||
+        taskId === undefined ||
+        repository === undefined ||
+        requestPath === undefined ||
+        !options.includes("--allow-provider-request")
+      ) {
+        throw new HpiCliUsageError();
+      }
+      const configuration = await loadHpiConfiguration(paths);
+      if (
+        configuration?.setupCompletedAt == null ||
+        configuration.provider.selectedModel === null
+      ) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "SETUP_REQUIRED",
+          "Run `hpi setup` with one exact Provider model before the raw comparator.",
+        );
+      }
+      if (providerDisclosureRequired(configuration)) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PROVIDER_DISCLOSURE_REQUIRED",
+          "Rerun setup and acknowledge the current Provider disclosure.",
+        );
+      }
+      const auth = await dependencies.readProviderAuthStatus(paths, configuration.provider.id);
+      if (!auth.configured) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "PROVIDER_AUTH_REQUIRED",
+          "Run `hpi login` for the frozen Provider scope.",
+        );
+      }
+      const requestFile = await readPilotJsonFile(requestPath, dependencies);
+      const request = realManagedChangeRequestSchema.safeParse(requestFile.value);
+      if (requestFile.failure !== undefined || !request.success) {
+        return pilotCaptureBlocked(
+          dependencies,
+          "REQUEST_INVALID",
+          "Provide one strict plan-bound task request for the raw comparator.",
+        );
+      }
+      const version = await assertCoreExtensionIntegrity(dependencies);
+      if (!/^[a-f0-9]{40}$/u.test(version.sourceCommit) || version.sourceState !== "CLEAN") {
+        return pilotCaptureBlocked(
+          dependencies,
+          "UNSTAMPED_OR_DIRTY_PRODUCT",
+          "Use the exact clean packaged Hunter Pi artifact bound by the pilot plan.",
+        );
+      }
+      await prepareRuntimeDirectories(paths);
+      await assertHpiSessionTreeSafe(paths);
+      const resolvedProviderDestination = await resolveLaunchDestination(
+        configuration,
+        dependencies,
+        paths,
+      );
+      const runtimeBinding = await readInstalledPilotRuntimeBinding({
+        dependencies,
+        version,
+        configuration,
+        auth,
+        destination: resolvedProviderDestination,
+      });
+      const leaseRoot = join(paths.root, "leases");
+      const commandLeaseRoot = join(paths.root, "pilot", "raw-command-leases");
+      await Promise.all([
+        mkdir(leaseRoot, { recursive: true }),
+        mkdir(commandLeaseRoot, { recursive: true }),
+      ]);
+      const writerLeaseManager = await createFileLeaseManager({
+        leaseRoot,
+        now: dependencies.now,
+      });
+      const commandRunner = await createQualifiedControlledCommandRunner({
+        leaseRoot: commandLeaseRoot,
+        now: dependencies.now,
+      });
+      const runProcess =
+        dependencies.runTask6Process ??
+        (await createQualifiedPiJsonProcess({ leaseRoot, now: dependencies.now }));
+      const environmentFingerprint = sha256(
+        JSON.stringify({
+          schemaVersion: "hpi-pilot-raw-environment.v1",
+          platform: dependencies.platform,
+          node: process.version,
+          engine: version.engine,
+          provider: configuration.provider.id,
+          model: configuration.provider.selectedModel,
+          extensions: 0,
+        }),
+      );
+      const actualComparatorConfigurationFingerprint = fingerprintPilotRawComparatorConfiguration({
+        enginePackage: version.engine.packageName,
+        engineVersion: version.engine.version,
+        providerId: configuration.provider.id,
+        modelId: configuration.provider.selectedModel,
+      });
+      const rawRuntime = createPilotCaptureProductExecutionRuntime({
+        rawComparator: async (context) => {
+          if (
+            context.plan.comparatorConfigurationFingerprint !==
+              actualComparatorConfigurationFingerprint ||
+            context.plan.workflowFactChecklistFingerprint !==
+              pilotQuickWorkflowFactChecklistFingerprint
+          ) {
+            throw new Error(
+              "the installed raw comparator configuration does not match the frozen pilot plan",
+            );
+          }
+          const launchPlan = createRawPiLaunchPlan({
+            paths,
+            configuration,
+            cwd: context.repository,
+            providerAuthConfigured: true,
+            sessionTreeInspected: true,
+            resolvedProviderDestination,
+            ...(dependencies.piCliPath === undefined ? {} : { piCliPath: dependencies.piCliPath }),
+          });
+          return runPilotRawComparator({
+            taskId: context.oracle.taskId,
+            repository: context.repository,
+            request: context.request,
+            oracle: context.oracle,
+            hunterResult: context.hunterResult,
+            launchPlan,
+            runProcess,
+            commandRunner,
+            writerLeaseManager,
+            writerLeaseOwnerFingerprint: sha256(
+              `hpi-pilot-raw-owner\0${sessionId}\0${operationId}`,
+            ),
+            environmentFingerprint,
+            comparatorConfigurationFingerprint: actualComparatorConfigurationFingerprint,
+            workflowFactChecklistFingerprint: pilotQuickWorkflowFactChecklistFingerprint,
+            beforeProviderSend: context.authorizeProviderSend,
+            now: dependencies.now,
+          });
+        },
+      });
+      const receipt = await coordinator.recordRawComparator(rawRuntime, {
+        schemaVersion: "hpi-pilot-capture-raw-comparator.v2",
+        sessionId,
+        operationId,
+        taskId,
+        repository,
+        request: request.data,
+        runtimeBinding,
+        comparatorConfigurationFingerprint: actualComparatorConfigurationFingerprint,
       });
       line(dependencies.io, JSON.stringify(receipt));
       return 0;
@@ -2520,6 +3271,23 @@ export async function runHpiCli(
       line(
         dependencies.io,
         JSON.stringify(await (dependencies.getVersionInfo ?? getHpiVersionInfo)()),
+      );
+      return 0;
+    }
+    if (command === "pilot" && arguments_[1] === "runtime-sample") {
+      const version = await (dependencies.getVersionInfo ?? getHpiVersionInfo)();
+      line(
+        dependencies.io,
+        JSON.stringify({
+          schemaVersion: "hpi-pilot-runtime-sample.v1",
+          product: version.product,
+          productVersion: version.productVersion,
+          engineVersion: version.engine.version,
+          sourceCommit: version.sourceCommit,
+          sourceState: version.sourceState,
+          productShellIntegrity: version.productShellIntegrity,
+          rssMiB: process.memoryUsage().rss / (1024 * 1024),
+        }),
       );
       return 0;
     }

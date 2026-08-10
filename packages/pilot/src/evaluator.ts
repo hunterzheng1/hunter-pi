@@ -61,19 +61,24 @@ function median(samples: readonly number[]): number {
 
 function successfullyResumedInterruptionCount(evidence: PilotEvidence): number {
   const runById = new Map(evidence.runArchives.map((run) => [run.runId, run]));
-  const countedReplacementRunIds = new Set<string>();
+  const countedRecoveryAttemptIds = new Set<string>();
   return evidence.interruptions.filter((interruption) => {
-    const interrupted = runById.get(interruption.interruptedRunId);
-    const replacement = runById.get(interruption.replacementRunId);
+    const run = runById.get(interruption.runId);
+    const recoveryLink = run?.recoveryLinks.find(
+      (candidate) => candidate.interruptionId === interruption.interruptionId,
+    );
     const resumed =
       interruption.resumeOutcome === "READY" &&
-      (interrupted?.terminalOutcome === "INCOMPLETE" ||
-        interrupted?.terminalOutcome === "CANCELLED") &&
-      replacement?.replacementOfRunId === interruption.interruptedRunId &&
-      replacement.archiveFingerprint === interruption.replacementArchiveFingerprint &&
-      replacement.terminalOutcome === "READY";
-    if (!resumed || countedReplacementRunIds.has(interruption.replacementRunId)) return false;
-    countedReplacementRunIds.add(interruption.replacementRunId);
+      interruption.historyPreserved &&
+      interruption.sourcePreserved &&
+      run?.taskId === interruption.taskId &&
+      run.terminalOutcome === "READY" &&
+      run.archiveFingerprint === interruption.archiveFingerprint &&
+      recoveryLink?.checkpointId === interruption.checkpointId &&
+      recoveryLink.interruptedAttemptId === interruption.interruptedAttemptId &&
+      recoveryLink.recoveryAttemptId === interruption.recoveryAttemptId;
+    if (!resumed || countedRecoveryAttemptIds.has(interruption.recoveryAttemptId)) return false;
+    countedRecoveryAttemptIds.add(interruption.recoveryAttemptId);
     return true;
   }).length;
 }
@@ -97,9 +102,7 @@ function metricsFor(evidence: PilotEvidence): PilotMetrics {
   );
   return {
     taskCount: evidence.taskResults.length,
-    correctTaskCount: evidence.taskResults.filter(
-      (result) => result.terminalOutcome === result.oracleOutcome,
-    ).length,
+    correctTaskCount: evidence.taskResults.filter((result) => result.correct).length,
     interruptionCount: evidence.interruptions.length,
     resumedInterruptionCount: successfullyResumedInterruptionCount(evidence),
     warmStartP95Ms: p95(evidence.warmStartSamplesMs),
@@ -144,8 +147,14 @@ function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | nu
       return (
         result.repositoryFingerprint !== oracle.repositoryFingerprint ||
         result.sourceFingerprint !== oracle.sourceFingerprint ||
+        result.targetReferenceFingerprint !== oracle.targetReferenceFingerprint ||
+        result.taskDefinitionFingerprint !== oracle.taskDefinitionFingerprint ||
         result.mode !== oracle.mode ||
-        result.oracleOutcome !== oracle.expectedOutcome
+        (result.mode === "QUICK"
+          ? oracle.mode !== "QUICK" ||
+            result.oracleExecutionObservation !== oracle.expectedExecutionObservation ||
+            result.oracleAcceptanceObservation !== oracle.expectedAcceptanceObservation
+          : oracle.mode !== "MANAGED" || result.oracleOutcome !== oracle.expectedOutcome)
       );
     })
   ) {
@@ -191,11 +200,15 @@ function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | nu
           oracle === undefined ||
           repositoryFingerprint === undefined ||
           targetReferenceFingerprint === undefined ||
+          oracle.targetId !== task.targetId ||
           oracle.repositoryFingerprint !== repositoryFingerprint ||
           oracle.targetReferenceFingerprint !== targetReferenceFingerprint ||
           oracle.sourceFingerprint !== task.sourceFingerprint ||
+          oracle.taskDefinitionFingerprint !== task.taskDefinitionFingerprint ||
           oracle.mode !== task.mode ||
-          oracle.expectedOutcome !== task.expectedOutcome ||
+          (oracle.mode === "MANAGED" &&
+            task.mode === "MANAGED" &&
+            oracle.expectedOutcome !== task.expectedOutcome) ||
           JSON.stringify(oracle.acceptanceCheckIds) !== JSON.stringify(task.acceptanceCheckIds) ||
           JSON.stringify(oracle.acceptanceCheckDefinitionFingerprints) !==
             JSON.stringify(acceptanceDefinitionFingerprints)
@@ -205,6 +218,18 @@ function identityProblems(evidence: PilotEvidence, plan: PilotExecutionPlan | nu
       evidenceTaskIds.size !== plan.tasks.length
     ) {
       reasons.push("Evidence task oracles do not bind the exact frozen pilot task set");
+    }
+    const plannedInterruptionById = new Map(
+      plan.interruptionTasks.map((interruption) => [interruption.interruptionId, interruption]),
+    );
+    if (
+      plannedInterruptionById.size !== evidence.interruptions.length ||
+      evidence.interruptions.some((interruption) => {
+        const planned = plannedInterruptionById.get(interruption.interruptionId);
+        return planned?.taskId !== interruption.taskId || planned.kind !== interruption.kind;
+      })
+    ) {
+      reasons.push("Evidence interruptions do not bind the exact frozen interruption set");
     }
     const pairedTaskIds = new Set(plan.pairedTaskIds);
     const evidenceComparatorIds = new Set(
@@ -358,11 +383,11 @@ export class PilotEvaluator {
     }
     const frozenProviderRequestPolicy =
       plan?.operatorScope.providerRequestPolicy ?? evidence.operatorScope.providerRequestPolicy;
-    const managedProviderUsage = evidence.runArchives.reduce(
-      (usage, run) => ({
-        requests: usage.requests + run.providerRequestCount,
-        tokens: usage.tokens + run.providerTokenCount,
-        costMinor: usage.costMinor + run.providerCostMinor,
+    const productProviderUsage = evidence.taskResults.reduce(
+      (usage, result) => ({
+        requests: usage.requests + result.providerRequestCount,
+        tokens: usage.tokens + result.providerTokenCount,
+        costMinor: usage.costMinor + result.providerCostMinor,
       }),
       { requests: 0, tokens: 0, costMinor: 0 },
     );
@@ -372,7 +397,7 @@ export class PilotEvaluator {
         tokens: usage.tokens + comparator.rawPiProviderTokenCount,
         costMinor: usage.costMinor + comparator.rawPiProviderCostMinor,
       }),
-      managedProviderUsage,
+      productProviderUsage,
     );
     const zeroToleranceFailures: string[] = [];
     if (
@@ -410,7 +435,10 @@ export class PilotEvaluator {
     }
     if (
       evidence.taskResults.some(
-        (result) => result.terminalOutcome === "READY" && result.oracleOutcome !== "READY",
+        (result) =>
+          result.mode === "MANAGED" &&
+          result.terminalOutcome === "READY" &&
+          result.oracleOutcome !== "READY",
       )
     ) {
       zeroToleranceFailures.push("false READY outcome observed");

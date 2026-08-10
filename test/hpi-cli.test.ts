@@ -362,7 +362,7 @@ describe("hpi command", () => {
       0,
     );
     const plan = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
-    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v2" });
+    expect(plan).toMatchObject({ schemaVersion: "hpi-pilot-execution-plan.v4" });
     expect(plan["planFingerprint"]).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan)).not.toContain(root);
   });
@@ -441,15 +441,17 @@ describe("hpi command", () => {
     const { dependencies, io, root } = await createDependencies();
     const plan = completePilotExecutionPlan();
     const evidence = completePilotEvidence(plan);
-    const task = evidence.taskResults[0];
+    const task = evidence.taskResults.find((candidate) => candidate.mode === "MANAGED");
     if (task === undefined) throw new Error("pilot task fixture missing");
+    const run = evidence.runArchives.find((candidate) => candidate.taskId === task.taskId);
+    if (run === undefined) throw new Error("pilot Run Archive fixture missing");
     const planPath = join(root, "pilot-plan.json");
     const observationPath = join(root, "pilot-task-observation.json");
     await writeFile(planPath, JSON.stringify(plan), "utf8");
     await writeFile(
       observationPath,
       JSON.stringify({
-        kind: "TASK_CHAIN",
+        kind: "MANAGED_TASK",
         taskId: task.taskId,
         terminalOutcome: task.terminalOutcome,
         sourcePreserved: task.sourcePreserved,
@@ -460,18 +462,16 @@ describe("hpi command", () => {
         hunterOverheadMinutes: task.hunterOverheadMinutes,
         rawPiCapturedFactCount: task.rawPiCapturedFactCount,
         rawPiManualInterventions: task.rawPiManualInterventions,
-        runs: evidence.runArchives
-          .filter((run) => run.taskId === task.taskId)
-          .map((run) => ({
-            runId: run.runId,
-            replacementOfRunId: run.replacementOfRunId,
-            archiveId: run.archiveId,
-            archiveFingerprint: run.archiveFingerprint,
-            terminalOutcome: run.terminalOutcome,
-            providerRequestCount: run.providerRequestCount,
-            providerTokenCount: run.providerTokenCount,
-            providerCostMinor: run.providerCostMinor,
-          })),
+        run: {
+          runId: run.runId,
+          archiveId: run.archiveId,
+          archiveFingerprint: run.archiveFingerprint,
+          terminalOutcome: run.terminalOutcome,
+          providerRequestCount: run.providerRequestCount,
+          providerTokenCount: run.providerTokenCount,
+          providerCostMinor: run.providerCostMinor,
+          recoveryLinks: run.recoveryLinks,
+        },
       }),
       "utf8",
     );
@@ -782,8 +782,6 @@ describe("hpi command", () => {
         "task",
         "--archive-ids",
         "not-an-archive-id",
-        "--metrics",
-        "metrics.json",
         "--json",
       ],
       [
@@ -850,6 +848,26 @@ describe("hpi command", () => {
     expect(version).toHaveProperty("sourceState");
     expect(version).toHaveProperty("coreExtensionIntegrity");
     expect(version).toHaveProperty("productShellIntegrity");
+  });
+
+  it("emits one path-free local runtime sample without loading setup or Provider state", async () => {
+    const { dependencies, io } = await createDependencies();
+
+    expect(await runHpiCli(["pilot", "runtime-sample", "--json"], dependencies)).toBe(0);
+    const sample = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
+    expect(sample).toMatchObject({
+      schemaVersion: "hpi-pilot-runtime-sample.v1",
+      product: "Hunter Pi",
+      productVersion: "0.1.0-dev.0",
+      engineVersion: "0.83.0",
+      sourceState: "NOT_STAMPED",
+    });
+    expect(sample).toHaveProperty("sourceCommit");
+    expect(sample).toHaveProperty("productShellIntegrity");
+    expect(sample).toHaveProperty("rssMiB");
+    expect(sample["rssMiB"]).toEqual(expect.any(Number));
+    expect(sample["rssMiB"]).toBeGreaterThan(0);
+    expect(JSON.stringify(sample)).not.toContain(dependencies.homeDirectory);
   });
 
   it("checks, applies, reports, and rolls back a qualified update through the CLI", async () => {

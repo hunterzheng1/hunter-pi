@@ -14,8 +14,12 @@
       "@hunter-pi/evidence/atomic-write": ["./packages/evidence/src/atomic-write.ts"],
       "@hunter-pi/engine-contracts": ["./packages/engine-contracts/src/index.ts"],
       "@hunter-pi/managed-change": ["./packages/managed-change/src/index.ts"],
+      "@hunter-pi/managed-change/internal-pilot-execution": [
+        "./packages/managed-change/src/pilot-execution-runtime.ts"
+      ],
       "@hunter-pi/pi-host": ["./packages/pi-host/src/index.ts"],
       "@hunter-pi/pilot": ["./packages/pilot/src/index.ts"],
+      "@hunter-pi/pilot/internal-capture": ["./packages/pilot/src/capture-session.ts"],
       "@hunter-pi/plugin-manager": ["./packages/plugin-manager/src/index.ts"],
       "@hunter-pi/testkit": ["./packages/testkit/src/index.ts"],
       "@hunter-pi/updater": ["./packages/updater/src/index.ts"],

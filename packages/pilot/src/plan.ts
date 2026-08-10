@@ -23,6 +23,8 @@ const invalidPlanReasonByRoot: Readonly<Record<string, PilotPreflightReason>> = 
   pluginFixtures: "PILOT_PLAN_PLUGIN_FIXTURES_INVALID",
   updateCandidates: "PILOT_PLAN_UPDATE_CANDIDATES_INVALID",
   pairedTaskIds: "PILOT_PLAN_PAIRED_TASKS_INVALID",
+  interruptionTasks: "PILOT_PLAN_INTERRUPTION_TASKS_INVALID",
+  deliberateFixbackTaskId: "PILOT_PLAN_FIXBACK_TASK_INVALID",
 };
 
 function invalidPlanReasons(
@@ -113,9 +115,11 @@ export class PilotPlanCompiler {
       pluginFixtures: parsed.pluginFixtures,
       updateCandidates: parsed.updateCandidates,
       pairedTaskIds: parsed.pairedTaskIds,
+      interruptionTasks: parsed.interruptionTasks,
+      deliberateFixbackTaskId: parsed.deliberateFixbackTaskId,
     };
     return pilotExecutionPlanSchema.parse({
-      schemaVersion: "hpi-pilot-execution-plan.v2",
+      schemaVersion: "hpi-pilot-execution-plan.v4",
       ...body,
       planFingerprint: pilotFingerprint(body),
     });

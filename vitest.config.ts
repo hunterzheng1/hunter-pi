@@ -23,11 +23,17 @@ export default defineConfig({
       "@hunter-pi/engine-contracts": fileURLToPath(
         new URL("./packages/engine-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter-pi/managed-change/internal-pilot-execution": fileURLToPath(
+        new URL("./packages/managed-change/src/pilot-execution-runtime.ts", import.meta.url),
+      ),
       "@hunter-pi/managed-change": fileURLToPath(
         new URL("./packages/managed-change/src/index.ts", import.meta.url),
       ),
       "@hunter-pi/pi-host": fileURLToPath(
         new URL("./packages/pi-host/src/index.ts", import.meta.url),
+      ),
+      "@hunter-pi/pilot/internal-capture": fileURLToPath(
+        new URL("./packages/pilot/src/capture-session.ts", import.meta.url),
       ),
       "@hunter-pi/pilot": fileURLToPath(new URL("./packages/pilot/src/index.ts", import.meta.url)),
       "@hunter-pi/plugin-manager": fileURLToPath(

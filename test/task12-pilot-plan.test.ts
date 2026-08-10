@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   PilotPlanCompiler,
   createPilotRepositoryTargetReceipt,
+  pilotExecutionPlanV3Schema,
   pilotExecutionPlanSchema,
+  pilotFingerprint,
+  pilotPlanInputSchema,
+  pilotPlanInputV3Schema,
   pilotPreflightReceiptSchema,
   pilotRepositoryTargetReceiptSchema,
   type PilotPlanInput,
@@ -74,12 +78,132 @@ describe("Task 12 pilot plan compiler", () => {
   it("freezes explicit targets and tasks without carrying paths or credentials into the plan", () => {
     const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
 
-    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v2");
+    expect(plan.schemaVersion).toBe("hpi-pilot-execution-plan.v4");
     expect(plan.planFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(plan.repositoryTargets).toHaveLength(2);
     expect(plan.tasks).toHaveLength(10);
     expect(JSON.stringify(plan)).not.toContain("C:\\");
     expect(JSON.stringify(plan)).not.toMatch(/api[_-]?key\s*=|token\s*=|password\s*=/iu);
+  });
+
+  it("keeps Quick observations separate from Managed outcomes and freezes task definitions", () => {
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+    const quickTasks = plan.tasks.filter((task) => task.mode === "QUICK");
+    const managedTasks = plan.tasks.filter((task) => task.mode === "MANAGED");
+
+    expect(quickTasks.length).toBeGreaterThan(0);
+    expect(managedTasks.length).toBeGreaterThan(0);
+    expect(
+      plan.tasks.every((task) => /^sha256:[a-f0-9]{64}$/u.test(task.taskDefinitionFingerprint)),
+    ).toBe(true);
+    expect(quickTasks.every((task) => !("expectedOutcome" in task))).toBe(true);
+    expect(managedTasks.every((task) => task.expectedOutcome === "READY")).toBe(true);
+  });
+
+  it("rejects a current plan task that cannot execute through the one-check runtime", () => {
+    const input = completePilotPlanInput();
+    const firstTask = input.tasks[0];
+    const secondCheck = input.acceptanceChecks[1];
+    if (firstTask === undefined || secondCheck === undefined) {
+      throw new Error("pilot one-check fixture is incomplete");
+    }
+
+    expect(() =>
+      new PilotPlanCompiler().compile({
+        ...input,
+        tasks: [
+          {
+            ...firstTask,
+            acceptanceCheckIds: [...firstTask.acceptanceCheckIds, secondCheck.checkId],
+          },
+          ...input.tasks.slice(1),
+        ],
+      }),
+    ).toThrow(/exactly one|acceptance check/u);
+  });
+
+  it("preserves plural-check replay for historical v3 plans while current v4 rejects it", () => {
+    const input = completePilotPlanInput();
+    const firstTask = input.tasks[0];
+    const secondCheck = input.acceptanceChecks[1];
+    if (firstTask === undefined || secondCheck === undefined) {
+      throw new Error("pilot historical-plan fixture is incomplete");
+    }
+    const { schemaVersion, deliberateFixbackTaskId, ...currentBody } = input;
+    expect(schemaVersion).toBe("hpi-pilot-plan-input.v4");
+    const historicalBody = {
+      ...currentBody,
+      tasks: [
+        {
+          ...firstTask,
+          acceptanceCheckIds: [...firstTask.acceptanceCheckIds, secondCheck.checkId],
+        },
+        ...input.tasks.slice(1),
+      ],
+    };
+
+    expect(() =>
+      pilotPlanInputV3Schema.parse({
+        schemaVersion: "hpi-pilot-plan-input.v3",
+        ...historicalBody,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      pilotExecutionPlanV3Schema.parse({
+        schemaVersion: "hpi-pilot-execution-plan.v3",
+        ...historicalBody,
+        planFingerprint: pilotFingerprint(historicalBody),
+      }),
+    ).not.toThrow();
+    expect(() =>
+      pilotPlanInputSchema.parse({
+        schemaVersion: "hpi-pilot-plan-input.v4",
+        ...historicalBody,
+        deliberateFixbackTaskId,
+      }),
+    ).toThrow(/exactly one|acceptance check/u);
+  });
+
+  it("freezes three distinct interruption scenarios onto Managed tasks only", () => {
+    const plan = new PilotPlanCompiler().compile(completePilotPlanInput());
+    const taskById = new Map(plan.tasks.map((task) => [task.taskId, task]));
+
+    expect(plan.interruptionTasks).toHaveLength(3);
+    expect(new Set(plan.interruptionTasks.map((item) => item.interruptionId)).size).toBe(3);
+    expect(new Set(plan.interruptionTasks.map((item) => item.kind))).toEqual(
+      new Set(["FORCED_PROCESS_KILL", "TERMINAL_CLOSE_SIMULATION", "POWER_LOSS_SIMULATION"]),
+    );
+    expect(
+      plan.interruptionTasks.every((item) => taskById.get(item.taskId)?.mode === "MANAGED"),
+    ).toBe(true);
+  });
+
+  it("freezes one paired Managed fixback task outside interruption recovery", () => {
+    const input = completePilotPlanInput();
+    const plan = new PilotPlanCompiler().compile(input);
+
+    expect(plan.deliberateFixbackTaskId).toBe("pilot-task-04");
+    expect(plan.pairedTaskIds).toContain(plan.deliberateFixbackTaskId);
+    expect(plan.tasks.find((task) => task.taskId === plan.deliberateFixbackTaskId)?.mode).toBe(
+      "MANAGED",
+    );
+    expect(plan.interruptionTasks.map((item) => item.taskId)).not.toContain(
+      plan.deliberateFixbackTaskId,
+    );
+
+    expect(() =>
+      new PilotPlanCompiler().compile({
+        ...input,
+        deliberateFixbackTaskId: "pilot-task-01",
+      }),
+    ).toThrow(/fixback|Managed/u);
+    expect(() =>
+      new PilotPlanCompiler().compile({
+        ...input,
+        deliberateFixbackTaskId: "pilot-task-02",
+        pairedTaskIds: ["pilot-task-01", "pilot-task-02", "pilot-task-07"],
+      }),
+    ).toThrow(/fixback|interruption/u);
   });
 
   it("fails closed when repository selection is implicit", () => {
@@ -220,7 +344,9 @@ describe("Task 12 pilot plan compiler", () => {
         ...plan,
         operatorScope: { ...plan.operatorScope, workspacePolicy: "DISPOSABLE_PILOT_WORKTREES" },
         tasks: plan.tasks.map((task, index) =>
-          index === 0 ? { ...task, expectedOutcome: "BLOCKED" as const } : task,
+          index === 1 && task.mode === "MANAGED"
+            ? { ...task, expectedOutcome: "BLOCKED" as const }
+            : task,
         ),
       }),
     ).toThrow(/fingerprint/u);

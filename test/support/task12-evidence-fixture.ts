@@ -18,13 +18,14 @@ export function completePilotEvidence(
   const taskOracles = plan.tasks.map((task) => {
     const target = targetById.get(task.targetId);
     if (target === undefined) throw new Error("fixture target missing");
-    return {
+    const binding = {
       taskId: task.taskId,
+      targetId: task.targetId,
       repositoryFingerprint: target.repositoryFingerprint,
       targetReferenceFingerprint: target.targetReferenceFingerprint,
       sourceFingerprint: task.sourceFingerprint,
+      taskDefinitionFingerprint: task.taskDefinitionFingerprint,
       mode: task.mode,
-      expectedOutcome: task.expectedOutcome,
       acceptanceCheckIds: task.acceptanceCheckIds,
       acceptanceCheckDefinitionFingerprints: task.acceptanceCheckIds.map((checkId) => {
         const fingerprint = acceptanceCheckById.get(checkId);
@@ -32,9 +33,29 @@ export function completePilotEvidence(
         return fingerprint;
       }),
     };
+    return task.mode === "QUICK"
+      ? {
+          ...binding,
+          mode: "QUICK" as const,
+          expectedExecutionObservation: task.expectedExecutionObservation,
+          expectedAcceptanceObservation: task.expectedAcceptanceObservation,
+        }
+      : { ...binding, mode: "MANAGED" as const, expectedOutcome: task.expectedOutcome };
+  });
+  const interruptionByTaskId = new Map(plan.interruptionTasks.map((item) => [item.taskId, item]));
+  const taskIndexById = new Map(plan.tasks.map((task, index) => [task.taskId, index]));
+  const bindingFor = (oracle: (typeof taskOracles)[number]) => ({
+    taskId: oracle.taskId,
+    targetId: oracle.targetId,
+    repositoryFingerprint: oracle.repositoryFingerprint,
+    targetReferenceFingerprint: oracle.targetReferenceFingerprint,
+    sourceFingerprint: oracle.sourceFingerprint,
+    taskDefinitionFingerprint: oracle.taskDefinitionFingerprint,
+    acceptanceCheckIds: oracle.acceptanceCheckIds,
+    acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
   });
   return pilotEvidenceSchema.parse({
-    schemaVersion: "hpi-pilot-evidence.v6",
+    schemaVersion: "hpi-pilot-evidence.v7",
     captureProvenance,
     planFingerprint: plan.planFingerprint,
     operatorScope: plan.operatorScope,
@@ -46,72 +67,119 @@ export function completePilotEvidence(
       cleanProfileFingerprint: fixtureFingerprint,
     },
     taskOracles,
-    taskResults: taskOracles.map((oracle, index) => ({
-      taskId: oracle.taskId,
-      repositoryFingerprint: oracle.repositoryFingerprint,
-      targetReferenceFingerprint: oracle.targetReferenceFingerprint,
-      sourceFingerprint: oracle.sourceFingerprint,
-      mode: oracle.mode,
-      acceptanceCheckIds: oracle.acceptanceCheckIds,
-      acceptanceCheckDefinitionFingerprints: oracle.acceptanceCheckDefinitionFingerprints,
-      terminalOutcome: "READY" as const,
-      oracleOutcome: oracle.expectedOutcome,
-      correct: oracle.expectedOutcome === "READY",
-      sourcePreserved: true,
-      rawSecretLeakage: false,
-      providerSendAcknowledged: true,
-      providerRequestCount: [0, 5, 6].includes(index) ? 2 : 1,
-      providerTokenCount: [0, 5, 6].includes(index) ? 200 : 100,
-      providerCostMinor: [0, 5, 6].includes(index) ? 2 : 1,
-      applicableFactCount: 20,
-      capturedFactCount: 20,
-      manualInterventions: 1,
-      hunterOverheadMinutes: 4,
-      rawPiCapturedFactCount: 15,
-      rawPiManualInterventions: 3,
-    })),
-    runArchives: [
-      ...taskOracles.map((oracle, index) => ({
-        runId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
-        taskId: oracle.taskId,
-        replacementOfRunId: null,
-        archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}`,
-        archiveFingerprint: fixtureFingerprint,
-        sourceFingerprint: oracle.sourceFingerprint,
-        terminalOutcome: [0, 5, 6].includes(index) ? ("INCOMPLETE" as const) : ("READY" as const),
-        providerRequestCount: 1,
-        providerTokenCount: 100,
-        providerCostMinor: 1,
-      })),
-      ...[0, 5, 6].map((index) => {
-        const oracle = taskOracles[index];
-        if (oracle === undefined) throw new Error("fixture task oracle missing");
-        return {
-          runId: `run-pilot-${String(index + 1).padStart(2, "0")}-replacement`,
+    taskResults: taskOracles.map((oracle) => {
+      const interrupted = interruptionByTaskId.has(oracle.taskId);
+      const measurements = {
+        sourcePreserved: true,
+        rawSecretLeakage: false,
+        providerSendAcknowledged: true,
+        providerRequestCount: interrupted ? 2 : 1,
+        providerTokenCount: interrupted ? 200 : 100,
+        providerCostMinor: interrupted ? 2 : 1,
+        applicableFactCount: 20,
+        capturedFactCount: 20,
+        manualInterventions: 1,
+        hunterOverheadMinutes: 4,
+        rawPiCapturedFactCount: 15,
+        rawPiManualInterventions: 3,
+      };
+      return oracle.mode === "QUICK"
+        ? {
+            ...bindingFor(oracle),
+            ...measurements,
+            mode: "QUICK" as const,
+            quickReceiptId: `quick-receipt-${oracle.taskId}`,
+            executionObservation: "RETURNED" as const,
+            oracleExecutionObservation: oracle.expectedExecutionObservation,
+            acceptanceObservation: "PASS" as const,
+            oracleAcceptanceObservation: oracle.expectedAcceptanceObservation,
+            verifiedChangeClaimed: false as const,
+            correct: true,
+          }
+        : {
+            ...bindingFor(oracle),
+            ...measurements,
+            mode: "MANAGED" as const,
+            terminalOutcome: "READY" as const,
+            oracleOutcome: oracle.expectedOutcome,
+            correct: oracle.expectedOutcome === "READY",
+          };
+    }),
+    quickTaskReceipts: taskOracles.flatMap((oracle) =>
+      oracle.mode === "QUICK"
+        ? [
+            {
+              ...bindingFor(oracle),
+              receiptId: `quick-receipt-${oracle.taskId}`,
+              mode: "QUICK" as const,
+              executionObservation: "RETURNED" as const,
+              acceptanceObservation: "PASS" as const,
+              verifiedChangeClaimed: false as const,
+              processReceiptFingerprint: fixtureFingerprint,
+              acceptanceReceiptFingerprint: fixtureFingerprint,
+              runtimeConfigurationFingerprint: plan.comparatorConfigurationFingerprint,
+              processFinality: "FINAL" as const,
+              processTreeState: "EMPTY" as const,
+              outputState: "CLOSED" as const,
+              leaseState: "RELEASED" as const,
+              sourcePreserved: true,
+              rawSecretLeakage: false,
+              providerSendAcknowledged: true,
+              providerRequestCount: 1,
+              providerTokenCount: 100,
+              providerCostMinor: 1,
+              applicableFactCount: 20,
+              capturedFactCount: 20,
+              manualInterventions: 1,
+              hunterOverheadMinutes: 4,
+            },
+          ]
+        : [],
+    ),
+    runArchives: taskOracles.flatMap((oracle) => {
+      if (oracle.mode !== "MANAGED") return [];
+      const index = taskIndexById.get(oracle.taskId);
+      if (index === undefined) throw new Error("fixture task index missing");
+      const interruption = interruptionByTaskId.get(oracle.taskId);
+      return [
+        {
+          runId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
           taskId: oracle.taskId,
-          replacementOfRunId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
-          archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}-replacement`,
-          archiveFingerprint: secondRepositoryFingerprint,
+          archiveId: `archive-pilot-${String(index + 1).padStart(2, "0")}`,
+          archiveFingerprint: fixtureFingerprint,
           sourceFingerprint: oracle.sourceFingerprint,
           terminalOutcome: "READY" as const,
-          providerRequestCount: 1,
-          providerTokenCount: 100,
-          providerCostMinor: 1,
-        };
-      }),
-    ],
-    interruptions: Array.from({ length: 3 }, (_, index) => {
-      const pairedTaskIndex = [0, 5, 6][index] ?? 0;
-      const taskOracle = taskOracles[pairedTaskIndex];
-      if (taskOracle === undefined) throw new Error("fixture interruption task missing");
-      const runNumber = pairedTaskIndex + 1;
+          providerRequestCount: interruption === undefined ? 1 : 2,
+          providerTokenCount: interruption === undefined ? 100 : 200,
+          providerCostMinor: interruption === undefined ? 1 : 2,
+          recoveryLinks:
+            interruption === undefined
+              ? []
+              : [
+                  {
+                    interruptionId: interruption.interruptionId,
+                    kind: interruption.kind,
+                    checkpointId: `checkpoint-${oracle.taskId}`,
+                    interruptedAttemptId: `attempt-${oracle.taskId}-interrupted`,
+                    recoveryAttemptId: `attempt-${oracle.taskId}-recovered`,
+                    actionableWithinFiveMinutes: true,
+                  },
+                ],
+        },
+      ];
+    }),
+    interruptions: plan.interruptionTasks.map((interruption) => {
+      const index = taskIndexById.get(interruption.taskId);
+      if (index === undefined) throw new Error("fixture interruption task missing");
       return {
-        interruptionId: `pilot-interruption-${String(index + 1)}`,
-        taskId: taskOracle.taskId,
-        kind: "FORCED_PROCESS_KILL" as const,
-        interruptedRunId: `run-pilot-${String(runNumber).padStart(2, "0")}`,
-        replacementRunId: `run-pilot-${String(runNumber).padStart(2, "0")}-replacement`,
-        replacementArchiveFingerprint: secondRepositoryFingerprint,
+        interruptionId: interruption.interruptionId,
+        taskId: interruption.taskId,
+        kind: interruption.kind,
+        runId: `run-pilot-${String(index + 1).padStart(2, "0")}`,
+        archiveFingerprint: fixtureFingerprint,
+        checkpointId: `checkpoint-${interruption.taskId}`,
+        interruptedAttemptId: `attempt-${interruption.taskId}-interrupted`,
+        recoveryAttemptId: `attempt-${interruption.taskId}-recovered`,
         historyPreserved: true,
         sourcePreserved: true,
         resumeOutcome: "READY" as const,
@@ -176,27 +244,35 @@ export function completePilotEvidence(
         engineReleaseFingerprint: fixtureFingerprint,
       },
     },
-    pairedComparators: [0, 5, 6].map((taskIndex) => ({
-      taskId: taskOracles[taskIndex]?.taskId ?? "pilot-task-01",
-      repositoryFingerprint: taskOracles[taskIndex]?.repositoryFingerprint ?? fixtureFingerprint,
-      targetReferenceFingerprint:
-        taskOracles[taskIndex]?.targetReferenceFingerprint ?? fixtureFingerprint,
-      sourceFingerprint: taskOracles[taskIndex]?.sourceFingerprint ?? firstSourceFingerprint,
-      mode: taskOracles[taskIndex]?.mode ?? "QUICK",
-      acceptanceCheckIds: taskOracles[taskIndex]?.acceptanceCheckIds ?? ["check-01"],
-      acceptanceCheckDefinitionFingerprints: taskOracles[taskIndex]
-        ?.acceptanceCheckDefinitionFingerprints ?? [fixtureFingerprint],
-      applicableFactCount: 20,
-      rawPiCapturedFactCount: 15,
-      hunterCapturedFactCount: 20,
-      rawPiManualInterventions: 3,
-      hunterManualInterventions: 1,
-      hunterAdditionalOverheadMinutes: 4,
-      containedFalseCompletion: false,
-      rawPiProviderRequestCount: 1,
-      rawPiProviderTokenCount: 100,
-      rawPiProviderCostMinor: 1,
-    })),
+    pairedComparators: [0, 3, 6].map((taskIndex) => {
+      const oracle = taskOracles[taskIndex];
+      if (oracle === undefined) throw new Error("fixture comparator task missing");
+      return {
+        ...bindingFor(oracle),
+        mode: oracle.mode,
+        comparatorConfigurationFingerprint: plan.comparatorConfigurationFingerprint,
+        workflowFactChecklistFingerprint: plan.workflowFactChecklistFingerprint,
+        processReceiptFingerprint: fixtureFingerprint,
+        acceptanceReceiptFingerprint: fixtureFingerprint,
+        executionObservation: "RETURNED" as const,
+        acceptanceObservation: "PASS" as const,
+        processFinality: "FINAL" as const,
+        processTreeState: "EMPTY" as const,
+        outputState: "CLOSED" as const,
+        leaseState: "RELEASED" as const,
+        coreExtensionCount: 0 as const,
+        applicableFactCount: 20,
+        rawPiCapturedFactCount: 15,
+        hunterCapturedFactCount: 20,
+        rawPiManualInterventions: 3,
+        hunterManualInterventions: 1,
+        hunterAdditionalOverheadMinutes: 4,
+        containedFalseCompletion: false,
+        rawPiProviderRequestCount: 1,
+        rawPiProviderTokenCount: 100,
+        rawPiProviderCostMinor: 1,
+      };
+    }),
     observedAt: fixtureTimestamp,
   });
 }

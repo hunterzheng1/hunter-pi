@@ -11,7 +11,10 @@
   "references": [
     { "path": "../domain" },
     { "path": "../evidence" },
+    { "path": "../execution" },
     { "path": "../managed-change" },
+    { "path": "../pi-host" },
+    { "path": "../verification" },
     { "path": "../workflow-kernel" }
   ]
 }

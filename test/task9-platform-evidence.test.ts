@@ -15,6 +15,7 @@ import {
 import {
   TASK9_CONTRACT_DEFINITION_FINGERPRINT,
   TASK9_CONTRACT_TEST_COUNT,
+  TASK9_CONTRACT_TEST_COUNTS,
   TASK9_CONTRACT_TEST_FILES,
   TASK9_PLATFORM_CHECKS,
   TASK9_SOURCE_PATHSPEC,
@@ -172,6 +173,8 @@ describe("Task 9 platform Evidence", () => {
   it("accepts the exact contract, finality, lease, replay, and privacy matrix", () => {
     expect(receipt("WINDOWS").status).toBe("PASS");
     expect(TASK9_CONTRACT_TEST_FILES).toHaveLength(8);
+    expect(TASK9_CONTRACT_TEST_COUNTS["test/task9-archive.test.ts"]).toBe(34);
+    expect(TASK9_CONTRACT_TEST_COUNT).toBe(97);
     expect(TASK9_SOURCE_PATHSPEC).toEqual(
       expect.arrayContaining([
         "vitest.config.ts",

@@ -140,6 +140,13 @@ The retry event also freezes the admission-time `userInputRequired` and `workspa
 
 Cancellation and interruption recovery have a stronger boundary than ordinary same-owner fixback. Neither `AGENT_RETURNED` nor `PROCESS_EXITED` is terminal finality. Before cancellation can end a Run, and before recovery can create a replacement Attempt, the Kernel requires one immutable Attempt Finality Receipt bound to the preceding Attempt's latest Checkpoint. Its process references and released Writer Lease identities must match the Checkpoint exactly, and its supporting Evidence is retained by Archive finalization.
 
+Task 12 recovery exercises inject failures only at the contained Pi-process boundary after an authenticated
+Agent-end marker. Process kill, terminal-close simulation, and power-loss simulation use distinct policy,
+user-request, and timeout cancellation receipts. The simulation names do not claim that the terminal
+application or the physical machine stopped. A successful exercise keeps the original `UNKNOWN` operation,
+records one Checkpoint and finality receipt, reconciles that operation, and starts a linked Attempt in the
+same Run; relabelling a normal return or starting a replacement Run does not satisfy this contract.
+
 Every Attempt in a Run uses the same Plan Revision. If remediation requires a plan change, the existing Run ends with outcome `CANCELLED` and reason `PLAN_SUPERSEDED`; the replacement Run links back to its Evidence.
 
 A fixback loop follows:

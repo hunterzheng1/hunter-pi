@@ -913,14 +913,29 @@ export class FileUpdateManager implements UpdateManager {
       (entry) => entry.releaseId === parsed.targetReleaseId,
     );
     let candidate = historyCandidate;
-    const installedCandidateWasPreviouslyActive = entries.some(
-      (entry) =>
-        entry.receipt.action === "APPLY" &&
-        entry.receipt.outcome === "APPLIED" &&
-        entry.receipt.previousReleaseId === parsed.targetReleaseId,
-    );
+    const previousActiveProof = entries
+      .filter(
+        (entry) =>
+          entry.receipt.action === "APPLY" &&
+          entry.receipt.outcome === "APPLIED" &&
+          entry.receipt.previousReleaseId === parsed.targetReleaseId,
+      )
+      .at(-1);
+    const qualifiedFallbackCandidate =
+      previousActiveProof === undefined
+        ? undefined
+        : entries
+            .filter(
+              (entry) =>
+                entry.sequence < previousActiveProof.sequence &&
+                entry.receipt.action === "QUALIFY" &&
+                entry.receipt.outcome === "APPLIED" &&
+                entry.candidate?.releaseId === parsed.targetReleaseId,
+            )
+            .at(-1)?.candidate;
+    const expectedInstalledCandidate = historyCandidate ?? qualifiedFallbackCandidate;
     if (
-      (historyCandidate !== undefined || installedCandidateWasPreviouslyActive) &&
+      expectedInstalledCandidate !== undefined &&
       this.#adapter.installedCandidate !== undefined
     ) {
       try {
@@ -932,14 +947,11 @@ export class FileUpdateManager implements UpdateManager {
           if (verifiedCandidate.releaseId !== parsed.targetReleaseId) {
             throw new Error("installed rollback candidate identity does not match the target");
           }
-          if (
-            historyCandidate !== undefined &&
-            canonicalJson(verifiedCandidate) !== canonicalJson(historyCandidate)
-          ) {
+          if (canonicalJson(verifiedCandidate) !== canonicalJson(expectedInstalledCandidate)) {
             throw new Error("installed rollback candidate no longer matches its journal identity");
           }
           candidate = verifiedCandidate;
-        } else if (historyCandidate !== undefined) {
+        } else {
           throw new Error("journaled rollback candidate is no longer installed");
         }
       } catch (error) {

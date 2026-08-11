@@ -277,8 +277,7 @@ describe("Task 11 Windows portable release adapter", () => {
         observedAt: fixtureTimestamp,
       }),
     ).resolves.toMatchObject({
-      outcome: "FAILED",
-      previousReleaseId: update.candidate.releaseId,
+      outcome: "BLOCKED",
       activeReleaseId: update.candidate.releaseId,
     });
     await expect(manager.current()).resolves.toMatchObject({

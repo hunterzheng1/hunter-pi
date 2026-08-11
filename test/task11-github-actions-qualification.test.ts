@@ -83,10 +83,14 @@ function portableFixture(releaseId = "release_task11-github-actions-qualificatio
   return { artifact, candidate };
 }
 
-function exactObservation(artifact: Uint8Array, hostedCandidate: updater.ReleaseCandidate) {
+function exactObservation(
+  artifact: Uint8Array,
+  hostedCandidate: updater.ReleaseCandidate,
+  observedRunId = runId,
+) {
   return {
     run: {
-      id: runId,
+      id: observedRunId,
       attempt: 1,
       event: "push",
       headBranch: "main",
@@ -95,7 +99,7 @@ function exactObservation(artifact: Uint8Array, hostedCandidate: updater.Release
       status: "completed",
       conclusion: "success",
       updatedAt: "2026-08-11T12:30:00.000Z",
-      url: `https://github.com/hunterzheng1/hunter-pi/actions/runs/${String(runId)}`,
+      url: `https://github.com/hunterzheng1/hunter-pi/actions/runs/${String(observedRunId)}`,
       jobs: requiredJobs.map((name) => ({
         name,
         status: "completed",
@@ -254,12 +258,16 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       activeReleaseId: fixture.candidate.releaseId,
     });
     expect(observe).toHaveBeenCalledTimes(1);
-    await expect(
-      readFile(
-        join(portableRoot, "versions", fixture.candidate.releaseId, ".hpi-candidate.json"),
-        "utf8",
-      ).then((value) => updater.releaseCandidateSchema.parse(JSON.parse(value) as unknown)),
-    ).resolves.toMatchObject({ qualification: { status: "PASS" } });
+    const installedInitialCandidatePath = join(
+      portableRoot,
+      "versions",
+      fixture.candidate.releaseId,
+      ".hpi-candidate.json",
+    );
+    const qualifiedInitialCandidate = updater.releaseCandidateSchema.parse(
+      JSON.parse(await readFile(installedInitialCandidatePath, "utf8")) as unknown,
+    );
+    expect(qualifiedInitialCandidate).toMatchObject({ qualification: { status: "PASS" } });
     await expect(
       readFile(
         join(portableRoot, ".hpi-update", "qualification-evidence", `${String(runId)}.json`),
@@ -285,6 +293,57 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       previousReleaseId: fixture.candidate.releaseId,
       activeReleaseId: qualifiedUpdate.releaseId,
     });
+    const replacementRunId = runId + 17;
+    const replacementAuthority = new updater.GitHubActionsWindowsPortableQualificationAuthority({
+      observe: () =>
+        Promise.resolve(exactObservation(fixture.artifact, fixture.candidate, replacementRunId)),
+    });
+    const replacementQualification = await replacementAuthority.qualify({
+      candidate: fixture.candidate,
+      artifact: fixture.artifact,
+      source: {
+        kind: "GITHUB_ACTIONS_RUN",
+        repository: "hunterzheng1/hunter-pi",
+        runId: replacementRunId,
+      },
+      deadline: "2026-08-11T13:00:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+    });
+    await writeFile(
+      join(
+        portableRoot,
+        ".hpi-update",
+        "qualification-evidence",
+        `${String(replacementRunId)}.json`,
+      ),
+      JSON.stringify(replacementQualification.evidence),
+      "utf8",
+    );
+    await writeFile(
+      installedInitialCandidatePath,
+      JSON.stringify(replacementQualification.candidate),
+      "utf8",
+    );
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-qualified-first-rollback-replaced-identity",
+        operationFingerprint: sha256Fingerprint(
+          "task11-qualified-first-rollback-replaced-identity",
+        ),
+        targetReleaseId: fixture.candidate.releaseId,
+        observedAt: "2026-08-11T12:32:15.000Z",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "FAILED",
+      previousReleaseId: qualifiedUpdate.releaseId,
+      activeReleaseId: qualifiedUpdate.releaseId,
+    });
+    await writeFile(
+      installedInitialCandidatePath,
+      JSON.stringify(qualifiedInitialCandidate),
+      "utf8",
+    );
     await rm(qualificationEvidencePath);
     await expect(
       manager.rollback({

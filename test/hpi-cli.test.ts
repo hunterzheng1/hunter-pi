@@ -894,6 +894,7 @@ describe("hpi command", () => {
           }),
         );
       },
+      qualify: () => Promise.reject(new Error("qualification is outside this CLI fixture")),
       rollback: (request) => {
         calls.push(`rollback:${request.targetReleaseId}`);
         return Promise.resolve(

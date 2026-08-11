@@ -19,29 +19,41 @@ import { z } from "zod";
 import {
   distributionReleaseIdSchema,
   fingerprintSchema,
+  operationIdSchema,
   timestampSchema,
   type DistributionReleaseId,
+  type Fingerprint,
 } from "@hunter-pi/domain";
 import {
   canonicalJson,
+  DurableStoreError,
   redactPortableText,
   sha256Fingerprint,
   withDurableMutationLock,
+  writeImmutableAtomically,
+  type AtomicWriteFaultInjector,
 } from "@hunter-pi/evidence";
 
 import {
+  HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
   releaseCandidateSchema,
   type MigrationTransaction,
   type ReleaseAdapter,
   type ReleaseCandidate,
   type StagedRelease,
+  type UpdateQualificationRequest,
   type UpdateReconciliation,
 } from "./contracts.js";
+import {
+  windowsPortableQualificationEvidenceSchema,
+  type WindowsPortableQualificationEvidence,
+} from "./github-actions-qualification.js";
 import {
   decodePortableBundle,
   extractPortableBundle,
   type PortableBundleManifest,
 } from "./portable-bundle.js";
+import { windowsPortableQualificationCandidateIdentity } from "./qualification-identity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -72,6 +84,18 @@ const migrationStateSchema = z.strictObject({
 });
 type MigrationState = z.infer<typeof migrationStateSchema>;
 
+const qualificationIntentSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-portable-qualification-intent.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  requestFingerprint: fingerprintSchema,
+  baseCandidate: releaseCandidateSchema,
+  candidate: releaseCandidateSchema,
+  evidence: windowsPortableQualificationEvidenceSchema,
+  observedAt: timestampSchema,
+});
+type QualificationIntent = z.infer<typeof qualificationIntentSchema>;
+
 export interface FileWindowsPortableReleaseAdapterOptions {
   readonly installationRoot: string;
   readonly mutableStateDirectory?: string;
@@ -83,6 +107,16 @@ export interface FileWindowsPortableReleaseAdapterOptions {
   ) => Promise<{ readonly status: "PASS" } | { readonly status: "FAIL"; readonly reason: string }>;
   /** A deterministic interruption seam used by the crash-reconciliation contract tests. */
   readonly afterActivePointerPublished?: () => Promise<void>;
+  /** A deterministic interruption seam used by qualification reconciliation tests. */
+  readonly afterQualificationRootCandidatePublished?: () => Promise<void>;
+  /** A deterministic interruption seam used by immutable qualification Evidence tests. */
+  readonly qualificationEvidenceFaultInjector?: AtomicWriteFaultInjector;
+  /** A deterministic interruption seam after the manager Receipt and before intent removal. */
+  readonly beforeQualificationIntentCleared?: () => Promise<void>;
+}
+
+export function windowsPortableUpdateManagerStateRoot(installationRoot: string): string {
+  return join(resolve(installationRoot), ".hpi-update", "manager");
 }
 
 function isMissing(error: unknown): boolean {
@@ -103,6 +137,11 @@ function comparablePath(value: string): string {
 async function canonicalDirectory(path: string): Promise<string> {
   const absolute = resolve(path);
   await mkdir(absolute, { recursive: true });
+  return existingCanonicalDirectory(absolute);
+}
+
+async function existingCanonicalDirectory(path: string): Promise<string> {
+  const absolute = resolve(path);
   const status = await lstat(absolute);
   const canonical = await realpath(absolute);
   if (
@@ -113,6 +152,14 @@ async function canonicalDirectory(path: string): Promise<string> {
     throw new Error("portable update state contains a symbolic link or non-directory");
   }
   return canonical;
+}
+
+async function readPhysicalFile(path: string): Promise<Uint8Array> {
+  const status = await lstat(path);
+  if (!status.isFile() || status.isSymbolicLink()) {
+    throw new Error("portable qualification input is not a physical file");
+  }
+  return readFile(path);
 }
 
 async function readJsonIfPresent<T>(path: string, schema: z.ZodType<T>): Promise<T | undefined> {
@@ -154,6 +201,70 @@ function containedReleasePath(versionsRoot: string, releaseId: string): string {
     throw new Error("portable release id escaped the versions directory");
   }
   return target;
+}
+
+function qualificationNeutralCandidate(candidate: ReleaseCandidate): string {
+  return canonicalJson(windowsPortableQualificationCandidateIdentity(candidate));
+}
+
+async function writeQualificationEvidenceImmutably(
+  directory: string,
+  evidence: WindowsPortableQualificationEvidence,
+  faultInjector?: AtomicWriteFaultInjector,
+): Promise<void> {
+  await canonicalDirectory(directory);
+  const path = join(directory, `${String(evidence.run.id)}.json`);
+  const content = canonicalJson(evidence) + "\n";
+  try {
+    await writeImmutableAtomically({
+      directory,
+      filename: `${String(evidence.run.id)}.json`,
+      content,
+      ...(faultInjector === undefined ? {} : { faultInjector }),
+    });
+  } catch (error) {
+    if (!(error instanceof DurableStoreError) || error.code !== "IDENTITY_CONFLICT") throw error;
+    const existing = windowsPortableQualificationEvidenceSchema.parse(
+      JSON.parse(Buffer.from(await readPhysicalFile(path)).toString("utf8")) as unknown,
+    );
+    if (canonicalJson(existing) !== canonicalJson(evidence)) {
+      throw new Error("portable qualification Evidence identity is already bound differently", {
+        cause: error,
+      });
+    }
+  }
+}
+
+function assertQualificationBinding(
+  baseCandidate: ReleaseCandidate,
+  candidate: ReleaseCandidate,
+  evidence: WindowsPortableQualificationEvidence,
+  artifact: Uint8Array,
+): void {
+  const expectedIdentity = qualificationNeutralCandidate(baseCandidate);
+  const expectedEvidenceId = `evidence_main-ci-${String(evidence.run.id)}-portable`;
+  const bundle = decodePortableBundle(artifact);
+  const qualificationCheck = candidate.qualification.checks[0];
+  const qualificationCheckMatches =
+    qualificationCheck?.name === "windows-portable-ci" &&
+    qualificationCheck.outcome === "PASS" &&
+    canonicalJson(qualificationCheck.evidenceIds) === canonicalJson([evidence.evidenceId]);
+  if (
+    qualificationNeutralCandidate(candidate) !== expectedIdentity ||
+    evidence.candidateIdentityFingerprint !== sha256Fingerprint(expectedIdentity) ||
+    evidence.artifact.fingerprint !== candidate.artifact.fingerprint ||
+    evidence.artifact.byteLength !== candidate.artifact.byteLength ||
+    evidence.sourceCommit !== evidence.run.headSha ||
+    evidence.sourceCommit !== bundle.manifest.sourceCommit ||
+    evidence.evidenceId !== expectedEvidenceId ||
+    candidate.qualification.status !== "PASS" ||
+    candidate.qualification.verifierFingerprint !== HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT ||
+    candidate.qualification.qualifiedAt !== evidence.run.updatedAt ||
+    candidate.qualification.checks.length !== 1 ||
+    !qualificationCheckMatches
+  ) {
+    throw new Error("portable qualification result does not bind the exact release Evidence");
+  }
 }
 
 async function copyTree(source: string, destination: string): Promise<void> {
@@ -249,12 +360,17 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
   readonly #versionsRoot: string;
   readonly #activePath: string;
   readonly #activationIntentPath: string;
+  readonly #qualificationEvidenceRoot: string;
+  readonly #qualificationIntentPath: string;
   readonly #migrationPath: string;
   readonly #migrationRoot: string;
   readonly #mutableStateDirectory: string | undefined;
   readonly #now: () => string;
   readonly #healthCheck: FileWindowsPortableReleaseAdapterOptions["healthCheck"];
   readonly #afterActivePointerPublished: (() => Promise<void>) | undefined;
+  readonly #afterQualificationRootCandidatePublished: (() => Promise<void>) | undefined;
+  readonly #qualificationEvidenceFaultInjector: AtomicWriteFaultInjector | undefined;
+  readonly #beforeQualificationIntentCleared: (() => Promise<void>) | undefined;
 
   public constructor(options: FileWindowsPortableReleaseAdapterOptions) {
     this.#installationRoot = resolve(options.installationRoot);
@@ -262,6 +378,8 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     this.#versionsRoot = join(this.#installationRoot, "versions");
     this.#activePath = join(this.#stateRoot, "active.json");
     this.#activationIntentPath = join(this.#stateRoot, "activation-intent.json");
+    this.#qualificationEvidenceRoot = join(this.#stateRoot, "qualification-evidence");
+    this.#qualificationIntentPath = join(this.#stateRoot, "qualification-intent.json");
     this.#migrationPath = join(this.#stateRoot, "migration.json");
     this.#migrationRoot = join(this.#stateRoot, "migrations");
     this.#mutableStateDirectory =
@@ -277,6 +395,10 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#healthCheck = options.healthCheck;
     this.#afterActivePointerPublished = options.afterActivePointerPublished;
+    this.#afterQualificationRootCandidatePublished =
+      options.afterQualificationRootCandidatePublished;
+    this.#qualificationEvidenceFaultInjector = options.qualificationEvidenceFaultInjector;
+    this.#beforeQualificationIntentCleared = options.beforeQualificationIntentCleared;
   }
 
   async #ensureRoots(): Promise<void> {
@@ -284,6 +406,7 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     await canonicalDirectory(this.#stateRoot);
     await canonicalDirectory(this.#versionsRoot);
     await canonicalDirectory(this.#migrationRoot);
+    await canonicalDirectory(this.#qualificationEvidenceRoot);
   }
 
   async #readArtifact(
@@ -403,9 +526,57 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     );
   }
 
+  async #verifyQualificationEvidence(
+    candidate: ReleaseCandidate,
+    artifact: Uint8Array,
+  ): Promise<void> {
+    if (candidate.qualification.status !== "PASS") return;
+    const check = candidate.qualification.checks[0];
+    const evidenceId = check?.evidenceIds[0];
+    const match = /^evidence_main-ci-(\d+)-portable$/u.exec(evidenceId ?? "");
+    if (
+      candidate.qualification.verifierFingerprint !==
+        HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT ||
+      candidate.qualification.checks.length !== 1 ||
+      check?.name !== "windows-portable-ci" ||
+      check.outcome !== "PASS" ||
+      check.evidenceIds.length !== 1 ||
+      match === null
+    ) {
+      throw new Error("portable qualified candidate does not bind one hosted Evidence receipt");
+    }
+    const runId = match[1];
+    if (runId === undefined) {
+      throw new Error("portable qualified candidate Evidence identity is invalid");
+    }
+    const evidence = windowsPortableQualificationEvidenceSchema.parse(
+      JSON.parse(
+        Buffer.from(
+          await readPhysicalFile(join(this.#qualificationEvidenceRoot, `${runId}.json`)),
+        ).toString("utf8"),
+      ) as unknown,
+    );
+    assertQualificationBinding(candidate, candidate, evidence, artifact);
+  }
+
   async current(): Promise<DistributionReleaseId | undefined> {
     await this.#ensureRoots();
     return (await this.#readActive({ verifyFiles: false }))?.releaseId;
+  }
+
+  async installedCandidate(release: StagedRelease): Promise<ReleaseCandidate | undefined> {
+    await this.#ensureRoots();
+    let candidate: ReleaseCandidate;
+    try {
+      candidate = await this.#readCandidate(release.releaseId);
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      throw error;
+    }
+    const directory = await this.#verifyRelease(candidate, candidate.artifact.fingerprint);
+    const artifact = await readPhysicalFile(join(directory, ".hpi-artifact"));
+    await this.#verifyQualificationEvidence(candidate, artifact);
+    return candidate;
   }
 
   async stage(candidateInput: ReleaseCandidate, artifact: Uint8Array): Promise<StagedRelease> {
@@ -562,6 +733,141 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     await this.#readActive();
   }
 
+  async promoteQualification(input: {
+    readonly operationId: UpdateQualificationRequest["operationId"];
+    readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint: Fingerprint;
+    readonly baseCandidate: ReleaseCandidate;
+    readonly candidate: ReleaseCandidate;
+    readonly evidence: unknown;
+    readonly artifact: Uint8Array;
+    readonly observedAt: string;
+  }): Promise<"PROMOTED" | "NOOP"> {
+    await this.#ensureRoots();
+    const baseCandidate = releaseCandidateSchema.parse(input.baseCandidate);
+    const candidate = releaseCandidateSchema.parse(input.candidate);
+    const evidence = windowsPortableQualificationEvidenceSchema.parse(input.evidence);
+    const expectedIdentity = qualificationNeutralCandidate(baseCandidate);
+    assertQualificationBinding(baseCandidate, candidate, evidence, input.artifact);
+    if (
+      input.artifact.byteLength !== candidate.artifact.byteLength ||
+      sha256Fingerprint(input.artifact) !== candidate.artifact.fingerprint
+    ) {
+      throw new Error("portable qualification artifact does not match the release candidate");
+    }
+    const installationRoot = await existingCanonicalDirectory(this.#installationRoot);
+    const versionDirectory = await existingCanonicalDirectory(
+      containedReleasePath(this.#versionsRoot, candidate.releaseId),
+    );
+    const rootCandidatePath = join(installationRoot, "portable-release-candidate.json");
+    const installedCandidatePath = join(versionDirectory, ".hpi-candidate.json");
+
+    return withDurableMutationLock(join(this.#stateRoot, ".portable-mutation-lock"), async () => {
+      const active = await this.#readActive();
+      if (active?.releaseId !== candidate.releaseId) {
+        throw new Error("portable qualification target is not the active release");
+      }
+      const rootCandidate = releaseCandidateSchema.parse(
+        JSON.parse(
+          Buffer.from(await readPhysicalFile(rootCandidatePath)).toString("utf8"),
+        ) as unknown,
+      );
+      const installedCandidate = releaseCandidateSchema.parse(
+        JSON.parse(
+          Buffer.from(await readPhysicalFile(installedCandidatePath)).toString("utf8"),
+        ) as unknown,
+      );
+      if (
+        qualificationNeutralCandidate(rootCandidate) !== expectedIdentity ||
+        qualificationNeutralCandidate(installedCandidate) !== expectedIdentity
+      ) {
+        throw new Error("portable qualification candidate changes immutable release metadata");
+      }
+      for (const artifact of [
+        await readPhysicalFile(join(installationRoot, "update.bundle.tgz")),
+        await readPhysicalFile(join(versionDirectory, ".hpi-artifact")),
+      ]) {
+        if (
+          artifact.byteLength !== candidate.artifact.byteLength ||
+          sha256Fingerprint(artifact) !== candidate.artifact.fingerprint
+        ) {
+          throw new Error("portable qualification artifact does not match the release candidate");
+        }
+      }
+      if (
+        canonicalJson(rootCandidate) === canonicalJson(candidate) &&
+        canonicalJson(installedCandidate) === canonicalJson(candidate)
+      ) {
+        await writeQualificationEvidenceImmutably(
+          this.#qualificationEvidenceRoot,
+          evidence,
+          this.#qualificationEvidenceFaultInjector,
+        );
+        return "NOOP";
+      }
+      const intent = qualificationIntentSchema.parse({
+        schemaVersion: "hpi-portable-qualification-intent.v1",
+        operationId: input.operationId,
+        operationFingerprint: input.operationFingerprint,
+        requestFingerprint: input.requestFingerprint,
+        baseCandidate,
+        candidate,
+        evidence,
+        observedAt: input.observedAt,
+      });
+      await writeJsonAtomically(this.#qualificationIntentPath, intent);
+      await writeQualificationEvidenceImmutably(
+        this.#qualificationEvidenceRoot,
+        evidence,
+        this.#qualificationEvidenceFaultInjector,
+      );
+      await writeJsonAtomically(rootCandidatePath, candidate);
+      await this.#afterQualificationRootCandidatePublished?.();
+      await writeJsonAtomically(installedCandidatePath, candidate);
+      const promotedRoot = releaseCandidateSchema.parse(
+        JSON.parse(
+          Buffer.from(await readPhysicalFile(rootCandidatePath)).toString("utf8"),
+        ) as unknown,
+      );
+      const promotedInstalled = await this.installedCandidate({ releaseId: candidate.releaseId });
+      if (
+        canonicalJson(promotedRoot) !== canonicalJson(candidate) ||
+        promotedInstalled === undefined ||
+        canonicalJson(promotedInstalled) !== canonicalJson(candidate)
+      ) {
+        throw new Error("portable qualification promotion did not persist the exact candidate");
+      }
+      return "PROMOTED";
+    });
+  }
+
+  async finalizeQualification(input: {
+    readonly operationId: UpdateQualificationRequest["operationId"];
+    readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint: Fingerprint;
+    readonly candidate: ReleaseCandidate;
+  }): Promise<void> {
+    await this.#ensureRoots();
+    return withDurableMutationLock(join(this.#stateRoot, ".portable-mutation-lock"), async () => {
+      const intent = await readJsonIfPresent(
+        this.#qualificationIntentPath,
+        qualificationIntentSchema,
+      );
+      if (intent === undefined) return;
+      if (
+        intent.operationId !== input.operationId ||
+        intent.operationFingerprint !== input.operationFingerprint ||
+        intent.requestFingerprint !== input.requestFingerprint ||
+        canonicalJson(intent.candidate) !== canonicalJson(input.candidate)
+      ) {
+        throw new Error("portable qualification Receipt does not bind the pending intent");
+      }
+      await this.#reconcileQualification(intent);
+      await this.#beforeQualificationIntentCleared?.();
+      await rm(this.#qualificationIntentPath, { force: true });
+    });
+  }
+
   async discard(release: StagedRelease): Promise<void> {
     await this.#ensureRoots();
     const active = await readJsonIfPresent(this.#activePath, activePointerSchema);
@@ -574,6 +880,13 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
   async reconcile(): Promise<UpdateReconciliation> {
     await this.#ensureRoots();
     return withDurableMutationLock(join(this.#stateRoot, ".portable-mutation-lock"), async () => {
+      const qualificationIntent = await readJsonIfPresent(
+        this.#qualificationIntentPath,
+        qualificationIntentSchema,
+      );
+      if (qualificationIntent !== undefined) {
+        return this.#reconcileQualification(qualificationIntent);
+      }
       const intent = await readJsonIfPresent(this.#activationIntentPath, activationIntentSchema);
       const migration = await readJsonIfPresent(this.#migrationPath, migrationStateSchema);
       const active = await this.#readActive({
@@ -639,6 +952,83 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
       }
       return { status: "NONE" } satisfies UpdateReconciliation;
     });
+  }
+
+  async #reconcileQualification(intent: QualificationIntent): Promise<UpdateReconciliation> {
+    const active = await this.#readActive();
+    if (active?.releaseId !== intent.candidate.releaseId) {
+      throw new Error("portable qualification intent disagrees with the active release");
+    }
+    const versionDirectory = await existingCanonicalDirectory(
+      containedReleasePath(this.#versionsRoot, intent.candidate.releaseId),
+    );
+    const rootCandidatePath = join(this.#installationRoot, "portable-release-candidate.json");
+    const installedCandidatePath = join(versionDirectory, ".hpi-candidate.json");
+    const expectedIdentity = qualificationNeutralCandidate(intent.baseCandidate);
+    const rootCandidate = releaseCandidateSchema.parse(
+      JSON.parse(
+        Buffer.from(await readPhysicalFile(rootCandidatePath)).toString("utf8"),
+      ) as unknown,
+    );
+    const installedCandidate = releaseCandidateSchema.parse(
+      JSON.parse(
+        Buffer.from(await readPhysicalFile(installedCandidatePath)).toString("utf8"),
+      ) as unknown,
+    );
+    if (
+      ![expectedIdentity, qualificationNeutralCandidate(intent.candidate)].includes(
+        qualificationNeutralCandidate(rootCandidate),
+      ) ||
+      ![expectedIdentity, qualificationNeutralCandidate(intent.candidate)].includes(
+        qualificationNeutralCandidate(installedCandidate),
+      )
+    ) {
+      throw new Error("portable qualification intent found immutable release identity drift");
+    }
+    const artifacts = [
+      await readPhysicalFile(join(this.#installationRoot, "update.bundle.tgz")),
+      await readPhysicalFile(join(versionDirectory, ".hpi-artifact")),
+    ];
+    for (const artifact of artifacts) {
+      if (
+        artifact.byteLength !== intent.candidate.artifact.byteLength ||
+        sha256Fingerprint(artifact) !== intent.candidate.artifact.fingerprint
+      ) {
+        throw new Error("portable qualification intent found artifact drift");
+      }
+    }
+    const rootArtifact = artifacts[0];
+    if (rootArtifact === undefined) {
+      throw new Error("portable qualification intent has no root artifact");
+    }
+    assertQualificationBinding(
+      intent.baseCandidate,
+      intent.candidate,
+      intent.evidence,
+      rootArtifact,
+    );
+    await writeQualificationEvidenceImmutably(
+      this.#qualificationEvidenceRoot,
+      intent.evidence,
+      this.#qualificationEvidenceFaultInjector,
+    );
+    await writeJsonAtomically(rootCandidatePath, intent.candidate);
+    await writeJsonAtomically(installedCandidatePath, intent.candidate);
+    const verified = await this.installedCandidate({ releaseId: intent.candidate.releaseId });
+    if (verified === undefined || canonicalJson(verified) !== canonicalJson(intent.candidate)) {
+      throw new Error("portable qualification reconciliation did not persist the exact candidate");
+    }
+    return {
+      status: "RECOVERED",
+      candidate: intent.candidate,
+      activeReleaseId: intent.candidate.releaseId,
+      operation: {
+        operationId: intent.operationId,
+        operationFingerprint: intent.operationFingerprint,
+        requestFingerprint: intent.requestFingerprint,
+        action: "QUALIFY",
+      },
+    } satisfies UpdateReconciliation;
   }
 
   async #rollbackMigrationState(migration: MigrationState): Promise<void> {

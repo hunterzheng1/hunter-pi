@@ -9,7 +9,12 @@
 - The portable bundle is a strict, deterministic `tar.gz` payload with a versioned manifest, exact file lengths and SHA-256 fingerprints, safe relative paths, no symlinks, and bounded extraction.
 - The Windows adapter installs side-by-side under `versions/<release-id>/`, publishes an atomic `.hpi-update/active.json` pointer, and keeps activation intent, migration, and append-only history available for recovery.
 - `UpdateManager.check` is read-only and verifies the candidate schema, channel/qualification policy, artifact length, artifact digest, engine identity, and Pi self-update policy before activation.
-- `apply`, `rollback`, and `reconcile` use staged verification, a bounded health probe, durable migration markers, post-activation identity verification, and fail-closed recovery. Failed history is retained; it is never rewritten as success.
+- `apply`, `rollback`, `qualify`, and `reconcile` use staged verification, bounded external operations, durable activation/qualification/migration markers, post-mutation identity verification, and fail-closed recovery. Failed history is retained; it is never rewritten as success.
+- A CI-qualified portable directory has an explicit metadata-only `QUALIFY` operation. The operator supplies only the installation root and exact main CI run ID. The built-in authority generates `PASS` after one live run query and one hosted artifact download prove the exact repository, main push, source commit, six successful job identities, bundle bytes, and non-qualification candidate identity. Both calls share one elapsed timeout budget. The operation atomically retains immutable Evidence, keeps its intent through Receipt acknowledgement, and preserves both artifact copies unchanged.
+- The promotion command and production CLI resolve one shared installation-owned manager root, `.hpi-update/manager`, so `QUALIFY`, `APPLY`, rollback, replay, and reconciliation consume one hash-chained journal independently of `HUNTER_PI_HOME`.
+- Rollback may recover an installed candidate absent from historical `APPLY` candidates only when an append-only `APPLY` receipt independently proves it was the previous active release. Merely staging a qualified version never makes it rollback-eligible.
+- That fallback also requires the latest exact `QUALIFY/APPLIED` candidate entry that precedes the prior-active APPLY proof; the installed candidate must match it completely, so reuse of the same release ID cannot substitute another qualification identity.
+- Journaled rollback targets are not trusted by history alone: when the adapter exposes installed-candidate verification, the manager re-reads the installed candidate, requires an exact journal identity match, and revalidates retained qualification Evidence before restore.
 - The supported portable entry point is the root `hpi.cmd`/launcher. It selects the active version and exposes `hpi update status|check|apply|rollback --json` without echoing local paths or sensitive input.
 - The builder refuses a dirty source tree, emits source/runtime/engine/license/provenance identities, and runs an isolated launcher/version/update-status probe before accepting the output directory.
 
@@ -18,7 +23,7 @@
 Run these on a clean Windows x64 checkout with Node 24:
 
 ```powershell
-npx vitest run test/task11-updater.test.ts test/task11-portable-adapter.test.ts --reporter=verbose
+npx vitest run test/task11-updater.test.ts test/task11-portable-adapter.test.ts test/task11-github-actions-qualification.test.ts test/task11-promotion-script.test.ts --reporter=verbose
 npm run test:ci
 npm run lint
 npm run typecheck
@@ -28,9 +33,11 @@ npm run format:check
 npm run package-smoke
 npm run clean-install-smoke
 npm run pack:windows-portable
+# After the exact hosted main CI run has completed successfully:
+npm run promote:windows-portable:compiled -- --root <portable-directory> --run <main-ci-run-id>
 ```
 
-The GitHub Actions quality job reuses its existing locked install and build, then runs the compiled Windows packer only on Windows and uploads the exact directory as a 14-day artifact. The portable status path uses a lightweight active-pointer/artifact check when no recovery transaction is pending; activation, health, and rollback retain full bundle/tree verification. Ubuntu remains a required quality and Evidence platform; it does not claim to produce a Windows artifact.
+The GitHub Actions quality job reuses its existing locked install and build, then runs the compiled Windows packer only on Windows and uploads the exact directory as a 14-day artifact. Qualification requires that named artifact before its retention expires. The operator command never polls, never downloads logs, and exact-operation replay or an already-qualified same-source invocation is served from local hash-chained state. The portable status path uses a lightweight active-pointer/artifact check when no recovery transaction is pending; activation, qualification reconciliation, health, and rollback retain full bundle/tree and qualification-Evidence verification. Ubuntu remains a required quality and Evidence platform; it does not claim to produce a Windows artifact.
 
 ## Evidence boundary
 

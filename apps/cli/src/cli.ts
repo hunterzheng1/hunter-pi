@@ -110,6 +110,7 @@ import {
   FileWindowsPortableReleaseAdapter,
   HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
   releaseCandidateSchema,
+  windowsPortableUpdateManagerStateRoot,
   type ReleaseCandidate,
   type ReleaseCheckResult,
   type UpdateManager,
@@ -503,8 +504,8 @@ function defaultDependencies(): HpiCliDependencies {
   return dependencies;
 }
 
-function createDefaultUpdateManager(
-  dependencies: HpiCliDependencies,
+export function createDefaultUpdateManager(
+  dependencies: Pick<HpiCliDependencies, "environment" | "platform" | "now" | "readBinaryFile">,
   options: { readonly paths: HpiPaths; readonly artifactPath?: string },
 ): Promise<UpdateManager | undefined> {
   const portableRoot = dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
@@ -519,11 +520,12 @@ function createDefaultUpdateManager(
   const adapter = new FileWindowsPortableReleaseAdapter({
     installationRoot: resolve(portableRoot),
     mutableStateDirectory: options.paths.root,
+    targetPlatform: "win32-x64",
     now: dependencies.now,
   });
   return Promise.resolve(
     new FileUpdateManager({
-      stateRoot: join(options.paths.root, "updates"),
+      stateRoot: windowsPortableUpdateManagerStateRoot(portableRoot),
       channel: "PREVIEW",
       adapter,
       artifacts: {

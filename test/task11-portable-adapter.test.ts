@@ -8,14 +8,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
+  HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
   createPortableBundle,
   decodePortableBundle,
   releaseCandidateSchema,
+  windowsPortableQualificationEvidenceSchema,
   type ReleaseCandidate,
 } from "@hunter-pi/updater";
-import { sha256Fingerprint } from "@hunter-pi/evidence";
+import { canonicalJson, sha256Fingerprint } from "@hunter-pi/evidence";
 
-import { fixtureFingerprint, fixtureTimestamp } from "./support/workflow-domain-fixture.js";
+import { fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
@@ -31,7 +34,13 @@ function digest(value: Uint8Array): `sha256:${string}` {
 function portableCandidate(releaseId: string): {
   readonly candidate: ReleaseCandidate;
   readonly artifact: Uint8Array;
+  readonly evidence: ReturnType<typeof windowsPortableQualificationEvidenceSchema.parse>;
+  readonly runId: number;
 } {
+  const runId = Number.parseInt(
+    createHash("sha256").update(releaseId).digest("hex").slice(0, 12),
+    16,
+  );
   const engineReleaseFingerprint = sha256Fingerprint("task11-portable-engine");
   const artifact = createPortableBundle({
     releaseId,
@@ -65,12 +74,12 @@ function portableCandidate(releaseId: string): {
     },
     qualification: {
       status: "PASS",
-      verifierFingerprint: fixtureFingerprint,
+      verifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
       checks: [
         {
-          name: "windows-portable-launch",
+          name: "windows-portable-ci",
           outcome: "PASS",
-          evidenceIds: ["evidence_task11-portable"],
+          evidenceIds: [`evidence_main-ci-${String(runId)}-portable`],
         },
       ],
       qualifiedAt: fixtureTimestamp,
@@ -85,7 +94,52 @@ function portableCandidate(releaseId: string): {
       },
     ],
   });
-  return { candidate, artifact };
+  const { qualification, ...candidateIdentity } = candidate;
+  void qualification;
+  const evidence = windowsPortableQualificationEvidenceSchema.parse({
+    schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+    evidenceId: `evidence_main-ci-${String(runId)}-portable`,
+    repository: "hunterzheng1/hunter-pi",
+    sourceCommit,
+    candidateIdentityFingerprint: sha256Fingerprint(canonicalJson(candidateIdentity)),
+    artifact: {
+      name: "hpi-windows-x64-portable",
+      fingerprint: candidate.artifact.fingerprint,
+      byteLength: candidate.artifact.byteLength,
+    },
+    run: {
+      id: runId,
+      attempt: 1,
+      event: "push",
+      headBranch: "main",
+      headSha: sourceCommit,
+      workflowName: "CI",
+      status: "completed",
+      conclusion: "success",
+      updatedAt: fixtureTimestamp,
+      url: `https://github.com/hunterzheng1/hunter-pi/actions/runs/${String(runId)}`,
+      jobs: HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES.map((name) => ({
+        name,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
+    observedAt: fixtureTimestamp,
+  });
+  return { candidate, artifact, evidence, runId };
+}
+
+async function retainQualificationEvidence(
+  installationRoot: string,
+  fixture: ReturnType<typeof portableCandidate>,
+): Promise<void> {
+  const directory = join(installationRoot, ".hpi-update", "qualification-evidence");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, `${String(fixture.runId)}.json`),
+    canonicalJson(fixture.evidence) + "\n",
+    "utf8",
+  );
 }
 
 function managerFor(
@@ -104,7 +158,7 @@ function managerFor(
         return Promise.resolve(artifact);
       },
     },
-    qualificationVerifierFingerprint: fixtureFingerprint,
+    qualificationVerifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
     now: () => fixtureTimestamp,
   });
 }
@@ -157,6 +211,7 @@ describe("Task 11 Windows portable release adapter", () => {
     expect(
       await readFile(join(root, "portable", ".hpi-update", "migration.json"), "utf8"),
     ).toContain('"status":"COMMITTED"');
+    await retainQualificationEvidence(join(root, "portable"), first);
 
     await expect(
       manager.rollback({
@@ -180,6 +235,98 @@ describe("Task 11 Windows portable release adapter", () => {
         expect.objectContaining({ releaseId: second.candidate.releaseId }),
       ]),
     );
+  });
+
+  it("rejects an installed PASS label without its durable hosted qualification Evidence", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-initial-rollback-",
+    );
+    roots.push(root);
+    const initial = portableCandidate("release_task11-portable-initial");
+    const update = portableCandidate("release_task11-portable-update");
+    const artifacts = new Map([
+      [initial.candidate.releaseId, initial.artifact],
+      [update.candidate.releaseId, update.artifact],
+    ]);
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: join(root, "portable"),
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+
+    const installed = await adapter.stage(initial.candidate, initial.artifact);
+    await adapter.activate(installed);
+    const manager = managerFor(root, adapter, artifacts);
+    await expect(
+      manager.apply({
+        schemaVersion: "hpi-update-apply.v1",
+        operationId: "op_task11-portable-initial-update",
+        operationFingerprint: sha256Fingerprint("portable-initial-update"),
+        candidate: update.candidate,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({ outcome: "APPLIED", activeReleaseId: update.candidate.releaseId });
+
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-portable-initial-rollback",
+        operationFingerprint: sha256Fingerprint("portable-initial-rollback"),
+        targetReleaseId: initial.candidate.releaseId,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "BLOCKED",
+      activeReleaseId: update.candidate.releaseId,
+    });
+    await expect(manager.current()).resolves.toMatchObject({
+      releaseId: update.candidate.releaseId,
+    });
+  });
+
+  it("does not treat a qualified release that was only staged as the initial rollback target", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-staged-only-",
+    );
+    roots.push(root);
+    const active = portableCandidate("release_task11-portable-active");
+    const stagedOnly = portableCandidate("release_task11-portable-staged-only");
+    const artifacts = new Map([
+      [active.candidate.releaseId, active.artifact],
+      [stagedOnly.candidate.releaseId, stagedOnly.artifact],
+    ]);
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: join(root, "portable"),
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const manager = managerFor(root, adapter, artifacts);
+    await manager.apply({
+      schemaVersion: "hpi-update-apply.v1",
+      operationId: "op_task11-portable-active",
+      operationFingerprint: sha256Fingerprint("portable-active"),
+      candidate: active.candidate,
+      observedAt: fixtureTimestamp,
+    });
+    await adapter.stage(stagedOnly.candidate, stagedOnly.artifact);
+
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-portable-staged-only-rollback",
+        operationFingerprint: sha256Fingerprint("portable-staged-only-rollback"),
+        targetReleaseId: stagedOnly.candidate.releaseId,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "BLOCKED",
+      activeReleaseId: active.candidate.releaseId,
+    });
+    await expect(manager.current()).resolves.toMatchObject({
+      releaseId: active.candidate.releaseId,
+    });
   });
 
   it("re-verifies rollback bytes and refuses a tampered known release", async () => {

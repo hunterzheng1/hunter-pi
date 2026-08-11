@@ -96,6 +96,10 @@ Provide a Windows x64 installer or portable artifact. The current Task 11 implem
 
 Task 11's portable artifact is intentionally unsigned `developer-preview` with `qualification=NOT_PROVEN`. It is suitable for bounded local evaluation of the Hunter-owned launcher/update path; it is not a Stable or publisher-qualified release. The supported update commands are `hpi update status --json`, `hpi update check`, `hpi update apply`, and `hpi update rollback`. The Windows CI job builds this artifact from the already completed quality build and retains it for 14 days; Ubuntu validates the provider-neutral and cross-platform contracts but does not emit a Windows package.
 
+After the exact artifact's required main CI has passed, the release operator may run `npm run promote:windows-portable:compiled -- --root <portable-directory> --run <main-ci-run-id>`. The command does not accept caller-authored `PASS` metadata. It performs one `gh run view` and one `gh run download`, with no polling or log download, then requires an exact `push` to `main` in repository `hunterzheng1/hunter-pi`, workflow `CI`, the artifact's source commit, and the six declared Windows/Ubuntu quality, containment, and Evidence jobs all completed successfully. It also requires the downloaded `hpi-windows-x64-portable` bundle bytes and every non-qualification field in its packaged candidate to match the local installation exactly.
+
+Qualification is a first-class `QUALIFY` update operation. Its request binds `operationId`, canonical request fingerprint, path-free expected target, GitHub run identity, deadline, and fail-closed timeout; the operator derives the operation ID from that complete request and the numerically canonical run ID rather than raw CLI text or a calendar date. Promotion and production CLI apply/rollback use the same installation-owned manager state at `.hpi-update/manager`. The two fixed `gh` calls consume one shared elapsed timeout budget. The manager journals exact replay; the Windows adapter writes an intent before the first metadata mutation, syncs and atomically publishes the strict run/artifact receipt under `.hpi-update/qualification-evidence/` without replacement, and keeps the intent until the hash-chained APPLIED Receipt is durable and acknowledged. Promotion changes only `portable-release-candidate.json` and the matching version directory's `.hpi-candidate.json`; the bundle and executable payload retain their original fingerprint. Same-operation replay and later already-qualified same-source invocations do not query GitHub again. Every rollback target from APPLY history is re-read from the installed version and must exactly match its journal identity and retained Evidence. The initial-install fallback additionally requires both the APPLY Receipt proving the release was previously active and the latest exact `QUALIFY/APPLIED` candidate identity preceding that proof. Missing identity proof, Evidence, run/job drift, metadata drift, artifact drift, symlinks, or damage fail closed.
+
 Windows ARM64, macOS, and Linux installers remain unclaimed until separately validated.
 
 ## Update behavior
@@ -132,6 +136,8 @@ Rollback success requires:
 - project configuration readability;
 - explicit disposition for newer sessions/plugins/state;
 - a rollback Receipt.
+
+The first rollback after a portable installation is not exempt from these rules. If the initial release has not been qualified with exact hosted Evidence, the applying update did not record it as the previous active release, or its installed candidate/tree cannot be re-verified, rollback is blocked or fails while the current active release remains selected.
 
 ## Release evidence
 

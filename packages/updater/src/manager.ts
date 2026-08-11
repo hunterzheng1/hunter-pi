@@ -17,6 +17,7 @@ import {
   releaseCheckResultSchema,
   updateApplyRequestSchema,
   updateJournalEntrySchema,
+  updateQualificationRequestSchema,
   updateReceiptSchema,
   updateRollbackRequestSchema,
   type ReleaseAdapter,
@@ -27,9 +28,16 @@ import {
   type UpdateApplyRequest,
   type UpdateJournalEntry,
   type UpdateManager,
+  type UpdateQualificationRequest,
   type UpdateReceipt,
   type UpdateRollbackRequest,
 } from "./contracts.js";
+import {
+  windowsPortableQualificationRequestFingerprint,
+  windowsPortableQualificationTargetReference,
+  type WindowsPortableQualificationAuthority,
+  type WindowsPortableQualificationResult,
+} from "./github-actions-qualification.js";
 
 function canonicalJson(value: unknown): string {
   if (value === null) return "null";
@@ -306,6 +314,7 @@ export interface FileUpdateManagerOptions {
   readonly adapter: ReleaseAdapter;
   readonly artifacts: ReleaseArtifactSource;
   readonly qualificationVerifierFingerprint: Fingerprint;
+  readonly qualificationAuthority?: WindowsPortableQualificationAuthority;
   readonly now?: () => string;
 }
 
@@ -315,6 +324,7 @@ export class FileUpdateManager implements UpdateManager {
   readonly #adapter: ReleaseAdapter;
   readonly #artifacts: ReleaseArtifactSource;
   readonly #qualificationVerifierFingerprint: Fingerprint;
+  readonly #qualificationAuthority: WindowsPortableQualificationAuthority | undefined;
   readonly #operationKey: string;
   readonly #now: () => string;
 
@@ -327,6 +337,7 @@ export class FileUpdateManager implements UpdateManager {
     this.#qualificationVerifierFingerprint = fingerprintSchema.parse(
       options.qualificationVerifierFingerprint,
     );
+    this.#qualificationAuthority = options.qualificationAuthority;
     this.#now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -371,6 +382,274 @@ export class FileUpdateManager implements UpdateManager {
         this.#reconcile().then(() => this.#applyParsed(parsed)),
       ),
     );
+  }
+
+  public async qualify(request: UpdateQualificationRequest): Promise<UpdateReceipt> {
+    const parsed = updateQualificationRequestSchema.parse(request);
+    return withUpdateManagerOperationLock(this.#operationKey, () =>
+      withDurableMutationLock(join(this.#operationKey, ".manager-mutation-lock"), () =>
+        this.#reconcile().then(() => this.#qualifyParsed(parsed)),
+      ),
+    );
+  }
+
+  async #qualifyParsed(
+    parsed: ReturnType<typeof updateQualificationRequestSchema.parse>,
+  ): Promise<UpdateReceipt> {
+    const requestFingerprint = windowsPortableQualificationRequestFingerprint(parsed);
+    if (parsed.operationFingerprint !== requestFingerprint) {
+      throw new Error("qualification operation fingerprint does not bind its canonical request");
+    }
+    const entries = await this.#journal.read();
+    const replay = this.#replayedOperation(
+      entries,
+      parsed.operationId,
+      parsed.operationFingerprint,
+      requestFingerprint,
+    );
+    if (replay !== undefined) return replay;
+    if (Date.parse(this.#now()) > Date.parse(parsed.deadline)) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        targetReleaseId: undefined,
+        outcome: "BLOCKED",
+        reason: "qualification operation deadline elapsed before mutation",
+        observedAt: parsed.observedAt,
+      });
+    }
+    let activeReleaseId: DistributionReleaseId | undefined;
+    try {
+      activeReleaseId = await this.#adapter.current();
+    } catch (error) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        outcome: "FAILED",
+        reason: safeFailureReason(error, "qualification target state could not be read"),
+        observedAt: parsed.observedAt,
+      });
+    }
+    if (activeReleaseId === undefined || this.#adapter.installedCandidate === undefined) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        outcome: "BLOCKED",
+        reason: "qualification requires one verifiable active portable release",
+        observedAt: parsed.observedAt,
+      });
+    }
+    let baseCandidate: ReleaseCandidate;
+    try {
+      const installed = await this.#adapter.installedCandidate({ releaseId: activeReleaseId });
+      if (installed === undefined) throw new Error("active candidate metadata is missing");
+      baseCandidate = releaseCandidateSchema.parse(installed);
+    } catch (error) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        targetReleaseId: activeReleaseId,
+        outcome: "FAILED",
+        activeReleaseId,
+        reason: safeFailureReason(error, "active qualification candidate could not be verified"),
+        observedAt: parsed.observedAt,
+      });
+    }
+    if (
+      parsed.expectedTarget.namespace !== "hunter-pi.windows-portable-release" ||
+      parsed.expectedTarget.reference !==
+        windowsPortableQualificationTargetReference(baseCandidate).reference
+    ) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        targetReleaseId: activeReleaseId,
+        outcome: "BLOCKED",
+        activeReleaseId,
+        reason: "qualification expected target does not match the active release identity",
+        observedAt: parsed.observedAt,
+      });
+    }
+    const existingQualification = entries.find(
+      (entry) =>
+        entry.action === "QUALIFY" &&
+        entry.receipt.outcome === "APPLIED" &&
+        entry.candidate?.releaseId === baseCandidate.releaseId &&
+        canonicalJson(entry.candidate) === canonicalJson(baseCandidate) &&
+        entry.candidate.qualification.checks.some((check) =>
+          check.evidenceIds.some(
+            (evidenceId) =>
+              evidenceId === `evidence_main-ci-${String(parsed.source.runId)}-portable`,
+          ),
+        ),
+    );
+    if (existingQualification !== undefined) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        candidate: existingQualification.candidate,
+        targetReleaseId: activeReleaseId,
+        outcome: "NOOP",
+        activeReleaseId,
+        observedAt: parsed.observedAt,
+      });
+    }
+    if (
+      this.#qualificationAuthority === undefined ||
+      this.#adapter.promoteQualification === undefined ||
+      this.#adapter.finalizeQualification === undefined
+    ) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        targetReleaseId: activeReleaseId,
+        outcome: "BLOCKED",
+        activeReleaseId,
+        reason: "trusted portable qualification authority is not configured",
+        observedAt: parsed.observedAt,
+      });
+    }
+    let artifact: Uint8Array;
+    let result: WindowsPortableQualificationResult | undefined;
+    let promotionAttempted = false;
+    try {
+      artifact = await this.#artifacts.read(baseCandidate);
+      if (
+        artifact.byteLength !== baseCandidate.artifact.byteLength ||
+        digestBytes(artifact) !== baseCandidate.artifact.fingerprint
+      ) {
+        throw new Error("qualification artifact bytes do not match the active candidate");
+      }
+      result = await this.#qualificationAuthority.qualify({
+        candidate: baseCandidate,
+        artifact,
+        source: parsed.source,
+        deadline: parsed.deadline,
+        cancellationPolicy: parsed.cancellationPolicy,
+      });
+      if (
+        windowsPortableQualificationTargetReference(result.candidate).reference !==
+          parsed.expectedTarget.reference ||
+        result.candidate.releaseId !== activeReleaseId
+      ) {
+        throw new Error("qualification authority changed immutable release identity");
+      }
+      const blockedReason = this.#gateReason(result.candidate);
+      if (blockedReason !== undefined) throw new Error(blockedReason);
+      promotionAttempted = true;
+      const outcome = await this.#adapter.promoteQualification({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        baseCandidate,
+        candidate: result.candidate,
+        evidence: result.evidence,
+        artifact,
+        observedAt: parsed.observedAt,
+      });
+      const receipt = await this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        candidate: result.candidate,
+        targetReleaseId: activeReleaseId,
+        outcome: outcome === "PROMOTED" ? "APPLIED" : "NOOP",
+        activeReleaseId,
+        observedAt: parsed.observedAt,
+      });
+      await this.#finalizeQualification(
+        parsed.operationId,
+        parsed.operationFingerprint,
+        requestFingerprint,
+        result.candidate,
+      );
+      return receipt;
+    } catch (error) {
+      if (promotionAttempted && result !== undefined && this.#adapter.reconcile !== undefined) {
+        let reconciliation;
+        try {
+          reconciliation = await this.#adapter.reconcile();
+        } catch (reconciliationError) {
+          throw new AggregateError(
+            [error, reconciliationError],
+            "qualification mutation finality could not be reconciled",
+            { cause: reconciliationError },
+          );
+        }
+        if (
+          reconciliation.status === "RECOVERED" &&
+          reconciliation.operation?.operationId === parsed.operationId &&
+          reconciliation.operation.operationFingerprint === parsed.operationFingerprint &&
+          reconciliation.operation.requestFingerprint === requestFingerprint &&
+          reconciliation.candidate !== undefined &&
+          canonicalJson(reconciliation.candidate) === canonicalJson(result.candidate)
+        ) {
+          const reconciledEntries = await this.#journal.read();
+          const existingReceipt = this.#replayedOperation(
+            reconciledEntries,
+            parsed.operationId,
+            parsed.operationFingerprint,
+            requestFingerprint,
+          );
+          const receipt =
+            existingReceipt ??
+            (await this.#append({
+              operationId: parsed.operationId,
+              operationFingerprint: parsed.operationFingerprint,
+              requestFingerprint,
+              action: "QUALIFY",
+              candidate: result.candidate,
+              targetReleaseId: activeReleaseId,
+              outcome: "APPLIED",
+              activeReleaseId,
+              observedAt: parsed.observedAt,
+            }));
+          if (receipt.action !== "QUALIFY" || receipt.outcome !== "APPLIED") {
+            throw new Error("reconciled qualification conflicts with its terminal Receipt", {
+              cause: error,
+            });
+          }
+          await this.#finalizeQualification(
+            parsed.operationId,
+            parsed.operationFingerprint,
+            requestFingerprint,
+            result.candidate,
+          );
+          return receipt;
+        }
+        if (reconciliation.status !== "NONE") {
+          throw new Error("qualification mutation reconciled to an unexpected operation", {
+            cause: error,
+          });
+        }
+      }
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        requestFingerprint,
+        action: "QUALIFY",
+        targetReleaseId: activeReleaseId,
+        outcome: "FAILED",
+        activeReleaseId,
+        reason: safeFailureReason(error, "portable qualification failed closed"),
+        observedAt: parsed.observedAt,
+      });
+    }
   }
 
   async #applyParsed(parsed: z.infer<typeof updateApplyRequestSchema>): Promise<UpdateReceipt> {
@@ -630,9 +909,65 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
-    const candidate = (await this.#history()).find(
+    const historyCandidate = (await this.#history()).find(
       (entry) => entry.releaseId === parsed.targetReleaseId,
     );
+    let candidate = historyCandidate;
+    const previousActiveProof = entries
+      .filter(
+        (entry) =>
+          entry.receipt.action === "APPLY" &&
+          entry.receipt.outcome === "APPLIED" &&
+          entry.receipt.previousReleaseId === parsed.targetReleaseId,
+      )
+      .at(-1);
+    const qualifiedFallbackCandidate =
+      previousActiveProof === undefined
+        ? undefined
+        : entries
+            .filter(
+              (entry) =>
+                entry.sequence < previousActiveProof.sequence &&
+                entry.receipt.action === "QUALIFY" &&
+                entry.receipt.outcome === "APPLIED" &&
+                entry.candidate?.releaseId === parsed.targetReleaseId,
+            )
+            .at(-1)?.candidate;
+    const expectedInstalledCandidate = historyCandidate ?? qualifiedFallbackCandidate;
+    if (
+      expectedInstalledCandidate !== undefined &&
+      this.#adapter.installedCandidate !== undefined
+    ) {
+      try {
+        const installed = await this.#adapter.installedCandidate({
+          releaseId: parsed.targetReleaseId,
+        });
+        if (installed !== undefined) {
+          const verifiedCandidate = releaseCandidateSchema.parse(installed);
+          if (verifiedCandidate.releaseId !== parsed.targetReleaseId) {
+            throw new Error("installed rollback candidate identity does not match the target");
+          }
+          if (canonicalJson(verifiedCandidate) !== canonicalJson(expectedInstalledCandidate)) {
+            throw new Error("installed rollback candidate no longer matches its journal identity");
+          }
+          candidate = verifiedCandidate;
+        } else {
+          throw new Error("journaled rollback candidate is no longer installed");
+        }
+      } catch (error) {
+        return this.#append({
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          action: "ROLLBACK",
+          targetReleaseId: parsed.targetReleaseId,
+          outcome: "FAILED",
+          previousReleaseId: currentReleaseId,
+          activeReleaseId: currentReleaseId,
+          reason: safeFailureReason(error, "installed rollback candidate could not be verified"),
+          observedAt: parsed.observedAt,
+        });
+      }
+    }
     const qualificationReason = candidate === undefined ? undefined : this.#gateReason(candidate);
     if (candidate === undefined || qualificationReason !== undefined) {
       return this.#append({
@@ -811,10 +1146,77 @@ export class FileUpdateManager implements UpdateManager {
     return [...candidates.values()];
   }
 
+  async #finalizeQualification(
+    operationId: UpdateQualificationRequest["operationId"],
+    operationFingerprint: Fingerprint,
+    requestFingerprint: Fingerprint,
+    candidate: ReleaseCandidate,
+  ): Promise<void> {
+    if (this.#adapter.finalizeQualification === undefined) {
+      throw new Error("qualification adapter cannot finalize its durable intent");
+    }
+    await this.#adapter.finalizeQualification({
+      operationId,
+      operationFingerprint,
+      requestFingerprint,
+      candidate,
+    });
+  }
+
   async #reconcile(): Promise<readonly UpdateReceipt[]> {
     const reconciliation = await this.#adapter.reconcile?.();
     if (reconciliation === undefined || reconciliation.status === "NONE") return [];
     const entries = await this.#journal.read();
+    if (reconciliation.operation !== undefined) {
+      const existing = entries.find(
+        (entry) => entry.operationId === reconciliation.operation?.operationId,
+      );
+      if (existing !== undefined) {
+        if (
+          existing.operationFingerprint !== reconciliation.operation.operationFingerprint ||
+          existing.requestFingerprint !== reconciliation.operation.requestFingerprint
+        ) {
+          throw new Error("reconciled qualification operation conflicts with update journal");
+        }
+        if (
+          existing.receipt.action !== "QUALIFY" ||
+          existing.receipt.outcome !== "APPLIED" ||
+          existing.candidate === undefined ||
+          reconciliation.candidate === undefined ||
+          canonicalJson(existing.candidate) !== canonicalJson(reconciliation.candidate)
+        ) {
+          throw new Error("reconciled qualification conflicts with its terminal Receipt");
+        }
+        await this.#finalizeQualification(
+          reconciliation.operation.operationId,
+          reconciliation.operation.operationFingerprint,
+          reconciliation.operation.requestFingerprint,
+          reconciliation.candidate,
+        );
+        return [];
+      }
+      const receipt = await this.#append({
+        operationId: reconciliation.operation.operationId,
+        operationFingerprint: reconciliation.operation.operationFingerprint,
+        requestFingerprint: reconciliation.operation.requestFingerprint,
+        action: reconciliation.operation.action,
+        candidate: reconciliation.candidate,
+        targetReleaseId: reconciliation.candidate?.releaseId,
+        outcome: "APPLIED",
+        activeReleaseId: reconciliation.activeReleaseId,
+        observedAt: this.#now(),
+      });
+      if (reconciliation.candidate === undefined) {
+        throw new Error("reconciled qualification did not return its candidate");
+      }
+      await this.#finalizeQualification(
+        reconciliation.operation.operationId,
+        reconciliation.operation.operationFingerprint,
+        reconciliation.operation.requestFingerprint,
+        reconciliation.candidate,
+      );
+      return [receipt];
+    }
     if (
       reconciliation.status === "RECOVERED" &&
       reconciliation.candidate !== undefined &&
@@ -909,6 +1311,7 @@ export class FileUpdateManager implements UpdateManager {
   async #append(input: {
     readonly operationId: UpdateReceipt["operationId"];
     readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint?: Fingerprint | undefined;
     readonly action: UpdateReceipt["action"];
     readonly candidate?: ReleaseCandidate | undefined;
     readonly targetReleaseId?: DistributionReleaseId | undefined;
@@ -939,11 +1342,15 @@ export class FileUpdateManager implements UpdateManager {
       sequence: entries.length + 1,
       operationId: input.operationId,
       operationFingerprint: input.operationFingerprint,
-      requestFingerprint: digestOf({
-        action: input.action,
-        ...(input.candidate === undefined ? {} : { candidate: input.candidate }),
-        ...(input.targetReleaseId === undefined ? {} : { targetReleaseId: input.targetReleaseId }),
-      }),
+      requestFingerprint:
+        input.requestFingerprint ??
+        digestOf({
+          action: input.action,
+          ...(input.candidate === undefined ? {} : { candidate: input.candidate }),
+          ...(input.targetReleaseId === undefined
+            ? {}
+            : { targetReleaseId: input.targetReleaseId }),
+        }),
       action: input.action,
       ...(input.candidate === undefined ? {} : { candidate: input.candidate }),
       ...(input.targetReleaseId === undefined ? {} : { targetReleaseId: input.targetReleaseId }),

@@ -115,6 +115,10 @@ export interface FileWindowsPortableReleaseAdapterOptions {
   readonly beforeQualificationIntentCleared?: () => Promise<void>;
 }
 
+export function windowsPortableUpdateManagerStateRoot(installationRoot: string): string {
+  return join(resolve(installationRoot), ".hpi-update", "manager");
+}
+
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

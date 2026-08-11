@@ -12,7 +12,12 @@ import {
   HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
   createPortableBundle,
   releaseCandidateSchema,
+  windowsPortableQualificationRequestFingerprint,
+  windowsPortableQualificationTargetReference,
 } from "@hunter-pi/updater";
+import { resolveHpiPaths } from "@hunter-pi/pi-host";
+
+import { createDefaultUpdateManager } from "../apps/cli/src/cli.js";
 
 import { runWindowsPortablePromotion } from "../scripts/promote-windows-portable.mjs";
 
@@ -194,5 +199,44 @@ describe("Task 11 portable qualification operator script", () => {
     expect(replay).toMatchObject({ action: "QUALIFY", outcome: "NOOP" });
     expect(replay.operationId).not.toBe(first.operationId);
     expect(runGh).toHaveBeenCalledTimes(2);
+
+    const paths = resolveHpiPaths({
+      env: { HUNTER_PI_HOME: join(root, "profile") },
+      homeDirectory: root,
+    });
+    const cliManager = await createDefaultUpdateManager(
+      {
+        environment: { HUNTER_PI_PORTABLE_ROOT: portableRoot },
+        platform: "win32",
+        now: () => "2026-08-11T12:33:00.000Z",
+      },
+      { paths },
+    );
+    expect(cliManager).toBeDefined();
+    if (cliManager === undefined) throw new Error("portable CLI manager was not created");
+    const replayPayload = {
+      expectedTarget: windowsPortableQualificationTargetReference(candidate),
+      source: {
+        kind: "GITHUB_ACTIONS_RUN" as const,
+        repository: "hunterzheng1/hunter-pi" as const,
+        runId,
+      },
+      deadline: "2026-08-11T12:41:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED" as const, timeoutMs: 120_000 },
+    };
+    const replayFingerprint = windowsPortableQualificationRequestFingerprint(replayPayload);
+    const replayOperationId = `op_update-qualify-${String(runId)}-${replayFingerprint.slice(
+      "sha256:".length,
+      "sha256:".length + 16,
+    )}` as const;
+    await expect(
+      cliManager.qualify({
+        schemaVersion: "hpi-update-qualification.v1",
+        operationId: replayOperationId,
+        operationFingerprint: replayFingerprint,
+        ...replayPayload,
+        observedAt: "2026-08-11T12:31:00.000Z",
+      }),
+    ).resolves.toEqual(first);
   });
 });

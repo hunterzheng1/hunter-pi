@@ -97,7 +97,7 @@ export async function runWindowsPortablePromotion(arguments_, dependencies = {})
     healthCheck: () => Promise.resolve({ status: "PASS" }),
   });
   const manager = new updater.FileUpdateManager({
-    stateRoot: resolve(installationRoot, ".hpi-update", "qualification-manager"),
+    stateRoot: updater.windowsPortableUpdateManagerStateRoot(installationRoot),
     channel: "PREVIEW",
     adapter,
     artifacts: { read: () => readPhysicalFile(artifactPath) },

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +19,12 @@ import { resolveHpiPaths } from "@hunter-pi/pi-host";
 
 import { createDefaultUpdateManager } from "../apps/cli/src/cli.js";
 
-import { runWindowsPortablePromotion } from "../scripts/promote-windows-portable.mjs";
+import {
+  qualificationTimeoutMsForArtifactByteLength,
+  qualificationUploadTreeByteLength,
+  qualificationUploadTreeEntryKind,
+  runWindowsPortablePromotion,
+} from "../scripts/promote-windows-portable.mjs";
 
 import {
   createTemporaryTestDirectory,
@@ -33,6 +38,79 @@ afterEach(async () => {
 });
 
 describe("Task 11 portable qualification operator script", () => {
+  it("uses one finite transfer-aware budget for the hosted portable artifact", () => {
+    expect(qualificationTimeoutMsForArtifactByteLength(1)).toBe(180_000);
+    expect(qualificationTimeoutMsForArtifactByteLength(377_795_154)).toBe(421_000);
+    expect(qualificationTimeoutMsForArtifactByteLength(512 * 1024 * 1024)).toBe(480_000);
+  });
+
+  it("fails closed for unsafe or out-of-budget hosted upload trees", async () => {
+    const emptyRoot = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-empty-upload-tree-",
+    );
+    roots.push(emptyRoot);
+    await expect(qualificationUploadTreeByteLength(emptyRoot)).rejects.toThrow("empty");
+
+    const boundedRoot = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-bounded-upload-tree-",
+    );
+    roots.push(boundedRoot);
+    await Promise.all([
+      writeFile(join(boundedRoot, "first.bin"), Buffer.alloc(2)),
+      writeFile(join(boundedRoot, "second.bin"), Buffer.alloc(2)),
+    ]);
+    await expect(
+      qualificationUploadTreeByteLength(boundedRoot, { maximumEntries: 1 }),
+    ).rejects.toThrow("too many entries");
+    await expect(
+      qualificationUploadTreeByteLength(boundedRoot, { maximumBytes: 3 }),
+    ).rejects.toThrow("too large");
+    if (process.platform === "win32") {
+      const caseVariantRoot = `${boundedRoot.slice(0, 1).toLowerCase()}${boundedRoot.slice(1)}`;
+      await expect(qualificationUploadTreeByteLength(caseVariantRoot)).resolves.toBe(4);
+    }
+
+    const outsideRoot = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-upload-tree-outside-",
+    );
+    const linkContainer = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-upload-tree-links-",
+    );
+    roots.push(linkContainer, outsideRoot);
+    const redirectedRoot = join(linkContainer, "redirected-root");
+    await symlink(outsideRoot, redirectedRoot, process.platform === "win32" ? "junction" : "dir");
+    await expect(qualificationUploadTreeByteLength(redirectedRoot)).rejects.toThrow(
+      "physical directory",
+    );
+
+    const nestedLinkRoot = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-upload-tree-nested-link-",
+    );
+    roots.push(nestedLinkRoot);
+    await writeFile(join(nestedLinkRoot, "payload.bin"), "payload");
+    await symlink(
+      outsideRoot,
+      join(nestedLinkRoot, "linked-directory"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(qualificationUploadTreeByteLength(nestedLinkRoot)).rejects.toThrow(
+      "contains a link",
+    );
+
+    expect(() =>
+      qualificationUploadTreeEntryKind({
+        isSymbolicLink: () => false,
+        isDirectory: () => false,
+        isFile: () => false,
+      }),
+    ).toThrow("non-file entry");
+  });
+
   it("fails closed without exposing a private installation path or stack", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
@@ -134,7 +212,14 @@ describe("Task 11 portable qualification operator script", () => {
       "utf8",
     );
     await writeFile(join(portableRoot, "update.bundle.tgz"), artifact);
-    const runGh = vi.fn(async (arguments_: readonly string[]) => {
+    const hostedUploadShape = await open(join(portableRoot, "hosted-upload-shape.bin"), "w");
+    try {
+      await hostedUploadShape.truncate(200 * 1024 * 1024);
+    } finally {
+      await hostedUploadShape.close();
+    }
+    const runGh = vi.fn(async (arguments_: readonly string[], timeoutMs: number) => {
+      void timeoutMs;
       if (arguments_[1] === "view") {
         return {
           exitCode: 0,
@@ -199,6 +284,12 @@ describe("Task 11 portable qualification operator script", () => {
     expect(replay).toMatchObject({ action: "QUALIFY", outcome: "NOOP" });
     expect(replay.operationId).not.toBe(first.operationId);
     expect(runGh).toHaveBeenCalledTimes(2);
+    const observedTimeouts = runGh.mock.calls.map((call) => call[1]);
+    expect(observedTimeouts).toHaveLength(2);
+    const observedTimeout = observedTimeouts[0];
+    if (observedTimeout === undefined) throw new Error("qualification timeout was not observed");
+    expect(observedTimeout).toBeGreaterThanOrEqual(260_000);
+    expect(observedTimeouts[1]).toBe(observedTimeout);
 
     const paths = resolveHpiPaths({
       env: { HUNTER_PI_HOME: join(root, "profile") },
@@ -222,7 +313,10 @@ describe("Task 11 portable qualification operator script", () => {
         runId,
       },
       deadline: "2026-08-11T12:41:00.000Z",
-      cancellationPolicy: { mode: "FAIL_CLOSED" as const, timeoutMs: 120_000 },
+      cancellationPolicy: {
+        mode: "FAIL_CLOSED" as const,
+        timeoutMs: observedTimeout,
+      },
     };
     const replayFingerprint = windowsPortableQualificationRequestFingerprint(replayPayload);
     const replayOperationId = `op_update-qualify-${String(runId)}-${replayFingerprint.slice(

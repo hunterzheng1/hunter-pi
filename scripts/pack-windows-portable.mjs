@@ -11,6 +11,12 @@ import { runNpm } from "./npm-process.mjs";
 import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
+const windowsPortableNodeVersion = (
+  await readFile(join(repositoryRoot, ".node-version"), "utf8")
+).trim();
+if (!/^\d+\.\d+\.\d+$/u.test(windowsPortableNodeVersion)) {
+  throw new Error("The pinned Windows portable Node version is invalid.");
+}
 const outputArgumentIndex = process.argv.indexOf("--output");
 if (outputArgumentIndex >= 0 && process.argv[outputArgumentIndex + 1] === undefined) {
   throw new Error("--output requires one directory name under .artifacts.");
@@ -33,8 +39,10 @@ if (
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("The Hunter Pi portable package is currently qualified only for Windows x64.");
 }
-if (!process.versions.node.startsWith("24.")) {
-  throw new Error(`The portable package requires Node 24; found ${process.versions.node}.`);
+if (process.versions.node !== windowsPortableNodeVersion) {
+  throw new Error(
+    `The portable package requires Node ${windowsPortableNodeVersion}; found ${process.versions.node}.`,
+  );
 }
 
 /** @param {Uint8Array} value */

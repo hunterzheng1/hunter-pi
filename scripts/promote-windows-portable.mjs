@@ -1,5 +1,5 @@
-import { lstat, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const failure = {
@@ -7,6 +7,98 @@ const failure = {
   status: "BLOCKED",
   reason: "portable qualification could not be completed",
 };
+
+const minimumQualificationTimeoutMs = 3 * 60 * 1000;
+const maximumQualificationTimeoutMs = 8 * 60 * 1000;
+const qualificationSetupAllowanceMs = 60 * 1000;
+const qualificationTransferBytesPerSecond = 1024 * 1024;
+const maximumQualificationTreeEntries = 100_000;
+const maximumQualificationUploadBytes = 2 * 1024 * 1024 * 1024;
+
+/** @param {number} artifactByteLength */
+export function qualificationTimeoutMsForArtifactByteLength(artifactByteLength) {
+  if (!Number.isSafeInteger(artifactByteLength) || artifactByteLength <= 0) {
+    throw new Error("portable qualification artifact length is invalid");
+  }
+  const transferAllowanceMs =
+    Math.ceil(artifactByteLength / qualificationTransferBytesPerSecond) * 1000;
+  return Math.min(
+    maximumQualificationTimeoutMs,
+    Math.max(minimumQualificationTimeoutMs, qualificationSetupAllowanceMs + transferAllowanceMs),
+  );
+}
+
+/**
+ * @param {{isSymbolicLink(): boolean, isDirectory(): boolean, isFile(): boolean}} status
+ */
+export function qualificationUploadTreeEntryKind(status) {
+  if (status.isSymbolicLink()) {
+    throw new Error("portable qualification upload tree contains a link");
+  }
+  if (status.isDirectory()) return "DIRECTORY";
+  if (status.isFile()) return "FILE";
+  throw new Error("portable qualification upload tree contains a non-file entry");
+}
+
+/**
+ * @param {string} root
+ * @param {{maximumEntries?: number, maximumBytes?: number}} [options]
+ */
+export async function qualificationUploadTreeByteLength(root, options = {}) {
+  const maximumEntries = options.maximumEntries ?? maximumQualificationTreeEntries;
+  const maximumBytes = options.maximumBytes ?? maximumQualificationUploadBytes;
+  if (
+    !Number.isSafeInteger(maximumEntries) ||
+    maximumEntries <= 0 ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes <= 0
+  ) {
+    throw new Error("portable qualification upload-tree limits are invalid");
+  }
+  const resolvedRoot = resolve(root);
+  const rootStatus = await lstat(resolvedRoot);
+  if (!rootStatus.isDirectory() || rootStatus.isSymbolicLink()) {
+    throw new Error("portable qualification root is not one physical directory");
+  }
+  if (relative(resolvedRoot, resolve(await realpath(resolvedRoot))).length !== 0) {
+    throw new Error("portable qualification root is redirected");
+  }
+  let entryCount = 0;
+  let totalBytes = 0;
+  /** @param {string} directory */
+  async function walk(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      entryCount += 1;
+      if (entryCount > maximumEntries) {
+        throw new Error("portable qualification upload tree has too many entries");
+      }
+      const path = resolve(directory, entry.name);
+      const relativePath = relative(resolvedRoot, path);
+      if (
+        relativePath.length === 0 ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${sep}`) ||
+        isAbsolute(relativePath)
+      ) {
+        throw new Error("portable qualification upload tree escaped its root");
+      }
+      const status = await lstat(path);
+      const kind = qualificationUploadTreeEntryKind(status);
+      if (kind === "DIRECTORY") {
+        await walk(path);
+        continue;
+      }
+      totalBytes += status.size;
+      if (!Number.isSafeInteger(totalBytes) || totalBytes > maximumBytes) {
+        throw new Error("portable qualification upload tree is too large");
+      }
+    }
+  }
+  await walk(resolvedRoot);
+  if (totalBytes <= 0) throw new Error("portable qualification upload tree is empty");
+  return totalBytes;
+}
 
 /** @param {readonly string[]} arguments_ @param {string} name */
 function requiredArgument(arguments_, name) {
@@ -60,12 +152,13 @@ export async function runWindowsPortablePromotion(arguments_, dependencies = {})
     JSON.parse(Buffer.from(candidateBytes).toString("utf8")),
   );
   const artifactPath = resolve(installationRoot, "update.bundle.tgz");
+  const hostedArtifactByteLength = await qualificationUploadTreeByteLength(installationRoot);
   const now = (dependencies.now ?? (() => new Date()))();
   const observedAt = now.toISOString();
   const deadline = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
   const cancellationPolicy = /** @type {const} */ ({
     mode: "FAIL_CLOSED",
-    timeoutMs: 120_000,
+    timeoutMs: qualificationTimeoutMsForArtifactByteLength(hostedArtifactByteLength),
   });
   const source = updater.githubActionsQualificationSourceSchema.parse({
     kind: "GITHUB_ACTIONS_RUN",

@@ -24,7 +24,7 @@ import {
 } from "./contracts.js";
 import { decodePortableBundle } from "./portable-bundle.js";
 import { windowsPortableQualificationCandidateIdentity } from "./qualification-identity.js";
-import { runQualificationCliProcess } from "./gh-cli-process.js";
+import * as qualificationCliProcess from "./gh-cli-process.js";
 
 export const HPI_GITHUB_REPOSITORY = "hunterzheng1/hunter-pi" as const;
 export const HPI_WINDOWS_PORTABLE_ARTIFACT_NAME = "hpi-windows-x64-portable" as const;
@@ -147,10 +147,6 @@ const ghRunViewSchema = z.object({
   workflowName: z.string(),
 });
 
-function runGhCli(arguments_: readonly string[], timeoutMs: number): Promise<GhCliCommandResult> {
-  return runQualificationCliProcess("gh", arguments_, timeoutMs);
-}
-
 async function readContainedPhysicalFile(root: string, filename: string): Promise<Uint8Array> {
   const target = resolve(root, filename);
   const relativeTarget = relative(resolve(root), target);
@@ -173,12 +169,12 @@ async function readContainedPhysicalFile(root: string, filename: string): Promis
 
 export class GhCliGitHubActionsQualificationObserver {
   readonly #temporaryParent: string;
-  readonly #runGh: NonNullable<GhCliGitHubActionsQualificationObserverOptions["runGh"]>;
+  readonly #runGh: GhCliGitHubActionsQualificationObserverOptions["runGh"];
   readonly #now: () => number;
 
   public constructor(options: GhCliGitHubActionsQualificationObserverOptions = {}) {
     this.#temporaryParent = resolve(options.temporaryParent ?? tmpdir());
-    this.#runGh = options.runGh ?? runGhCli;
+    this.#runGh = options.runGh;
     this.#now = options.now ?? Date.now;
   }
 
@@ -201,7 +197,17 @@ export class GhCliGitHubActionsQualificationObserver {
     };
     let downloadRoot: string | undefined;
     try {
-      const view = await this.#runGh(
+      let runGh = this.#runGh;
+      if (runGh === undefined) {
+        const executable = await qualificationCliProcess.resolveQualificationCliExecutable(
+          process.platform === "win32" ? "gh.exe" : "gh",
+          remainingTimeoutMs(),
+        );
+        requireUnexpiredObservation();
+        runGh = (arguments_, timeoutMs) =>
+          qualificationCliProcess.runQualificationCliProcess(executable, arguments_, timeoutMs);
+      }
+      const view = await runGh(
         [
           "run",
           "view",
@@ -234,7 +240,7 @@ export class GhCliGitHubActionsQualificationObserver {
         })),
       });
       downloadRoot = await mkdtemp(join(this.#temporaryParent, "hunter-pi-gh-qualification-"));
-      const download = await this.#runGh(
+      const download = await runGh(
         [
           "run",
           "download",

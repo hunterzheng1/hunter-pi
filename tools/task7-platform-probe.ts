@@ -130,7 +130,7 @@ async function requireSuccessfulTextCommand(
 export async function assertTask7WorktreeClean(repositoryRoot: string): Promise<void> {
   const status = await requireSuccessfulTextCommand(
     "git",
-    ["status", "--porcelain=v1", "--untracked-files=all"],
+    ["-c", "core.excludesFile=/dev/null", "status", "--porcelain=v1", "--untracked-files=all"],
     repositoryRoot,
   );
   if (status.length > 0) throw new Error("Task 7 entire worktree is not clean");

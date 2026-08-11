@@ -1,3 +1,4 @@
+import { win32 } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { createLocalManagedProcessDriver } from "@hunter-pi/execution";
@@ -11,6 +12,12 @@ interface QualificationCliProcessOptions {
   readonly monotonicNow?: () => number;
 }
 
+interface QualificationCliExecutableResolutionOptions {
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly platform?: NodeJS.Platform;
+  readonly runProcess?: typeof runQualificationCliProcess;
+}
+
 function inheritedEnvironment(): Record<string, string> {
   return Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => {
@@ -21,6 +28,60 @@ function inheritedEnvironment(): Record<string, string> {
 
 function failedResult(): GhCliCommandResult {
   return { exitCode: null, stdout: "", stderr: "" };
+}
+
+function windowsEnvironmentValue(
+  environment: Readonly<Record<string, string>>,
+  name: string,
+): string | undefined {
+  const expected = name.toUpperCase();
+  return Object.entries(environment).find(([key]) => key.toUpperCase() === expected)?.[1];
+}
+
+/** @internal This module is intentionally absent from the updater package barrel. */
+export async function resolveQualificationCliExecutable(
+  executable: string,
+  timeoutMs: number,
+  options: QualificationCliExecutableResolutionOptions = {},
+): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return executable;
+  if (
+    executable.length === 0 ||
+    executable.includes("\u0000") ||
+    win32.basename(executable) !== executable ||
+    ![".com", ".exe"].includes(win32.extname(executable).toLowerCase())
+  ) {
+    throw new Error("qualification executable is not one unqualified native filename");
+  }
+  const environment = options.environment ?? inheritedEnvironment();
+  const systemRoot =
+    windowsEnvironmentValue(environment, "SystemRoot") ??
+    windowsEnvironmentValue(environment, "WINDIR");
+  if (systemRoot === undefined || !win32.isAbsolute(systemRoot)) {
+    throw new Error("qualification executable resolver is unavailable");
+  }
+  const result = await (options.runProcess ?? runQualificationCliProcess)(
+    win32.join(systemRoot, "System32", "where.exe"),
+    [`$PATH:${executable}`],
+    timeoutMs,
+  );
+  if (result.exitCode !== 0 || result.stderr.trim().length > 0) {
+    throw new Error("qualification executable is unavailable");
+  }
+  const candidates = result.stdout
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const selected = candidates[0];
+  if (
+    selected === undefined ||
+    !win32.isAbsolute(selected) ||
+    win32.basename(selected).toLowerCase() !== executable.toLowerCase()
+  ) {
+    throw new Error("qualification executable resolver returned an invalid target");
+  }
+  return win32.normalize(selected);
 }
 
 /** @internal This module is intentionally absent from the updater package barrel. */

@@ -10,6 +10,7 @@
 - The Windows adapter installs side-by-side under `versions/<release-id>/`, publishes an atomic `.hpi-update/active.json` pointer, and keeps activation intent, migration, and append-only history available for recovery.
 - `UpdateManager.check` is read-only and verifies the candidate schema, channel/qualification policy, artifact length, artifact digest, engine identity, and Pi self-update policy before activation.
 - `apply`, `rollback`, and `reconcile` use staged verification, a bounded health probe, durable migration markers, post-activation identity verification, and fail-closed recovery. Failed history is retained; it is never rewritten as success.
+- A CI-qualified portable directory has an explicit metadata-only promotion step. The trusted `PASS` candidate must preserve every immutable release field and both artifact copies must retain their exact digest and length. This allows the qualified initial installation to be re-verified as a first rollback target before an update journal exists; unqualified or damaged initial versions remain ineligible.
 - The supported portable entry point is the root `hpi.cmd`/launcher. It selects the active version and exposes `hpi update status|check|apply|rollback --json` without echoing local paths or sensitive input.
 - The builder refuses a dirty source tree, emits source/runtime/engine/license/provenance identities, and runs an isolated launcher/version/update-status probe before accepting the output directory.
 
@@ -28,6 +29,8 @@ npm run format:check
 npm run package-smoke
 npm run clean-install-smoke
 npm run pack:windows-portable
+# After exact hosted CI and candidate qualification:
+npm run promote:windows-portable:compiled -- --root <portable-directory> --candidate <qualified-candidate.json>
 ```
 
 The GitHub Actions quality job reuses its existing locked install and build, then runs the compiled Windows packer only on Windows and uploads the exact directory as a 14-day artifact. The portable status path uses a lightweight active-pointer/artifact check when no recovery transaction is pending; activation, health, and rollback retain full bundle/tree verification. Ubuntu remains a required quality and Evidence platform; it does not claim to produce a Windows artifact.

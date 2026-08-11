@@ -630,9 +630,34 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
-    const candidate = (await this.#history()).find(
+    let candidate = (await this.#history()).find(
       (entry) => entry.releaseId === parsed.targetReleaseId,
     );
+    if (candidate === undefined && this.#adapter.installedCandidate !== undefined) {
+      try {
+        const installed = await this.#adapter.installedCandidate({
+          releaseId: parsed.targetReleaseId,
+        });
+        if (installed !== undefined) {
+          candidate = releaseCandidateSchema.parse(installed);
+          if (candidate.releaseId !== parsed.targetReleaseId) {
+            throw new Error("installed rollback candidate identity does not match the target");
+          }
+        }
+      } catch (error) {
+        return this.#append({
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          action: "ROLLBACK",
+          targetReleaseId: parsed.targetReleaseId,
+          outcome: "FAILED",
+          previousReleaseId: currentReleaseId,
+          activeReleaseId: currentReleaseId,
+          reason: safeFailureReason(error, "installed rollback candidate could not be verified"),
+          observedAt: parsed.observedAt,
+        });
+      }
+    }
     const qualificationReason = candidate === undefined ? undefined : this.#gateReason(candidate);
     if (candidate === undefined || qualificationReason !== undefined) {
       return this.#append({

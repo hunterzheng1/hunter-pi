@@ -21,6 +21,7 @@ import {
   fingerprintSchema,
   timestampSchema,
   type DistributionReleaseId,
+  type Fingerprint,
 } from "@hunter-pi/domain";
 import {
   canonicalJson,
@@ -85,6 +86,23 @@ export interface FileWindowsPortableReleaseAdapterOptions {
   readonly afterActivePointerPublished?: () => Promise<void>;
 }
 
+export interface WindowsPortableQualificationPromotionOptions {
+  readonly installationRoot: string;
+  readonly candidate: ReleaseCandidate;
+  readonly qualificationVerifierFingerprint: Fingerprint;
+}
+
+export const windowsPortableQualificationPromotionReceiptSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-portable-qualification-promotion.v1"),
+  outcome: z.enum(["PROMOTED", "NOOP"]),
+  releaseId: distributionReleaseIdSchema,
+  artifactFingerprint: fingerprintSchema,
+  candidateFingerprint: fingerprintSchema,
+});
+export type WindowsPortableQualificationPromotionReceipt = z.infer<
+  typeof windowsPortableQualificationPromotionReceiptSchema
+>;
+
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
@@ -103,6 +121,11 @@ function comparablePath(value: string): string {
 async function canonicalDirectory(path: string): Promise<string> {
   const absolute = resolve(path);
   await mkdir(absolute, { recursive: true });
+  return existingCanonicalDirectory(absolute);
+}
+
+async function existingCanonicalDirectory(path: string): Promise<string> {
+  const absolute = resolve(path);
   const status = await lstat(absolute);
   const canonical = await realpath(absolute);
   if (
@@ -113,6 +136,14 @@ async function canonicalDirectory(path: string): Promise<string> {
     throw new Error("portable update state contains a symbolic link or non-directory");
   }
   return canonical;
+}
+
+async function readPhysicalFile(path: string): Promise<Uint8Array> {
+  const status = await lstat(path);
+  if (!status.isFile() || status.isSymbolicLink()) {
+    throw new Error("portable qualification input is not a physical file");
+  }
+  return readFile(path);
 }
 
 async function readJsonIfPresent<T>(path: string, schema: z.ZodType<T>): Promise<T | undefined> {
@@ -154,6 +185,137 @@ function containedReleasePath(versionsRoot: string, releaseId: string): string {
     throw new Error("portable release id escaped the versions directory");
   }
   return target;
+}
+
+function qualificationNeutralCandidate(candidate: ReleaseCandidate): string {
+  return canonicalJson({
+    schemaVersion: candidate.schemaVersion,
+    releaseId: candidate.releaseId,
+    productVersion: candidate.productVersion,
+    channel: candidate.channel,
+    artifact: candidate.artifact,
+    engine: candidate.engine,
+    updatePolicy: candidate.updatePolicy,
+    licenses: candidate.licenses,
+  });
+}
+
+export async function promoteWindowsPortableQualification(
+  options: WindowsPortableQualificationPromotionOptions,
+): Promise<WindowsPortableQualificationPromotionReceipt> {
+  const candidate = releaseCandidateSchema.parse(options.candidate);
+  const qualificationVerifierFingerprint = fingerprintSchema.parse(
+    options.qualificationVerifierFingerprint,
+  );
+  if (
+    candidate.qualification.status !== "PASS" ||
+    candidate.qualification.verifierFingerprint !== qualificationVerifierFingerprint
+  ) {
+    throw new Error("portable qualification promotion requires a trusted PASS candidate");
+  }
+  const installationRoot = await existingCanonicalDirectory(options.installationRoot);
+  const stateRoot = await existingCanonicalDirectory(join(installationRoot, ".hpi-update"));
+  const versionsRoot = await existingCanonicalDirectory(join(installationRoot, "versions"));
+  const versionDirectory = await existingCanonicalDirectory(
+    containedReleasePath(versionsRoot, candidate.releaseId),
+  );
+  const rootCandidatePath = join(installationRoot, "portable-release-candidate.json");
+  const installedCandidatePath = join(versionDirectory, ".hpi-candidate.json");
+  const candidateFingerprint = sha256Fingerprint(canonicalJson(candidate));
+
+  return withDurableMutationLock(join(stateRoot, ".portable-mutation-lock"), async () => {
+    const rootCandidate = releaseCandidateSchema.parse(
+      JSON.parse(
+        Buffer.from(await readPhysicalFile(rootCandidatePath)).toString("utf8"),
+      ) as unknown,
+    );
+    const installedCandidate = releaseCandidateSchema.parse(
+      JSON.parse(
+        Buffer.from(await readPhysicalFile(installedCandidatePath)).toString("utf8"),
+      ) as unknown,
+    );
+    const expectedIdentity = qualificationNeutralCandidate(candidate);
+    if (
+      qualificationNeutralCandidate(rootCandidate) !== expectedIdentity ||
+      qualificationNeutralCandidate(installedCandidate) !== expectedIdentity
+    ) {
+      throw new Error("portable qualification candidate changes immutable release metadata");
+    }
+
+    for (const artifact of [
+      await readPhysicalFile(join(installationRoot, "update.bundle.tgz")),
+      await readPhysicalFile(join(versionDirectory, ".hpi-artifact")),
+    ]) {
+      if (
+        artifact.byteLength !== candidate.artifact.byteLength ||
+        sha256Fingerprint(artifact) !== candidate.artifact.fingerprint
+      ) {
+        throw new Error("portable qualification artifact does not match the release candidate");
+      }
+    }
+
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const verified = await adapter.installedCandidate({ releaseId: candidate.releaseId });
+    if (verified === undefined || qualificationNeutralCandidate(verified) !== expectedIdentity) {
+      throw new Error("portable qualification could not verify the installed release");
+    }
+
+    if (
+      canonicalJson(rootCandidate) === canonicalJson(candidate) &&
+      canonicalJson(installedCandidate) === canonicalJson(candidate)
+    ) {
+      return windowsPortableQualificationPromotionReceiptSchema.parse({
+        schemaVersion: "hpi-portable-qualification-promotion.v1",
+        outcome: "NOOP",
+        releaseId: candidate.releaseId,
+        artifactFingerprint: candidate.artifact.fingerprint,
+        candidateFingerprint,
+      });
+    }
+
+    await writeJsonAtomically(rootCandidatePath, candidate);
+    try {
+      await writeJsonAtomically(installedCandidatePath, candidate);
+      const promotedRoot = releaseCandidateSchema.parse(
+        JSON.parse(
+          Buffer.from(await readPhysicalFile(rootCandidatePath)).toString("utf8"),
+        ) as unknown,
+      );
+      const promotedInstalled = await adapter.installedCandidate({
+        releaseId: candidate.releaseId,
+      });
+      if (
+        canonicalJson(promotedRoot) !== canonicalJson(candidate) ||
+        promotedInstalled === undefined ||
+        canonicalJson(promotedInstalled) !== canonicalJson(candidate)
+      ) {
+        throw new Error("portable qualification promotion did not persist the exact candidate");
+      }
+    } catch (error) {
+      const restoration = await Promise.allSettled([
+        writeJsonAtomically(rootCandidatePath, rootCandidate),
+        writeJsonAtomically(installedCandidatePath, installedCandidate),
+      ]);
+      if (restoration.some((result) => result.status === "rejected")) {
+        throw new Error("portable qualification promotion and metadata restoration failed", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+
+    return windowsPortableQualificationPromotionReceiptSchema.parse({
+      schemaVersion: "hpi-portable-qualification-promotion.v1",
+      outcome: "PROMOTED",
+      releaseId: candidate.releaseId,
+      artifactFingerprint: candidate.artifact.fingerprint,
+      candidateFingerprint,
+    });
+  });
 }
 
 async function copyTree(source: string, destination: string): Promise<void> {
@@ -406,6 +568,18 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
   async current(): Promise<DistributionReleaseId | undefined> {
     await this.#ensureRoots();
     return (await this.#readActive({ verifyFiles: false }))?.releaseId;
+  }
+
+  async installedCandidate(release: StagedRelease): Promise<ReleaseCandidate | undefined> {
+    await this.#ensureRoots();
+    try {
+      const candidate = await this.#readCandidate(release.releaseId);
+      await this.#verifyRelease(candidate, candidate.artifact.fingerprint);
+      return candidate;
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      throw error;
+    }
   }
 
   async stage(candidateInput: ReleaseCandidate, artifact: Uint8Array): Promise<StagedRelease> {

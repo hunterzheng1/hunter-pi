@@ -280,6 +280,7 @@ export interface ReleaseCandidateCheck {
 
 export interface ReleaseAdapter {
   current(): Promise<DistributionReleaseId | undefined>;
+  installedCandidate?(release: StagedRelease): Promise<ReleaseCandidate | undefined>;
   stage(candidate: ReleaseCandidate, artifact: Uint8Array): Promise<StagedRelease>;
   healthCheck(
     release: StagedRelease,

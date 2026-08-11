@@ -10,6 +10,7 @@ import {
   FileWindowsPortableReleaseAdapter,
   createPortableBundle,
   decodePortableBundle,
+  promoteWindowsPortableQualification,
   releaseCandidateSchema,
   type ReleaseCandidate,
 } from "@hunter-pi/updater";
@@ -180,6 +181,175 @@ describe("Task 11 Windows portable release adapter", () => {
         expect.objectContaining({ releaseId: second.candidate.releaseId }),
       ]),
     );
+  });
+
+  it("rolls back to a qualified portable release installed before the update journal existed", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-initial-rollback-",
+    );
+    roots.push(root);
+    const initial = portableCandidate("release_task11-portable-initial");
+    const update = portableCandidate("release_task11-portable-update");
+    const artifacts = new Map([
+      [initial.candidate.releaseId, initial.artifact],
+      [update.candidate.releaseId, update.artifact],
+    ]);
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: join(root, "portable"),
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+
+    const installed = await adapter.stage(initial.candidate, initial.artifact);
+    await adapter.activate(installed);
+    const manager = managerFor(root, adapter, artifacts);
+    await expect(
+      manager.apply({
+        schemaVersion: "hpi-update-apply.v1",
+        operationId: "op_task11-portable-initial-update",
+        operationFingerprint: sha256Fingerprint("portable-initial-update"),
+        candidate: update.candidate,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({ outcome: "APPLIED", activeReleaseId: update.candidate.releaseId });
+
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-portable-initial-rollback",
+        operationFingerprint: sha256Fingerprint("portable-initial-rollback"),
+        targetReleaseId: initial.candidate.releaseId,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "APPLIED",
+      previousReleaseId: update.candidate.releaseId,
+      activeReleaseId: initial.candidate.releaseId,
+    });
+    await expect(manager.current()).resolves.toMatchObject({
+      releaseId: initial.candidate.releaseId,
+    });
+  });
+
+  it("promotes only qualification metadata before the first portable update and rollback", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-promotion-",
+    );
+    roots.push(root);
+    const portableRoot = join(root, "portable");
+    const initial = portableCandidate("release_task11-portable-promoted-initial");
+    const update = portableCandidate("release_task11-portable-promoted-update");
+    const unqualifiedInitial = releaseCandidateSchema.parse({
+      ...initial.candidate,
+      qualification: {
+        status: "NOT_PROVEN",
+        verifierFingerprint: fixtureFingerprint,
+        checks: [
+          {
+            name: "windows-portable-launch",
+            outcome: "NOT_PROVEN",
+            evidenceIds: [],
+            reason: "remote qualification is pending",
+          },
+        ],
+        qualifiedAt: fixtureTimestamp,
+      },
+    });
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const installed = await adapter.stage(unqualifiedInitial, initial.artifact);
+    await adapter.activate(installed);
+    await writeFile(
+      join(portableRoot, "portable-release-candidate.json"),
+      JSON.stringify(unqualifiedInitial),
+      "utf8",
+    );
+    await writeFile(join(portableRoot, "update.bundle.tgz"), initial.artifact);
+
+    const manager = managerFor(
+      root,
+      adapter,
+      new Map([
+        [initial.candidate.releaseId, initial.artifact],
+        [update.candidate.releaseId, update.artifact],
+      ]),
+    );
+    await manager.apply({
+      schemaVersion: "hpi-update-apply.v1",
+      operationId: "op_task11-portable-promoted-update",
+      operationFingerprint: sha256Fingerprint("portable-promoted-update"),
+      candidate: update.candidate,
+      observedAt: fixtureTimestamp,
+    });
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-portable-unqualified-initial-rollback",
+        operationFingerprint: sha256Fingerprint("portable-unqualified-initial-rollback"),
+        targetReleaseId: initial.candidate.releaseId,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "BLOCKED",
+      activeReleaseId: update.candidate.releaseId,
+    });
+
+    await expect(
+      promoteWindowsPortableQualification({
+        installationRoot: portableRoot,
+        candidate: initial.candidate,
+        qualificationVerifierFingerprint: fixtureFingerprint,
+      }),
+    ).resolves.toMatchObject({
+      schemaVersion: "hpi-portable-qualification-promotion.v1",
+      outcome: "PROMOTED",
+      releaseId: initial.candidate.releaseId,
+      artifactFingerprint: initial.candidate.artifact.fingerprint,
+    });
+    await expect(
+      readFile(
+        join(portableRoot, "versions", initial.candidate.releaseId, ".hpi-candidate.json"),
+        "utf8",
+      ).then((value) => releaseCandidateSchema.parse(JSON.parse(value) as unknown)),
+    ).resolves.toMatchObject({ qualification: { status: "PASS" } });
+    await expect(
+      promoteWindowsPortableQualification({
+        installationRoot: portableRoot,
+        candidate: initial.candidate,
+        qualificationVerifierFingerprint: fixtureFingerprint,
+      }),
+    ).resolves.toMatchObject({ outcome: "NOOP" });
+    const identityDrift = releaseCandidateSchema.parse({
+      ...initial.candidate,
+      licenses: initial.candidate.licenses.map((license) => ({
+        ...license,
+        version: "9.9.9",
+      })),
+    });
+    await expect(
+      promoteWindowsPortableQualification({
+        installationRoot: portableRoot,
+        candidate: identityDrift,
+        qualificationVerifierFingerprint: fixtureFingerprint,
+      }),
+    ).rejects.toThrow(/immutable release metadata/u);
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-portable-promoted-rollback",
+        operationFingerprint: sha256Fingerprint("portable-promoted-rollback"),
+        targetReleaseId: initial.candidate.releaseId,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "APPLIED",
+      activeReleaseId: initial.candidate.releaseId,
+    });
   });
 
   it("re-verifies rollback bytes and refuses a tampered known release", async () => {

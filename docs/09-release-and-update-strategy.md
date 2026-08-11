@@ -96,6 +96,8 @@ Provide a Windows x64 installer or portable artifact. The current Task 11 implem
 
 Task 11's portable artifact is intentionally unsigned `developer-preview` with `qualification=NOT_PROVEN`. It is suitable for bounded local evaluation of the Hunter-owned launcher/update path; it is not a Stable or publisher-qualified release. The supported update commands are `hpi update status --json`, `hpi update check`, `hpi update apply`, and `hpi update rollback`. The Windows CI job builds this artifact from the already completed quality build and retains it for 14 days; Ubuntu validates the provider-neutral and cross-platform contracts but does not emit a Windows package.
 
+After the exact artifact's required CI has passed, the release operator may run `npm run promote:windows-portable:compiled -- --root <portable-directory> --candidate <qualified-candidate.json>`. Promotion accepts only a `PASS` candidate from the built-in qualification verifier, requires every non-qualification field to match both packaged candidate copies exactly, re-verifies the root and installed artifact bytes, and changes only the two qualification metadata files. It never changes the bundle or executable payload. A promoted initial release may be used as the first rollback target even though it predates that user's append-only update journal, but only after the installed candidate and complete release tree pass the same qualification and integrity gates. Missing, unqualified, identity-drifted, or tampered initial releases fail closed.
+
 Windows ARM64, macOS, and Linux installers remain unclaimed until separately validated.
 
 ## Update behavior
@@ -132,6 +134,8 @@ Rollback success requires:
 - project configuration readability;
 - explicit disposition for newer sessions/plugins/state;
 - a rollback Receipt.
+
+The first rollback after a portable installation is not exempt from these rules. If the initial release has not been promoted with exact hosted Evidence, or its installed candidate/tree cannot be re-verified, rollback is blocked or fails while the current active release remains selected.
 
 ## Release evidence
 

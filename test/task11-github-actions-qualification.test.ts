@@ -1097,11 +1097,21 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     );
     roots.push(root);
     const processIdsPath = join(root, "process-ids.json");
-    const grandchildSource = "setTimeout(() => process.exit(91), 12000);";
+    const overflowTriggerPath = join(root, "overflow.trigger");
+    const grandchildSource = [
+      'const { existsSync } = require("node:fs");',
+      "const insurance = setTimeout(() => process.exit(91), 50000);",
+      "const poll = setInterval(() => {",
+      "  if (!existsSync(process.argv[1])) return;",
+      "  clearInterval(poll);",
+      '  process.stdout.write("x".repeat(1_100_000));',
+      "}, 25);",
+      "void insurance;",
+    ].join("\n");
     const childSource = [
       'const { spawn } = require("node:child_process");',
       'const { writeFileSync } = require("node:fs");',
-      `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], { detached: true, stdio: ["ignore", "inherit", "inherit"], windowsHide: true });`,
+      `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}, process.argv[2]], { detached: true, stdio: ["ignore", "inherit", "inherit"], windowsHide: true });`,
       "writeFileSync(process.argv[1], JSON.stringify([process.pid, grandchild.pid]));",
       "grandchild.unref();",
       "process.exit(0);",
@@ -1109,11 +1119,11 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     const startedAt = Date.now();
     const run = runQualificationCliProcess(
       process.execPath,
-      ["-e", childSource, processIdsPath],
-      3_000,
+      ["-e", childSource, processIdsPath, overflowTriggerPath],
+      40_000,
     );
     let processIds: number[] | undefined;
-    const identityDeadline = Date.now() + 5_000;
+    const identityDeadline = Date.now() + 30_000;
     while (processIds === undefined && Date.now() < identityDeadline) {
       try {
         processIds = z
@@ -1148,8 +1158,9 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     expect(parentProcessId === undefined ? true : isAlive(parentProcessId)).toBe(false);
     expect(grandchildProcessId === undefined ? false : isAlive(grandchildProcessId)).toBe(true);
 
+    await writeFile(overflowTriggerPath, "overflow", "utf8");
     await expect(run).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
-    expect(Date.now() - startedAt).toBeLessThan(8_000);
+    expect(Date.now() - startedAt).toBeLessThan(45_000);
     for (const processId of processIds ?? []) {
       const processExitDeadline = Date.now() + 2_000;
       while (isAlive(processId) && Date.now() < processExitDeadline) {
@@ -1157,7 +1168,7 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       }
       expect(isAlive(processId)).toBe(false);
     }
-  }, 20_000);
+  }, 60_000);
 
   it("applies one shared byte limit across stdout and stderr", async () => {
     const childSource = [

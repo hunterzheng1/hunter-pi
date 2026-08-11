@@ -179,7 +179,7 @@ describe("Task 11 portable qualification operator script", () => {
     };
 
     const first = await runWindowsPortablePromotion(
-      ["--root", portableRoot, "--run", String(runId)],
+      ["--root", portableRoot, "--run", `0${String(runId)}`],
       dependencies,
     );
     const replay = await runWindowsPortablePromotion(
@@ -188,6 +188,9 @@ describe("Task 11 portable qualification operator script", () => {
     );
 
     expect(first).toMatchObject({ action: "QUALIFY", outcome: "APPLIED" });
+    expect(first.operationId).toMatch(
+      new RegExp(`^op_update-qualify-${String(runId)}-[a-f0-9]{16}$`, "u"),
+    );
     expect(replay).toMatchObject({ action: "QUALIFY", outcome: "NOOP" });
     expect(replay.operationId).not.toBe(first.operationId);
     expect(runGh).toHaveBeenCalledTimes(2);

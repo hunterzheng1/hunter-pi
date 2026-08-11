@@ -909,9 +909,10 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
-    let candidate = (await this.#history()).find(
+    const historyCandidate = (await this.#history()).find(
       (entry) => entry.releaseId === parsed.targetReleaseId,
     );
+    let candidate = historyCandidate;
     const installedCandidateWasPreviouslyActive = entries.some(
       (entry) =>
         entry.receipt.action === "APPLY" &&
@@ -919,8 +920,7 @@ export class FileUpdateManager implements UpdateManager {
         entry.receipt.previousReleaseId === parsed.targetReleaseId,
     );
     if (
-      candidate === undefined &&
-      installedCandidateWasPreviouslyActive &&
+      (historyCandidate !== undefined || installedCandidateWasPreviouslyActive) &&
       this.#adapter.installedCandidate !== undefined
     ) {
       try {
@@ -928,10 +928,19 @@ export class FileUpdateManager implements UpdateManager {
           releaseId: parsed.targetReleaseId,
         });
         if (installed !== undefined) {
-          candidate = releaseCandidateSchema.parse(installed);
-          if (candidate.releaseId !== parsed.targetReleaseId) {
+          const verifiedCandidate = releaseCandidateSchema.parse(installed);
+          if (verifiedCandidate.releaseId !== parsed.targetReleaseId) {
             throw new Error("installed rollback candidate identity does not match the target");
           }
+          if (
+            historyCandidate !== undefined &&
+            canonicalJson(verifiedCandidate) !== canonicalJson(historyCandidate)
+          ) {
+            throw new Error("installed rollback candidate no longer matches its journal identity");
+          }
+          candidate = verifiedCandidate;
+        } else if (historyCandidate !== undefined) {
+          throw new Error("journaled rollback candidate is no longer installed");
         }
       } catch (error) {
         return this.#append({

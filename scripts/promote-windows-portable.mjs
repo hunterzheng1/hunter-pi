@@ -51,6 +51,7 @@ export async function runWindowsPortablePromotion(arguments_, dependencies = {})
   if (!Number.isSafeInteger(runId) || runId <= 0) {
     throw new Error("portable qualification run id is invalid");
   }
+  const canonicalRunText = String(runId);
   const updater = await import("@hunter-pi/updater");
   const candidateBytes = await readPhysicalFile(
     resolve(installationRoot, "portable-release-candidate.json"),
@@ -79,7 +80,7 @@ export async function runWindowsPortablePromotion(arguments_, dependencies = {})
     cancellationPolicy,
   });
   const requestIdentity = operationFingerprint.slice("sha256:".length, "sha256:".length + 16);
-  const operationId = `op_update-qualify-${runText}-${requestIdentity}`;
+  const operationId = `op_update-qualify-${canonicalRunText}-${requestIdentity}`;
   const observer = new updater.GhCliGitHubActionsQualificationObserver({
     ...(dependencies.observerNow === undefined ? {} : { now: dependencies.observerNow }),
     ...(dependencies.temporaryParent === undefined

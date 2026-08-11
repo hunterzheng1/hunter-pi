@@ -313,6 +313,19 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       previousReleaseId: qualifiedUpdate.releaseId,
       activeReleaseId: fixture.candidate.releaseId,
     });
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-qualified-history-without-evidence",
+        operationFingerprint: sha256Fingerprint("task11-qualified-history-without-evidence"),
+        targetReleaseId: qualifiedUpdate.releaseId,
+        observedAt: "2026-08-11T12:33:30.000Z",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "FAILED",
+      previousReleaseId: fixture.candidate.releaseId,
+      activeReleaseId: fixture.candidate.releaseId,
+    });
     await writeFile(
       join(portableRoot, "portable-release-candidate.json"),
       JSON.stringify(fixture.candidate),

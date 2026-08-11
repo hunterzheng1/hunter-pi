@@ -8,14 +8,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
+  HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
   createPortableBundle,
   decodePortableBundle,
   releaseCandidateSchema,
+  windowsPortableQualificationEvidenceSchema,
   type ReleaseCandidate,
 } from "@hunter-pi/updater";
-import { sha256Fingerprint } from "@hunter-pi/evidence";
+import { canonicalJson, sha256Fingerprint } from "@hunter-pi/evidence";
 
-import { fixtureFingerprint, fixtureTimestamp } from "./support/workflow-domain-fixture.js";
+import { fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
@@ -31,7 +34,13 @@ function digest(value: Uint8Array): `sha256:${string}` {
 function portableCandidate(releaseId: string): {
   readonly candidate: ReleaseCandidate;
   readonly artifact: Uint8Array;
+  readonly evidence: ReturnType<typeof windowsPortableQualificationEvidenceSchema.parse>;
+  readonly runId: number;
 } {
+  const runId = Number.parseInt(
+    createHash("sha256").update(releaseId).digest("hex").slice(0, 12),
+    16,
+  );
   const engineReleaseFingerprint = sha256Fingerprint("task11-portable-engine");
   const artifact = createPortableBundle({
     releaseId,
@@ -65,12 +74,12 @@ function portableCandidate(releaseId: string): {
     },
     qualification: {
       status: "PASS",
-      verifierFingerprint: fixtureFingerprint,
+      verifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
       checks: [
         {
-          name: "windows-portable-launch",
+          name: "windows-portable-ci",
           outcome: "PASS",
-          evidenceIds: ["evidence_task11-portable"],
+          evidenceIds: [`evidence_main-ci-${String(runId)}-portable`],
         },
       ],
       qualifiedAt: fixtureTimestamp,
@@ -85,7 +94,52 @@ function portableCandidate(releaseId: string): {
       },
     ],
   });
-  return { candidate, artifact };
+  const { qualification, ...candidateIdentity } = candidate;
+  void qualification;
+  const evidence = windowsPortableQualificationEvidenceSchema.parse({
+    schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+    evidenceId: `evidence_main-ci-${String(runId)}-portable`,
+    repository: "hunterzheng1/hunter-pi",
+    sourceCommit,
+    candidateIdentityFingerprint: sha256Fingerprint(canonicalJson(candidateIdentity)),
+    artifact: {
+      name: "hpi-windows-x64-portable",
+      fingerprint: candidate.artifact.fingerprint,
+      byteLength: candidate.artifact.byteLength,
+    },
+    run: {
+      id: runId,
+      attempt: 1,
+      event: "push",
+      headBranch: "main",
+      headSha: sourceCommit,
+      workflowName: "CI",
+      status: "completed",
+      conclusion: "success",
+      updatedAt: fixtureTimestamp,
+      url: `https://github.com/hunterzheng1/hunter-pi/actions/runs/${String(runId)}`,
+      jobs: HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES.map((name) => ({
+        name,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
+    observedAt: fixtureTimestamp,
+  });
+  return { candidate, artifact, evidence, runId };
+}
+
+async function retainQualificationEvidence(
+  installationRoot: string,
+  fixture: ReturnType<typeof portableCandidate>,
+): Promise<void> {
+  const directory = join(installationRoot, ".hpi-update", "qualification-evidence");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, `${String(fixture.runId)}.json`),
+    canonicalJson(fixture.evidence) + "\n",
+    "utf8",
+  );
 }
 
 function managerFor(
@@ -104,7 +158,7 @@ function managerFor(
         return Promise.resolve(artifact);
       },
     },
-    qualificationVerifierFingerprint: fixtureFingerprint,
+    qualificationVerifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
     now: () => fixtureTimestamp,
   });
 }
@@ -157,6 +211,7 @@ describe("Task 11 Windows portable release adapter", () => {
     expect(
       await readFile(join(root, "portable", ".hpi-update", "migration.json"), "utf8"),
     ).toContain('"status":"COMMITTED"');
+    await retainQualificationEvidence(join(root, "portable"), first);
 
     await expect(
       manager.rollback({

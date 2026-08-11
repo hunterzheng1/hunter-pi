@@ -4,6 +4,7 @@ import {
   distributionReleaseIdSchema,
   engineReleaseIdSchema,
   evidenceIdSchema,
+  externalReferenceSchema,
   fingerprintSchema,
   operationIdSchema,
   timestampSchema,
@@ -139,6 +140,9 @@ export const releaseCandidateSchema = releaseCandidateBaseSchema.extend({
       }
     }),
 });
+export const releaseCandidateIdentitySchema = releaseCandidateSchema.omit({
+  qualification: true,
+});
 export type ReleaseCandidateBase = z.infer<typeof releaseCandidateBaseSchema>;
 export type ReleaseCandidate = z.infer<typeof releaseCandidateSchema>;
 
@@ -147,7 +151,7 @@ export type ReleaseCandidate = z.infer<typeof releaseCandidateSchema>;
  * Bump the policy version when its acceptance rules change.
  */
 export const HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT = fingerprintSchema.parse(
-  "sha256:ed7c79240e64fbf506101745e6aa23e2f2cc778e56058f371ac2b04482673925",
+  "sha256:91015d5db9376b5e86a25538034c76609dcfddee1d7975faf64cca2bcbffe0c6",
 );
 
 export const qualificationProbeResultSchema = z.strictObject({
@@ -191,11 +195,35 @@ export const updateRollbackRequestSchema = z.strictObject({
 });
 export type UpdateRollbackRequest = z.input<typeof updateRollbackRequestSchema>;
 
+export const githubActionsQualificationSourceSchema = z.strictObject({
+  kind: z.literal("GITHUB_ACTIONS_RUN"),
+  repository: z.literal("hunterzheng1/hunter-pi"),
+  runId: z.number().int().positive(),
+});
+export type GitHubActionsQualificationSource = z.infer<
+  typeof githubActionsQualificationSourceSchema
+>;
+
+export const updateQualificationRequestSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-update-qualification.v1"),
+  operationId: operationIdSchema,
+  operationFingerprint: fingerprintSchema,
+  expectedTarget: externalReferenceSchema,
+  source: githubActionsQualificationSourceSchema,
+  deadline: timestampSchema,
+  cancellationPolicy: z.strictObject({
+    mode: z.literal("FAIL_CLOSED"),
+    timeoutMs: z.number().int().positive(),
+  }),
+  observedAt: timestampSchema,
+});
+export type UpdateQualificationRequest = z.input<typeof updateQualificationRequestSchema>;
+
 export const updateReceiptSchema = z.strictObject({
   schemaVersion: z.literal("hpi-update-receipt.v1"),
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
-  action: z.enum(["APPLY", "ROLLBACK"]),
+  action: z.enum(["APPLY", "ROLLBACK", "QUALIFY"]),
   outcome: z.enum(["APPLIED", "NOOP", "BLOCKED", "FAILED"]),
   candidateReleaseId: distributionReleaseIdSchema.optional(),
   targetReleaseId: distributionReleaseIdSchema.optional(),
@@ -212,7 +240,7 @@ export const updateJournalEntrySchema = z.strictObject({
   operationId: operationIdSchema,
   operationFingerprint: fingerprintSchema,
   requestFingerprint: fingerprintSchema,
-  action: z.enum(["APPLY", "ROLLBACK"]),
+  action: z.enum(["APPLY", "ROLLBACK", "QUALIFY"]),
   candidate: releaseCandidateSchema.optional(),
   targetReleaseId: distributionReleaseIdSchema.optional(),
   receipt: updateReceiptSchema,
@@ -242,6 +270,14 @@ export const updateReconciliationSchema = z
     previousReleaseId: distributionReleaseIdSchema.optional(),
     activeReleaseId: distributionReleaseIdSchema.optional(),
     reason: nonEmptyTextSchema.optional(),
+    operation: z
+      .strictObject({
+        operationId: operationIdSchema,
+        operationFingerprint: fingerprintSchema,
+        requestFingerprint: fingerprintSchema,
+        action: z.literal("QUALIFY"),
+      })
+      .optional(),
   })
   .superRefine((value, context) => {
     if (value.status === "RECOVERED" && value.candidate === undefined) {
@@ -256,6 +292,13 @@ export const updateReconciliationSchema = z
         code: "custom",
         path: ["reason"],
         message: "an aborted update must explain the recovery decision",
+      });
+    }
+    if (value.operation !== undefined && value.status !== "RECOVERED") {
+      context.addIssue({
+        code: "custom",
+        path: ["operation"],
+        message: "only a recovered update may bind an interrupted original operation",
       });
     }
   });
@@ -291,6 +334,16 @@ export interface ReleaseAdapter {
   ) => Promise<MigrationTransaction | undefined>;
   activate(release: StagedRelease): Promise<void>;
   restore(release: StagedRelease): Promise<void>;
+  promoteQualification?(input: {
+    readonly operationId: UpdateQualificationRequest["operationId"];
+    readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint: Fingerprint;
+    readonly baseCandidate: ReleaseCandidate;
+    readonly candidate: ReleaseCandidate;
+    readonly evidence: unknown;
+    readonly artifact: Uint8Array;
+    readonly observedAt: string;
+  }): Promise<"PROMOTED" | "NOOP">;
   discard(release: StagedRelease): Promise<void>;
   reconcile?(): Promise<UpdateReconciliation>;
 }
@@ -298,6 +351,7 @@ export interface ReleaseAdapter {
 export interface UpdateManager {
   check(candidate: ReleaseCandidate): Promise<ReleaseCheckResult>;
   apply(request: UpdateApplyRequest): Promise<UpdateReceipt>;
+  qualify(request: UpdateQualificationRequest): Promise<UpdateReceipt>;
   rollback(request: UpdateRollbackRequest): Promise<UpdateReceipt>;
   reconcile(): Promise<readonly UpdateReceipt[]>;
   current(): Promise<{ readonly releaseId: DistributionReleaseId | undefined }>;

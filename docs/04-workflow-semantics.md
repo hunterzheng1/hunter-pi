@@ -189,6 +189,8 @@ Rules:
 3. An unknown result after interruption is reconciled before re-execution; reconciliation appends a separate Receipt and never rewrites the original `UNKNOWN` Receipt.
 4. A Receipt reports observed effects; `UNKNOWN` cannot carry claimed effects and never invents success for effects it cannot prove.
 
+Windows portable qualification uses the same rule as update activation. `QUALIFY` binds a path-free release identity and exact GitHub Actions run. Before changing either candidate metadata file, the adapter persists an intent containing the original operation identity, request fingerprint, generated candidate, and strict qualification Evidence. If no operation Receipt existed before interruption, reconciliation verifies both artifact copies and the active pointer, completes or rejects the intent, and publishes the original operation Receipt exactly once. If a prior `UNKNOWN` Receipt exists in another operation family, it remains immutable and reconciliation appends a separate result.
+
 ## Workspace and writer rules
 
 Managed Change defaults to a new Git worktree created and owned by Hunter Pi. The Run records repository, base commit, branch, worktree identity, and writer lease.

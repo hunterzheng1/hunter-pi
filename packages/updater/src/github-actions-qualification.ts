@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { lstat, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -25,6 +24,7 @@ import {
 } from "./contracts.js";
 import { decodePortableBundle } from "./portable-bundle.js";
 import { windowsPortableQualificationCandidateIdentity } from "./qualification-identity.js";
+import { runQualificationCliProcess } from "./gh-cli-process.js";
 
 export const HPI_GITHUB_REPOSITORY = "hunterzheng1/hunter-pi" as const;
 export const HPI_WINDOWS_PORTABLE_ARTIFACT_NAME = "hpi-windows-x64-portable" as const;
@@ -148,47 +148,7 @@ const ghRunViewSchema = z.object({
 });
 
 function runGhCli(arguments_: readonly string[], timeoutMs: number): Promise<GhCliCommandResult> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("gh", [...arguments_], {
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let outputExceeded = false;
-    const maxOutputBytes = 1_048_576;
-    const append = (current: string, chunk: unknown): string => {
-      const next = current + String(chunk);
-      if (Buffer.byteLength(next, "utf8") > maxOutputBytes) {
-        outputExceeded = true;
-        child.kill();
-        return current;
-      }
-      return next;
-    };
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout = append(stdout, chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = append(stderr, chunk);
-    });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolvePromise({ exitCode: null, stdout: "", stderr: "" });
-    });
-    child.once("close", (exitCode) => {
-      clearTimeout(timer);
-      resolvePromise({
-        exitCode: outputExceeded ? null : exitCode,
-        stdout: outputExceeded ? "" : stdout,
-        stderr: outputExceeded ? "" : stderr,
-      });
-    });
-  });
+  return runQualificationCliProcess("gh", arguments_, timeoutMs);
 }
 
 async function readContainedPhysicalFile(root: string, filename: string): Promise<Uint8Array> {
@@ -234,6 +194,11 @@ export class GhCliGitHubActionsQualificationObserver {
       if (remainingMs <= 0) throw new Error("GitHub qualification source unavailable");
       return Math.min(requestedTimeoutMs, remainingMs);
     };
+    const requireUnexpiredObservation = (): void => {
+      if (operationDeadlineMs - this.#now() <= 0) {
+        throw new Error("GitHub qualification source unavailable");
+      }
+    };
     let downloadRoot: string | undefined;
     try {
       const view = await this.#runGh(
@@ -248,6 +213,7 @@ export class GhCliGitHubActionsQualificationObserver {
         ],
         remainingTimeoutMs(),
       );
+      requireUnexpiredObservation();
       if (view.exitCode !== 0) throw new Error("run view failed");
       const raw = ghRunViewSchema.parse(JSON.parse(view.stdout) as unknown);
       const run = githubActionsPortableQualificationRunSchema.parse({
@@ -282,6 +248,7 @@ export class GhCliGitHubActionsQualificationObserver {
         ],
         remainingTimeoutMs(),
       );
+      requireUnexpiredObservation();
       if (download.exitCode !== 0) throw new Error("artifact download failed");
       const hostedArtifact = await readContainedPhysicalFile(downloadRoot, "update.bundle.tgz");
       const hostedCandidateBytes = await readContainedPhysicalFile(

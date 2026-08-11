@@ -182,7 +182,7 @@ describe("Task 11 Windows portable release adapter", () => {
     );
   });
 
-  it("rolls back to a qualified portable release installed before the update journal existed", async () => {
+  it("rejects an installed PASS label without its durable hosted qualification Evidence", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
       "hunter-pi-task11-portable-initial-rollback-",
@@ -222,12 +222,12 @@ describe("Task 11 Windows portable release adapter", () => {
         observedAt: fixtureTimestamp,
       }),
     ).resolves.toMatchObject({
-      outcome: "APPLIED",
+      outcome: "FAILED",
       previousReleaseId: update.candidate.releaseId,
-      activeReleaseId: initial.candidate.releaseId,
+      activeReleaseId: update.candidate.releaseId,
     });
     await expect(manager.current()).resolves.toMatchObject({
-      releaseId: initial.candidate.releaseId,
+      releaseId: update.candidate.releaseId,
     });
   });
 

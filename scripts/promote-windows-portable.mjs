@@ -35,7 +35,7 @@ async function readPhysicalFile(path) {
 
 /**
  * @param {readonly string[]} arguments_
- * @param {{platform?: string, arch?: string, nodeVersion?: string, now?: () => Date, temporaryParent?: string, runGh?: (arguments_: readonly string[], timeoutMs: number) => Promise<{exitCode: number | null, stdout: string, stderr: string}>}} [dependencies]
+ * @param {{platform?: string, arch?: string, nodeVersion?: string, now?: () => Date, observerNow?: () => number, temporaryParent?: string, runGh?: (arguments_: readonly string[], timeoutMs: number) => Promise<{exitCode: number | null, stdout: string, stderr: string}>}} [dependencies]
  */
 export async function runWindowsPortablePromotion(arguments_, dependencies = {}) {
   const platform = dependencies.platform ?? process.platform;
@@ -78,10 +78,10 @@ export async function runWindowsPortablePromotion(arguments_, dependencies = {})
     deadline,
     cancellationPolicy,
   });
-  const dateIdentity = observedAt.slice(0, 10).replaceAll("-", "");
-  const operationId = `op_update-qualify-${runText}-${dateIdentity}`;
+  const requestIdentity = operationFingerprint.slice("sha256:".length, "sha256:".length + 16);
+  const operationId = `op_update-qualify-${runText}-${requestIdentity}`;
   const observer = new updater.GhCliGitHubActionsQualificationObserver({
-    now: () => now.getTime(),
+    ...(dependencies.observerNow === undefined ? {} : { now: dependencies.observerNow }),
     ...(dependencies.temporaryParent === undefined
       ? {}
       : { temporaryParent: dependencies.temporaryParent }),

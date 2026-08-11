@@ -344,6 +344,12 @@ export interface ReleaseAdapter {
     readonly artifact: Uint8Array;
     readonly observedAt: string;
   }): Promise<"PROMOTED" | "NOOP">;
+  finalizeQualification?(input: {
+    readonly operationId: UpdateQualificationRequest["operationId"];
+    readonly operationFingerprint: Fingerprint;
+    readonly requestFingerprint: Fingerprint;
+    readonly candidate: ReleaseCandidate;
+  }): Promise<void>;
   discard(release: StagedRelease): Promise<void>;
   reconcile?(): Promise<UpdateReconciliation>;
 }

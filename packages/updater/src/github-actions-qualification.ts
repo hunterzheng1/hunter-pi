@@ -18,13 +18,13 @@ import { canonicalJson, sha256Fingerprint } from "@hunter-pi/evidence";
 import {
   HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
   githubActionsQualificationSourceSchema,
-  releaseCandidateIdentitySchema,
   releaseCandidateSchema,
   updateQualificationRequestSchema,
   type GitHubActionsQualificationSource,
   type ReleaseCandidate,
 } from "./contracts.js";
 import { decodePortableBundle } from "./portable-bundle.js";
+import { windowsPortableQualificationCandidateIdentity } from "./qualification-identity.js";
 
 export const HPI_GITHUB_REPOSITORY = "hunterzheng1/hunter-pi" as const;
 export const HPI_WINDOWS_PORTABLE_ARTIFACT_NAME = "hpi-windows-x64-portable" as const;
@@ -227,9 +227,13 @@ export class GhCliGitHubActionsQualificationObserver {
   ): Promise<GitHubActionsQualificationObservation> {
     const source = githubActionsQualificationSourceSchema.parse(input.source);
     const deadline = timestampSchema.parse(input.deadline);
-    const remainingMs = Date.parse(deadline) - this.#now();
-    if (remainingMs <= 0) throw new Error("GitHub qualification source unavailable");
-    const timeoutMs = Math.min(z.number().int().positive().parse(input.timeoutMs), remainingMs);
+    const requestedTimeoutMs = z.number().int().positive().parse(input.timeoutMs);
+    const operationDeadlineMs = Math.min(Date.parse(deadline), this.#now() + requestedTimeoutMs);
+    const remainingTimeoutMs = (): number => {
+      const remainingMs = operationDeadlineMs - this.#now();
+      if (remainingMs <= 0) throw new Error("GitHub qualification source unavailable");
+      return Math.min(requestedTimeoutMs, remainingMs);
+    };
     let downloadRoot: string | undefined;
     try {
       const view = await this.#runGh(
@@ -242,7 +246,7 @@ export class GhCliGitHubActionsQualificationObserver {
           "--json",
           "attempt,conclusion,databaseId,event,headBranch,headSha,jobs,status,updatedAt,url,workflowName",
         ],
-        timeoutMs,
+        remainingTimeoutMs(),
       );
       if (view.exitCode !== 0) throw new Error("run view failed");
       const raw = ghRunViewSchema.parse(JSON.parse(view.stdout) as unknown);
@@ -276,7 +280,7 @@ export class GhCliGitHubActionsQualificationObserver {
           "--dir",
           downloadRoot,
         ],
-        timeoutMs,
+        remainingTimeoutMs(),
       );
       if (download.exitCode !== 0) throw new Error("artifact download failed");
       const hostedArtifact = await readContainedPhysicalFile(downloadRoot, "update.bundle.tgz");
@@ -326,18 +330,14 @@ export interface WindowsPortableQualificationAuthority {
   ): Promise<WindowsPortableQualificationResult>;
 }
 
-function identityOfCandidate(candidate: ReleaseCandidate) {
-  const { qualification, ...identityInput } = releaseCandidateSchema.parse(candidate);
-  void qualification;
-  return releaseCandidateIdentitySchema.parse(identityInput);
-}
-
 export function windowsPortableQualificationTargetReference(
   candidate: ReleaseCandidate,
 ): ExternalReference {
   return externalReferenceSchema.parse({
     namespace: "hunter-pi.windows-portable-release",
-    reference: sha256Fingerprint(canonicalJson(identityOfCandidate(candidate))),
+    reference: sha256Fingerprint(
+      canonicalJson(windowsPortableQualificationCandidateIdentity(candidate)),
+    ),
   });
 }
 
@@ -414,8 +414,8 @@ export class GitHubActionsWindowsPortableQualificationAuthority implements Windo
     assertPackagedCandidate(hostedCandidate);
     assertArtifact(hostedCandidate, observation.hostedArtifact, "hosted");
     if (
-      canonicalJson(identityOfCandidate(hostedCandidate)) !==
-      canonicalJson(identityOfCandidate(candidate))
+      canonicalJson(windowsPortableQualificationCandidateIdentity(hostedCandidate)) !==
+      canonicalJson(windowsPortableQualificationCandidateIdentity(candidate))
     ) {
       throw new Error("hosted candidate changes immutable release metadata");
     }
@@ -424,7 +424,7 @@ export class GitHubActionsWindowsPortableQualificationAuthority implements Windo
     }
 
     const evidenceId = evidenceIdSchema.parse(`evidence_main-ci-${String(run.id)}-portable`);
-    const candidateIdentity = identityOfCandidate(candidate);
+    const candidateIdentity = windowsPortableQualificationCandidateIdentity(candidate);
     const evidence = windowsPortableQualificationEvidenceSchema.parse({
       schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
       evidenceId,

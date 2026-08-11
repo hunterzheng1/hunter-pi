@@ -508,7 +508,8 @@ export class FileUpdateManager implements UpdateManager {
     }
     if (
       this.#qualificationAuthority === undefined ||
-      this.#adapter.promoteQualification === undefined
+      this.#adapter.promoteQualification === undefined ||
+      this.#adapter.finalizeQualification === undefined
     ) {
       return this.#append({
         operationId: parsed.operationId,
@@ -560,7 +561,7 @@ export class FileUpdateManager implements UpdateManager {
         artifact,
         observedAt: parsed.observedAt,
       });
-      return await this.#append({
+      const receipt = await this.#append({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
         requestFingerprint,
@@ -571,6 +572,13 @@ export class FileUpdateManager implements UpdateManager {
         activeReleaseId,
         observedAt: parsed.observedAt,
       });
+      await this.#finalizeQualification(
+        parsed.operationId,
+        parsed.operationFingerprint,
+        requestFingerprint,
+        result.candidate,
+      );
+      return receipt;
     } catch (error) {
       if (promotionAttempted && result !== undefined && this.#adapter.reconcile !== undefined) {
         let reconciliation;
@@ -591,17 +599,38 @@ export class FileUpdateManager implements UpdateManager {
           reconciliation.candidate !== undefined &&
           canonicalJson(reconciliation.candidate) === canonicalJson(result.candidate)
         ) {
-          return await this.#append({
-            operationId: parsed.operationId,
-            operationFingerprint: parsed.operationFingerprint,
+          const reconciledEntries = await this.#journal.read();
+          const existingReceipt = this.#replayedOperation(
+            reconciledEntries,
+            parsed.operationId,
+            parsed.operationFingerprint,
             requestFingerprint,
-            action: "QUALIFY",
-            candidate: result.candidate,
-            targetReleaseId: activeReleaseId,
-            outcome: "APPLIED",
-            activeReleaseId,
-            observedAt: parsed.observedAt,
-          });
+          );
+          const receipt =
+            existingReceipt ??
+            (await this.#append({
+              operationId: parsed.operationId,
+              operationFingerprint: parsed.operationFingerprint,
+              requestFingerprint,
+              action: "QUALIFY",
+              candidate: result.candidate,
+              targetReleaseId: activeReleaseId,
+              outcome: "APPLIED",
+              activeReleaseId,
+              observedAt: parsed.observedAt,
+            }));
+          if (receipt.action !== "QUALIFY" || receipt.outcome !== "APPLIED") {
+            throw new Error("reconciled qualification conflicts with its terminal Receipt", {
+              cause: error,
+            });
+          }
+          await this.#finalizeQualification(
+            parsed.operationId,
+            parsed.operationFingerprint,
+            requestFingerprint,
+            result.candidate,
+          );
+          return receipt;
         }
         if (reconciliation.status !== "NONE") {
           throw new Error("qualification mutation reconciled to an unexpected operation", {
@@ -1096,6 +1125,23 @@ export class FileUpdateManager implements UpdateManager {
     return [...candidates.values()];
   }
 
+  async #finalizeQualification(
+    operationId: UpdateQualificationRequest["operationId"],
+    operationFingerprint: Fingerprint,
+    requestFingerprint: Fingerprint,
+    candidate: ReleaseCandidate,
+  ): Promise<void> {
+    if (this.#adapter.finalizeQualification === undefined) {
+      throw new Error("qualification adapter cannot finalize its durable intent");
+    }
+    await this.#adapter.finalizeQualification({
+      operationId,
+      operationFingerprint,
+      requestFingerprint,
+      candidate,
+    });
+  }
+
   async #reconcile(): Promise<readonly UpdateReceipt[]> {
     const reconciliation = await this.#adapter.reconcile?.();
     if (reconciliation === undefined || reconciliation.status === "NONE") return [];
@@ -1111,6 +1157,21 @@ export class FileUpdateManager implements UpdateManager {
         ) {
           throw new Error("reconciled qualification operation conflicts with update journal");
         }
+        if (
+          existing.receipt.action !== "QUALIFY" ||
+          existing.receipt.outcome !== "APPLIED" ||
+          existing.candidate === undefined ||
+          reconciliation.candidate === undefined ||
+          canonicalJson(existing.candidate) !== canonicalJson(reconciliation.candidate)
+        ) {
+          throw new Error("reconciled qualification conflicts with its terminal Receipt");
+        }
+        await this.#finalizeQualification(
+          reconciliation.operation.operationId,
+          reconciliation.operation.operationFingerprint,
+          reconciliation.operation.requestFingerprint,
+          reconciliation.candidate,
+        );
         return [];
       }
       const receipt = await this.#append({
@@ -1124,6 +1185,15 @@ export class FileUpdateManager implements UpdateManager {
         activeReleaseId: reconciliation.activeReleaseId,
         observedAt: this.#now(),
       });
+      if (reconciliation.candidate === undefined) {
+        throw new Error("reconciled qualification did not return its candidate");
+      }
+      await this.#finalizeQualification(
+        reconciliation.operation.operationId,
+        reconciliation.operation.operationFingerprint,
+        reconciliation.operation.requestFingerprint,
+        reconciliation.candidate,
+      );
       return [receipt];
     }
     if (

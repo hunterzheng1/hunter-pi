@@ -57,7 +57,7 @@ describe("Task 11 portable qualification operator script", () => {
     expect(output).not.toMatch(/\bat\s+[^\n]+:\d+:\d+/u);
   });
 
-  it("uses one live run view and one artifact download, then replays locally", async () => {
+  it("uses one live run view and one artifact download, then resolves a later invocation locally", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
       "hunter-pi-task11-promotion-script-success-",
@@ -164,11 +164,16 @@ describe("Task 11 portable qualification operator script", () => {
       );
       return { exitCode: 0, stdout: "", stderr: "" };
     });
+    const requestNow = vi
+      .fn<() => Date>()
+      .mockReturnValueOnce(new Date("2026-08-11T12:31:00.000Z"))
+      .mockReturnValueOnce(new Date("2026-08-11T12:32:00.000Z"));
     const dependencies = {
       platform: "win32",
       arch: "x64",
       nodeVersion: "24.13.0",
-      now: () => new Date("2026-08-11T12:31:00.000Z"),
+      now: requestNow,
+      observerNow: () => Date.parse("2026-08-11T12:31:00.000Z"),
       temporaryParent: root,
       runGh,
     };
@@ -183,7 +188,8 @@ describe("Task 11 portable qualification operator script", () => {
     );
 
     expect(first).toMatchObject({ action: "QUALIFY", outcome: "APPLIED" });
-    expect(replay).toEqual(first);
+    expect(replay).toMatchObject({ action: "QUALIFY", outcome: "NOOP" });
+    expect(replay.operationId).not.toBe(first.operationId);
     expect(runGh).toHaveBeenCalledTimes(2);
   });
 });

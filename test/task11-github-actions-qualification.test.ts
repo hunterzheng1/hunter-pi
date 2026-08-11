@@ -265,6 +265,13 @@ describe("Task 11 GitHub Actions portable qualification", () => {
         join(portableRoot, ".hpi-update", "qualification-evidence", `${String(runId)}.json`),
       ),
     ).resolves.toBeInstanceOf(Buffer);
+    const qualificationEvidencePath = join(
+      portableRoot,
+      ".hpi-update",
+      "qualification-evidence",
+      `${String(runId)}.json`,
+    );
+    const qualificationEvidence = await readFile(qualificationEvidencePath);
     await expect(
       manager.apply({
         schemaVersion: "hpi-update-apply.v1",
@@ -278,6 +285,21 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       previousReleaseId: fixture.candidate.releaseId,
       activeReleaseId: qualifiedUpdate.releaseId,
     });
+    await rm(qualificationEvidencePath);
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-qualified-first-rollback-missing-evidence",
+        operationFingerprint: sha256Fingerprint("task11-qualified-first-rollback-missing-evidence"),
+        targetReleaseId: fixture.candidate.releaseId,
+        observedAt: "2026-08-11T12:32:30.000Z",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "FAILED",
+      previousReleaseId: qualifiedUpdate.releaseId,
+      activeReleaseId: qualifiedUpdate.releaseId,
+    });
+    await writeFile(qualificationEvidencePath, qualificationEvidence);
     await expect(
       manager.rollback({
         schemaVersion: "hpi-update-rollback.v1",
@@ -449,6 +471,219 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     });
   });
 
+  it("retains a successful qualification intent until the manager journals its Receipt", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-github-qualification-finality-",
+    );
+    roots.push(root);
+    const fixture = portableFixture();
+    const portableRoot = join(root, "portable");
+    const adapter = new updater.FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const staged = await adapter.stage(fixture.candidate, fixture.artifact);
+    await adapter.activate(staged);
+    await writeFile(
+      join(portableRoot, "portable-release-candidate.json"),
+      JSON.stringify(fixture.candidate),
+      "utf8",
+    );
+    await writeFile(join(portableRoot, "update.bundle.tgz"), fixture.artifact);
+    const source = {
+      kind: "GITHUB_ACTIONS_RUN" as const,
+      repository: "hunterzheng1/hunter-pi" as const,
+      runId,
+    };
+    const deadline = "2026-08-11T13:00:00.000Z";
+    const cancellationPolicy = { mode: "FAIL_CLOSED" as const, timeoutMs: 30_000 };
+    const expectedTarget = updater.windowsPortableQualificationTargetReference(fixture.candidate);
+    const operationFingerprint = updater.windowsPortableQualificationRequestFingerprint({
+      expectedTarget,
+      source,
+      deadline,
+      cancellationPolicy,
+    });
+    const operationId = `op_update-qualify-${String(runId)}-finality` as const;
+    const authority = new updater.GitHubActionsWindowsPortableQualificationAuthority({
+      observe: () => Promise.resolve(exactObservation(fixture.artifact, fixture.candidate)),
+    });
+    const result = await authority.qualify({
+      candidate: fixture.candidate,
+      artifact: fixture.artifact,
+      source,
+      deadline,
+      cancellationPolicy,
+    });
+
+    await expect(
+      adapter.promoteQualification({
+        operationId,
+        operationFingerprint,
+        requestFingerprint: operationFingerprint,
+        baseCandidate: fixture.candidate,
+        candidate: result.candidate,
+        evidence: result.evidence,
+        artifact: fixture.artifact,
+        observedAt: "2026-08-11T12:31:00.000Z",
+      }),
+    ).resolves.toBe("PROMOTED");
+    const qualificationIntentPath = join(portableRoot, ".hpi-update", "qualification-intent.json");
+    await expect(readFile(qualificationIntentPath)).resolves.toBeInstanceOf(Buffer);
+
+    const finalizationBlocked = new updater.FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+      beforeQualificationIntentCleared: () =>
+        Promise.reject(new Error("injected interruption after qualification Receipt append")),
+    });
+    const managerState = join(root, "qualification-manager");
+    const interruptedManager = new updater.FileUpdateManager({
+      stateRoot: managerState,
+      channel: "PREVIEW",
+      adapter: finalizationBlocked,
+      artifacts: { read: () => Promise.resolve(fixture.artifact) },
+      qualificationVerifierFingerprint: updater.HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+      qualificationAuthority: new updater.GitHubActionsWindowsPortableQualificationAuthority({
+        observe: () => Promise.reject(new Error("reconciliation must not query GitHub again")),
+      }),
+      now: () => "2026-08-11T12:32:00.000Z",
+    });
+    await expect(interruptedManager.reconcile()).rejects.toThrow(/interruption/u);
+    await expect(readFile(qualificationIntentPath)).resolves.toBeInstanceOf(Buffer);
+
+    const reopened = new updater.FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const recoveredManager = new updater.FileUpdateManager({
+      stateRoot: managerState,
+      channel: "PREVIEW",
+      adapter: reopened,
+      artifacts: { read: () => Promise.resolve(fixture.artifact) },
+      qualificationVerifierFingerprint: updater.HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+      qualificationAuthority: new updater.GitHubActionsWindowsPortableQualificationAuthority({
+        observe: () => Promise.reject(new Error("reconciliation must not query GitHub again")),
+      }),
+      now: () => "2026-08-11T12:32:00.000Z",
+    });
+    await expect(recoveredManager.reconcile()).resolves.toEqual([]);
+    await expect(
+      recoveredManager.qualify({
+        schemaVersion: "hpi-update-qualification.v1",
+        operationId,
+        operationFingerprint,
+        expectedTarget,
+        source,
+        deadline,
+        cancellationPolicy,
+        observedAt: "2026-08-11T12:31:00.000Z",
+      }),
+    ).resolves.toMatchObject({ operationId, action: "QUALIFY", outcome: "APPLIED" });
+    await expect(readFile(qualificationIntentPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("never publishes a partial qualification Evidence file after an interrupted write", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-github-qualification-evidence-atomic-",
+    );
+    roots.push(root);
+    const fixture = portableFixture();
+    const portableRoot = join(root, "portable");
+    const adapter = new updater.FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+      qualificationEvidenceFaultInjector: (boundary: string) => {
+        if (boundary === "AFTER_TEMP_WRITE") {
+          throw new Error("injected qualification Evidence write interruption");
+        }
+      },
+    });
+    const staged = await adapter.stage(fixture.candidate, fixture.artifact);
+    await adapter.activate(staged);
+    await writeFile(
+      join(portableRoot, "portable-release-candidate.json"),
+      JSON.stringify(fixture.candidate),
+      "utf8",
+    );
+    await writeFile(join(portableRoot, "update.bundle.tgz"), fixture.artifact);
+    const source = {
+      kind: "GITHUB_ACTIONS_RUN" as const,
+      repository: "hunterzheng1/hunter-pi" as const,
+      runId,
+    };
+    const deadline = "2026-08-11T13:00:00.000Z";
+    const cancellationPolicy = { mode: "FAIL_CLOSED" as const, timeoutMs: 30_000 };
+    const expectedTarget = updater.windowsPortableQualificationTargetReference(fixture.candidate);
+    const operationFingerprint = updater.windowsPortableQualificationRequestFingerprint({
+      expectedTarget,
+      source,
+      deadline,
+      cancellationPolicy,
+    });
+    const operationId = `op_update-qualify-${String(runId)}-evidence-atomic` as const;
+    const authority = new updater.GitHubActionsWindowsPortableQualificationAuthority({
+      observe: () => Promise.resolve(exactObservation(fixture.artifact, fixture.candidate)),
+    });
+    const result = await authority.qualify({
+      candidate: fixture.candidate,
+      artifact: fixture.artifact,
+      source,
+      deadline,
+      cancellationPolicy,
+    });
+
+    await expect(
+      adapter.promoteQualification({
+        operationId,
+        operationFingerprint,
+        requestFingerprint: operationFingerprint,
+        baseCandidate: fixture.candidate,
+        candidate: result.candidate,
+        evidence: result.evidence,
+        artifact: fixture.artifact,
+        observedAt: "2026-08-11T12:31:00.000Z",
+      }),
+    ).rejects.toThrow();
+    const evidencePath = join(
+      portableRoot,
+      ".hpi-update",
+      "qualification-evidence",
+      `${String(runId)}.json`,
+    );
+    await expect(readFile(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readFile(join(portableRoot, "portable-release-candidate.json"), "utf8").then((value) =>
+        updater.releaseCandidateSchema.parse(JSON.parse(value) as unknown),
+      ),
+    ).resolves.toMatchObject({ qualification: { status: "NOT_PROVEN" } });
+
+    const reopened = new updater.FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const manager = new updater.FileUpdateManager({
+      stateRoot: join(root, "qualification-manager"),
+      channel: "PREVIEW",
+      adapter: reopened,
+      artifacts: { read: () => Promise.resolve(fixture.artifact) },
+      qualificationVerifierFingerprint: updater.HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+      qualificationAuthority: authority,
+      now: () => "2026-08-11T12:32:00.000Z",
+    });
+    await expect(manager.reconcile()).resolves.toEqual([
+      expect.objectContaining({ operationId, action: "QUALIFY", outcome: "APPLIED" }),
+    ]);
+    await expect(readFile(evidencePath)).resolves.toBeInstanceOf(Buffer);
+  });
+
   it("does not journal FAILED when the manager can reconcile a qualification interruption", async () => {
     const root = await createTemporaryTestDirectory(
       tmpdir(),
@@ -595,7 +830,8 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     );
     roots.push(root);
     const fixture = portableFixture();
-    const runGh = vi.fn(async (arguments_: readonly string[]) => {
+    const runGh = vi.fn(async (arguments_: readonly string[], timeoutMs: number) => {
+      void timeoutMs;
       if (arguments_[0] === "run" && arguments_[1] === "view") {
         return {
           exitCode: 0,
@@ -630,10 +866,16 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     const Observer = Constructor as new (options: unknown) => {
       observe(input: unknown): Promise<updater.GitHubActionsQualificationObservation>;
     };
+    const clockStart = Date.parse("2026-08-11T12:00:00.000Z");
+    const observerNow = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(clockStart)
+      .mockReturnValueOnce(clockStart)
+      .mockReturnValueOnce(clockStart + 10_000);
     const observer = new Observer({
       temporaryParent: root,
       runGh,
-      now: () => Date.parse("2019-01-01T00:00:00.000Z"),
+      now: observerNow,
     });
 
     await expect(
@@ -643,7 +885,7 @@ describe("Task 11 GitHub Actions portable qualification", () => {
           repository: "hunterzheng1/hunter-pi",
           runId,
         },
-        deadline: "2020-01-01T00:00:00.000Z",
+        deadline: "2026-08-11T12:01:00.000Z",
         timeoutMs: 30_000,
       }),
     ).resolves.toMatchObject({
@@ -672,5 +914,6 @@ describe("Task 11 GitHub Actions portable qualification", () => {
         "--dir",
       ]),
     );
+    expect(runGh.mock.calls.map((call) => call[1])).toEqual([30_000, 20_000]);
   });
 });

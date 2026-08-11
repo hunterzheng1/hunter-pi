@@ -157,7 +157,7 @@ New local Evidence is accepted through `FileEvidenceStore.capture`, so persisten
 - Published artifacts are compared to the qualified candidate by digest.
 - Stable promotion requires actual Windows and Ubuntu CI for the exact source commit.
 - Windows portable qualification never accepts a caller-authored `PASS` candidate. The operator path reads one exact main run and downloads its named hosted artifact, checks all required job identities, compares hosted/local bundle bytes and non-qualification candidate metadata, and retains a path-free immutable receipt before publishing qualification metadata.
-- Qualification is journaled as a bounded `QUALIFY` operation with a path-free expected target and durable intent. Exact replay is local and consumes no additional GitHub API calls; interrupted metadata writes are reconciled before retry.
+- Qualification is journaled as a bounded `QUALIFY` operation with a path-free expected target and durable intent. The two fixed `gh` calls share one elapsed timeout budget, Evidence is synced and atomically published without replacement, and the intent is removed only after the hash-chained APPLIED Receipt is durable and acknowledged. Exact replay or a later already-qualified same-source invocation is local and consumes no additional GitHub API calls; interrupted Evidence, metadata, Receipt, or intent-acknowledgement writes are reconciled before retry.
 - Updater changes are atomic and retain a known-good rollback version.
 - Schema migration creates backups or reversible journals and never deletes old state before validation.
 - Signing strategy and Windows publisher identity remain open decisions; no unsigned preview is described as a production-trusted installer.

@@ -8,8 +8,7 @@ import { z } from "zod";
 
 import { sha256Fingerprint } from "@hunter-pi/evidence";
 import * as updater from "@hunter-pi/updater";
-
-import { runQualificationCliProcess } from "../packages/updater/src/gh-cli-process.js";
+import * as qualificationCliProcess from "../packages/updater/src/gh-cli-process.js";
 
 import { fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import {
@@ -1079,15 +1078,192 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     }));
 
     await expect(
-      runQualificationCliProcess("must-not-run", [], 10, { createDriver }),
+      qualificationCliProcess.runQualificationCliProcess(process.execPath, [], 10, {
+        createDriver,
+      }),
     ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
     expect(createDriver).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledWith(identityFingerprint, "TIMEOUT");
   });
 
+  it("resolves one native Windows CLI through a bounded shell-free PATH lookup", async () => {
+    const runProcess = vi.fn(() =>
+      Promise.resolve({
+        exitCode: 0,
+        stdout: "C:\\Program Files\\GitHub CLI\\gh.exe\r\n",
+        stderr: "",
+      }),
+    );
+    await expect(
+      qualificationCliProcess.resolveQualificationCliExecutable("gh.exe", 12_345, {
+        platform: "win32",
+        environment: { SystemRoot: "C:\\Windows", PATH: "C:\\Program Files\\GitHub CLI" },
+        runProcess,
+      }),
+    ).resolves.toBe("C:\\Program Files\\GitHub CLI\\gh.exe");
+    expect(runProcess).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\where.exe",
+      ["$PATH:gh.exe"],
+      12_345,
+    );
+    await expect(
+      qualificationCliProcess.resolveQualificationCliExecutable("gh.cmd", 12_345, {
+        platform: "win32",
+        environment: { SystemRoot: "C:\\Windows", PATH: "C:\\fixture" },
+        runProcess,
+      }),
+    ).rejects.toThrow("native filename");
+    expect(runProcess).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "a nonzero lookup exit",
+      result: {
+        exitCode: 1,
+        stdout: "C:\\Program Files\\GitHub CLI\\gh.exe\r\n",
+        stderr: "",
+      },
+      reason: "unavailable",
+    },
+    {
+      label: "lookup stderr",
+      result: {
+        exitCode: 0,
+        stdout: "C:\\Program Files\\GitHub CLI\\gh.exe\r\n",
+        stderr: "unexpected lookup diagnostic",
+      },
+      reason: "unavailable",
+    },
+    {
+      label: "a relative lookup target",
+      result: { exitCode: 0, stdout: "gh.exe\r\n", stderr: "" },
+      reason: "invalid target",
+    },
+    {
+      label: "a mismatched lookup basename",
+      result: { exitCode: 0, stdout: "C:\\fixture\\other.exe\r\n", stderr: "" },
+      reason: "invalid target",
+    },
+  ])("fails closed on $label", async ({ result, reason }) => {
+    const runProcess = vi.fn(() => Promise.resolve(result));
+    await expect(
+      qualificationCliProcess.resolveQualificationCliExecutable("gh.exe", 12_345, {
+        platform: "win32",
+        environment: { SystemRoot: "C:\\Windows", PATH: "C:\\fixture" },
+        runProcess,
+      }),
+    ).rejects.toThrow(reason);
+    expect(runProcess).toHaveBeenCalledOnce();
+  });
+
+  it("resolves once and reuses the exact executable across the observer's shared budget", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-github-qualification-resolved-cli-",
+    );
+    roots.push(root);
+    const fixture = portableFixture();
+    const clockStart = Date.parse("2026-08-11T12:00:00.000Z");
+    let currentTime = clockStart;
+    const resolvedExecutable =
+      process.platform === "win32" ? "C:\\Program Files\\GitHub CLI\\gh.exe" : "/fixture/gh";
+    const resolveExecutable = vi
+      .spyOn(qualificationCliProcess, "resolveQualificationCliExecutable")
+      .mockImplementation(() => {
+        currentTime += 2_000;
+        return Promise.resolve(resolvedExecutable);
+      });
+    const runProcess = vi
+      .spyOn(qualificationCliProcess, "runQualificationCliProcess")
+      .mockImplementation(async (_executable, arguments_) => {
+        if (arguments_[1] === "view") {
+          currentTime += 3_000;
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              ...exactObservation(fixture.artifact, fixture.candidate).run,
+              databaseId: runId,
+              jobs: requiredJobs.map((name) => ({
+                name,
+                status: "completed",
+                conclusion: "success",
+              })),
+            }),
+            stderr: "",
+          };
+        }
+        const directory = arguments_[arguments_.indexOf("--dir") + 1];
+        if (directory === undefined) throw new Error("fixture download directory missing");
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, "update.bundle.tgz"), fixture.artifact);
+        await writeFile(
+          join(directory, "portable-release-candidate.json"),
+          JSON.stringify(fixture.candidate),
+          "utf8",
+        );
+        currentTime += 4_000;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      });
+    const observer = new updater.GhCliGitHubActionsQualificationObserver({
+      temporaryParent: root,
+      now: () => currentTime,
+    });
+
+    await expect(
+      observer.observe({
+        source: {
+          kind: "GITHUB_ACTIONS_RUN",
+          repository: "hunterzheng1/hunter-pi",
+          runId,
+        },
+        deadline: "2026-08-11T12:01:00.000Z",
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ run: { id: runId } });
+    expect(resolveExecutable).toHaveBeenCalledOnce();
+    expect(resolveExecutable).toHaveBeenCalledWith(
+      process.platform === "win32" ? "gh.exe" : "gh",
+      30_000,
+    );
+    expect(runProcess).toHaveBeenCalledTimes(2);
+    expect(runProcess.mock.calls.map((call) => call[0])).toEqual([
+      resolvedExecutable,
+      resolvedExecutable,
+    ]);
+    expect(runProcess.mock.calls.map((call) => call[2])).toEqual([28_000, 25_000]);
+  });
+
+  it("fails closed within the caller budget when a bare executable is unavailable", async () => {
+    const startedAt = Date.now();
+    await expect(
+      qualificationCliProcess.runQualificationCliProcess(
+        "hunter-pi-qualification-cli-that-does-not-exist-5b43d868",
+        [],
+        250,
+      ),
+    ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  }, 10_000);
+
+  it("settles one short-lived bare executable through the real platform driver", async () => {
+    const executable = await qualificationCliProcess.resolveQualificationCliExecutable(
+      process.platform === "win32" ? "node.exe" : "node",
+      10_000,
+    );
+    const result = await qualificationCliProcess.runQualificationCliProcess(
+      executable,
+      ["--version"],
+      10_000,
+    );
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result.stdout.trim()).toBe(process.version);
+  }, 20_000);
+
   it("does not expose the internal qualification process runner from the updater package", () => {
     expect(Reflect.has(updater, "runBoundedProcess")).toBe(false);
     expect(Reflect.has(updater, "runQualificationCliProcess")).toBe(false);
+    expect(Reflect.has(updater, "resolveQualificationCliExecutable")).toBe(false);
   });
 
   it("hard-stops a detached inherited-pipe descendant after its parent exits", async () => {
@@ -1117,7 +1293,7 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       "process.exit(0);",
     ].join("\n");
     const startedAt = Date.now();
-    const run = runQualificationCliProcess(
+    const run = qualificationCliProcess.runQualificationCliProcess(
       process.execPath,
       ["-e", childSource, processIdsPath, overflowTriggerPath],
       40_000,
@@ -1177,7 +1353,11 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     ].join("\n");
 
     await expect(
-      runQualificationCliProcess(process.execPath, ["-e", childSource], 10_000),
+      qualificationCliProcess.runQualificationCliProcess(
+        process.execPath,
+        ["-e", childSource],
+        10_000,
+      ),
     ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
   });
 });

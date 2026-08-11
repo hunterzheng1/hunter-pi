@@ -249,6 +249,14 @@ describe("Task 7 platform Evidence", () => {
       const result = await runTask7ProbeCommand("git", args, root);
       expect(result.exitCode).toBe(0);
     }
+    const ambientIgnore = join(root, ".git", "ambient-ignore");
+    await writeFile(ambientIgnore, "unrelated.txt\n", "utf8");
+    const configureAmbientIgnore = await runTask7ProbeCommand(
+      "git",
+      ["config", "core.excludesFile", ambientIgnore],
+      root,
+    );
+    expect(configureAmbientIgnore.exitCode).toBe(0);
     await expect(assertTask7WorktreeClean(root)).resolves.toBeUndefined();
     await writeFile(join(root, "unrelated.txt"), "must block\n", "utf8");
     await expect(assertTask7WorktreeClean(root)).rejects.toThrow(/entire worktree is not clean/u);

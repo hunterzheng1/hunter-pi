@@ -90,6 +90,22 @@ function helperEnvironment(): NodeJS.ProcessEnv {
   return result;
 }
 
+function normalizeWindowsEnvironment(
+  environment: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  const observedNames = new Set<string>();
+  for (const name of Object.keys(environment).sort()) {
+    const foldedName = name.toUpperCase();
+    if (observedNames.has(foldedName)) continue;
+    const value = environment[name];
+    if (value === undefined) continue;
+    observedNames.add(foldedName);
+    result[name] = value;
+  }
+  return result;
+}
+
 async function resolvePowerShell(): Promise<string> {
   const programFiles = process.env["ProgramFiles"];
   const systemRoot = process.env["SystemRoot"] ?? process.env["WINDIR"];
@@ -201,7 +217,7 @@ class WindowsJobObjectSession implements ManagedProcessDriverSession {
         executable: request.executable,
         argv: request.argv,
         cwd: request.cwd,
-        environment: request.environment,
+        environment: normalizeWindowsEnvironment(request.environment),
         timeoutMs: request.timeoutMs,
       })}\n`,
       "utf8",

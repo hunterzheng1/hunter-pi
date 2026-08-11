@@ -1,11 +1,15 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { sha256Fingerprint } from "@hunter-pi/evidence";
 import * as updater from "@hunter-pi/updater";
+
+import { runQualificationCliProcess } from "../packages/updater/src/gh-cli-process.js";
 
 import { fixtureTimestamp } from "./support/workflow-domain-fixture.js";
 import {
@@ -941,9 +945,9 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     const clockStart = Date.parse("2026-08-11T12:00:00.000Z");
     const observerNow = vi
       .fn<() => number>()
+      .mockReturnValue(clockStart + 10_000)
       .mockReturnValueOnce(clockStart)
-      .mockReturnValueOnce(clockStart)
-      .mockReturnValueOnce(clockStart + 10_000);
+      .mockReturnValueOnce(clockStart);
     const observer = new Observer({
       temporaryParent: root,
       runGh,
@@ -987,5 +991,182 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       ]),
     );
     expect(runGh.mock.calls.map((call) => call[1])).toEqual([30_000, 20_000]);
+  });
+
+  it("rejects a successful download observed after the shared elapsed deadline", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-github-qualification-expired-",
+    );
+    roots.push(root);
+    const fixture = portableFixture();
+    const clockStart = Date.parse("2026-08-11T12:00:00.000Z");
+    let currentTime = clockStart;
+    const runGh = vi.fn(async (arguments_: readonly string[], timeoutMs: number) => {
+      void timeoutMs;
+      if (arguments_[1] === "view") {
+        currentTime += 10_000;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ...exactObservation(fixture.artifact, fixture.candidate).run,
+            databaseId: runId,
+            jobs: requiredJobs.map((name) => ({
+              name,
+              status: "completed",
+              conclusion: "success",
+            })),
+          }),
+          stderr: "",
+        };
+      }
+      const directory = arguments_[arguments_.indexOf("--dir") + 1];
+      if (directory === undefined) throw new Error("fixture download directory missing");
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "update.bundle.tgz"), fixture.artifact);
+      await writeFile(
+        join(directory, "portable-release-candidate.json"),
+        JSON.stringify(fixture.candidate),
+        "utf8",
+      );
+      currentTime += 20_001;
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const observer = new updater.GhCliGitHubActionsQualificationObserver({
+      temporaryParent: root,
+      runGh,
+      now: () => currentTime,
+    });
+
+    await expect(
+      observer.observe({
+        source: {
+          kind: "GITHUB_ACTIONS_RUN",
+          repository: "hunterzheng1/hunter-pi",
+          runId,
+        },
+        deadline: "2026-08-11T12:01:00.000Z",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow(/unavailable/u);
+    expect(runGh.mock.calls.map((call) => call[1])).toEqual([30_000, 20_000]);
+  });
+
+  it("counts platform setup against the qualification process deadline", async () => {
+    const identityFingerprint = `sha256:${"a".repeat(64)}` as const;
+    const cancel = vi.fn(() => Promise.resolve({ outcome: "ACKNOWLEDGED" as const }));
+    const terminalSnapshot = {
+      phase: "TERMINAL" as const,
+      exitCode: 0,
+      terminationCause: "NONE" as const,
+      identityState: "MATCH" as const,
+      treeState: "EMPTY" as const,
+      stdoutState: "CLOSED" as const,
+      stderrState: "CLOSED" as const,
+      observedAt: fixtureTimestamp,
+    };
+    const createDriver = vi.fn(() => ({
+      start: async () => {
+        await delay(25);
+        return {
+          identityFingerprint,
+          containment: "WINDOWS_JOB_OBJECT" as const,
+          snapshot: () => Promise.resolve(terminalSnapshot),
+          cancel,
+          waitForSettlement: () => Promise.resolve(terminalSnapshot),
+        };
+      },
+    }));
+
+    await expect(
+      runQualificationCliProcess("must-not-run", [], 10, { createDriver }),
+    ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
+    expect(createDriver).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledWith(identityFingerprint, "TIMEOUT");
+  });
+
+  it("does not expose the internal qualification process runner from the updater package", () => {
+    expect(Reflect.has(updater, "runBoundedProcess")).toBe(false);
+    expect(Reflect.has(updater, "runQualificationCliProcess")).toBe(false);
+  });
+
+  it("hard-stops a detached inherited-pipe descendant after its parent exits", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-github-qualification-timeout-",
+    );
+    roots.push(root);
+    const processIdsPath = join(root, "process-ids.json");
+    const grandchildSource = "setTimeout(() => process.exit(91), 12000);";
+    const childSource = [
+      'const { spawn } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], { detached: true, stdio: ["ignore", "inherit", "inherit"], windowsHide: true });`,
+      "writeFileSync(process.argv[1], JSON.stringify([process.pid, grandchild.pid]));",
+      "grandchild.unref();",
+      "process.exit(0);",
+    ].join("\n");
+    const startedAt = Date.now();
+    const run = runQualificationCliProcess(
+      process.execPath,
+      ["-e", childSource, processIdsPath],
+      3_000,
+    );
+    let processIds: number[] | undefined;
+    const identityDeadline = Date.now() + 5_000;
+    while (processIds === undefined && Date.now() < identityDeadline) {
+      try {
+        processIds = z
+          .array(z.number().int().positive())
+          .length(2)
+          .parse(JSON.parse(await readFile(processIdsPath, "utf8")) as unknown);
+      } catch {
+        await delay(25);
+      }
+    }
+    expect(processIds).toBeDefined();
+    const [parentProcessId, grandchildProcessId] = processIds ?? [];
+    expect(parentProcessId).toBeDefined();
+    expect(grandchildProcessId).toBeDefined();
+
+    const isAlive = (processId: number): boolean => {
+      try {
+        process.kill(processId, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const parentExitDeadline = Date.now() + 1_000;
+    while (
+      parentProcessId !== undefined &&
+      isAlive(parentProcessId) &&
+      Date.now() < parentExitDeadline
+    ) {
+      await delay(25);
+    }
+    expect(parentProcessId === undefined ? true : isAlive(parentProcessId)).toBe(false);
+    expect(grandchildProcessId === undefined ? false : isAlive(grandchildProcessId)).toBe(true);
+
+    await expect(run).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
+    expect(Date.now() - startedAt).toBeLessThan(8_000);
+    for (const processId of processIds ?? []) {
+      const processExitDeadline = Date.now() + 2_000;
+      while (isAlive(processId) && Date.now() < processExitDeadline) {
+        await delay(25);
+      }
+      expect(isAlive(processId)).toBe(false);
+    }
+  }, 20_000);
+
+  it("applies one shared byte limit across stdout and stderr", async () => {
+    const childSource = [
+      'process.stdout.write("o".repeat(700_000));',
+      'process.stderr.write("e".repeat(700_000));',
+    ].join("\n");
+
+    await expect(
+      runQualificationCliProcess(process.execPath, ["-e", childSource], 10_000),
+    ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
   });
 });

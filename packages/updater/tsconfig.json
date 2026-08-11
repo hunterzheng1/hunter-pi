@@ -8,5 +8,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../domain" }, { "path": "../evidence" }]
+  "references": [{ "path": "../domain" }, { "path": "../evidence" }, { "path": "../execution" }]
 }

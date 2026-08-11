@@ -11,7 +11,7 @@ export interface LocalManagedProcessHostOptions {
   readonly now?: () => string;
 }
 
-function createPlatformDriver(): ManagedProcessDriver {
+export function createLocalManagedProcessDriver(): ManagedProcessDriver {
   if (process.platform === "win32") return new WindowsJobObjectDriver();
   if (process.platform === "linux") return new LinuxSubreaperProcessTreeDriver();
   throw new ManagedProcessError(
@@ -24,7 +24,7 @@ export function createLocalManagedProcessHost(
   options: LocalManagedProcessHostOptions,
 ): ManagedProcessHost {
   return createManagedProcessHost({
-    driver: createPlatformDriver(),
+    driver: createLocalManagedProcessDriver(),
     leaseManager: options.leaseManager,
     ...(options.now === undefined ? {} : { now: options.now }),
   });

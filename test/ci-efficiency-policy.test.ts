@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES } from "@hunter-pi/updater";
+
 const workflow = await readFile(
   resolve(import.meta.dirname, "..", ".github", "workflows", "ci.yml"),
   "utf8",
@@ -30,6 +32,31 @@ function classify(paths: readonly string[]): string {
 }
 
 describe("GitHub Actions CI efficiency policy", () => {
+  it("keeps the portable qualification job contract aligned with the full CI gate", () => {
+    expect(HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES).toEqual([
+      "Tests / ubuntu-latest",
+      "Tests / windows-latest",
+      "Quality + platform Evidence / ubuntu-latest",
+      "Quality + platform Evidence / windows-latest",
+      "Windows x64 portable artifact",
+      "Windows external package smoke",
+      "Windows clean locked install",
+      "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+      "Task 7 containment / ubuntu-latest",
+      "Task 7 containment / windows-latest",
+      "Task 7 Evidence / Windows + Ubuntu identity",
+      "CI gate",
+    ]);
+    expect(workflow).toContain("name: Tests / ${{ matrix.os }}");
+    expect(workflow).toContain("name: Quality + platform Evidence / ${{ matrix.os }}");
+    expect(workflow).toContain("name: Task 7 containment / ${{ matrix.os }}");
+    for (const index of [4, 5, 6, 7, 10, 11]) {
+      const name = HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES[index];
+      if (name === undefined) throw new Error("qualification job fixture index is invalid");
+      expect(workflow).toContain(`name: ${name}`);
+    }
+  });
+
   it("runs the containment matrix in parallel behind the full-change scope", () => {
     const task7Section =
       /\x20{2}task7-platform:\r?\n([\s\S]*?)\r?\n\x20{2}task7-evidence-consistency:/u.exec(

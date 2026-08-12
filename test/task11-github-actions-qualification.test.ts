@@ -20,6 +20,20 @@ import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 const sourceCommit = "a".repeat(40);
 const runId = 31_451_189_405;
 const requiredJobs = [
+  "Tests / ubuntu-latest",
+  "Tests / windows-latest",
+  "Quality + platform Evidence / ubuntu-latest",
+  "Quality + platform Evidence / windows-latest",
+  "Windows x64 portable artifact",
+  "Windows external package smoke",
+  "Windows clean locked install",
+  "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+  "Task 7 containment / ubuntu-latest",
+  "Task 7 containment / windows-latest",
+  "Task 7 Evidence / Windows + Ubuntu identity",
+  "CI gate",
+] as const;
+const legacyRequiredJobs = [
   "ubuntu-latest / Node 24",
   "windows-latest / Node 24",
   "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
@@ -116,6 +130,33 @@ function exactObservation(
 }
 
 describe("Task 11 GitHub Actions portable qualification", () => {
+  it("keeps historical v1 qualification Evidence readable after the CI job contract changes", () => {
+    const fixture = portableFixture();
+    expect(
+      updater.windowsPortableQualificationEvidenceSchema.parse({
+        schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+        evidenceId: `evidence_main-ci-${String(runId)}-portable`,
+        repository: "hunterzheng1/hunter-pi",
+        sourceCommit,
+        candidateIdentityFingerprint: `sha256:${"a".repeat(64)}`,
+        artifact: {
+          name: "hpi-windows-x64-portable",
+          fingerprint: fixture.candidate.artifact.fingerprint,
+          byteLength: fixture.candidate.artifact.byteLength,
+        },
+        run: {
+          ...exactObservation(fixture.artifact, fixture.candidate).run,
+          jobs: legacyRequiredJobs.map((name) => ({
+            name,
+            status: "completed",
+            conclusion: "success",
+          })),
+        },
+        observedAt: "2026-08-11T12:30:00.000Z",
+      }),
+    ).toMatchObject({ schemaVersion: "hpi-windows-portable-qualification-evidence.v1" });
+  });
+
   it("creates PASS qualification only from the exact successful main run and hosted bundle", async () => {
     const fixture = portableFixture();
     const Constructor = Reflect.get(updater, "GitHubActionsWindowsPortableQualificationAuthority");
@@ -161,7 +202,7 @@ describe("Task 11 GitHub Actions portable qualification", () => {
         },
       },
       evidence: {
-        schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+        schemaVersion: "hpi-windows-portable-qualification-evidence.v2",
         evidenceId: `evidence_main-ci-${String(runId)}-portable`,
         sourceCommit,
         artifact: {
@@ -915,13 +956,29 @@ describe("Task 11 GitHub Actions portable qualification", () => {
             ...exactObservation(fixture.artifact, fixture.candidate).run,
             databaseId: runId,
             extraIgnoredField: "not retained",
-            jobs: requiredJobs.map((name) => ({
-              name,
-              status: "completed",
-              conclusion: "success",
-              databaseId: 1,
-              steps: [],
-            })),
+            jobs: [
+              {
+                name: "Change scope",
+                status: "completed",
+                conclusion: "success",
+                databaseId: 1,
+                steps: [],
+              },
+              ...requiredJobs.map((name) => ({
+                name,
+                status: "completed",
+                conclusion: "success",
+                databaseId: 1,
+                steps: [],
+              })),
+              {
+                name: "Documentation quality",
+                status: "completed",
+                conclusion: "skipped",
+                databaseId: 1,
+                steps: [],
+              },
+            ],
           }),
           stderr: "",
         };

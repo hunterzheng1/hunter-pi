@@ -29,6 +29,20 @@ import * as qualificationCliProcess from "./gh-cli-process.js";
 export const HPI_GITHUB_REPOSITORY = "hunterzheng1/hunter-pi" as const;
 export const HPI_WINDOWS_PORTABLE_ARTIFACT_NAME = "hpi-windows-x64-portable" as const;
 export const HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES = [
+  "Tests / ubuntu-latest",
+  "Tests / windows-latest",
+  "Quality + platform Evidence / ubuntu-latest",
+  "Quality + platform Evidence / windows-latest",
+  "Windows x64 portable artifact",
+  "Windows external package smoke",
+  "Windows clean locked install",
+  "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+  "Task 7 containment / ubuntu-latest",
+  "Task 7 containment / windows-latest",
+  "Task 7 Evidence / Windows + Ubuntu identity",
+  "CI gate",
+] as const;
+const HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES_V1 = [
   "ubuntu-latest / Node 24",
   "windows-latest / Node 24",
   "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
@@ -36,54 +50,66 @@ export const HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES = [
   "Task 7 containment / windows-latest",
   "Task 7 Evidence / Windows + Ubuntu identity",
 ] as const;
+const windowsPortableQualificationJobNames = new Set<string>(
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
+);
 
 const gitCommitSchema = z.string().regex(/^[a-f0-9]{40}$/u);
 const githubRunIdSchema = z.number().int().positive();
-const successfulJobSchema = z.strictObject({
-  name: z.enum(HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES),
-  status: z.literal("completed"),
-  conclusion: z.literal("success"),
-});
-
-export const githubActionsPortableQualificationRunSchema = z
-  .strictObject({
-    id: githubRunIdSchema,
-    attempt: z.number().int().positive(),
-    event: z.literal("push"),
-    headBranch: z.literal("main"),
-    headSha: gitCommitSchema,
-    workflowName: z.literal("CI"),
+function createPortableQualificationRunSchema<
+  const JobNames extends readonly [string, ...string[]],
+>(jobNames: JobNames) {
+  const successfulJobSchema = z.strictObject({
+    name: z.enum(jobNames),
     status: z.literal("completed"),
     conclusion: z.literal("success"),
-    updatedAt: timestampSchema,
-    url: z.url(),
-    jobs: z.array(successfulJobSchema).length(HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES.length),
-  })
-  .superRefine((run, context) => {
-    const expectedNames = [...HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES].sort();
-    const observedNames = run.jobs.map((job) => job.name).sort();
-    if (canonicalJson(observedNames) !== canonicalJson(expectedNames)) {
-      context.addIssue({
-        code: "custom",
-        path: ["jobs"],
-        message: "portable qualification requires the exact hosted CI job set",
-      });
-    }
-    const expectedUrl = `https://github.com/${HPI_GITHUB_REPOSITORY}/actions/runs/${String(run.id)}`;
-    if (run.url !== expectedUrl) {
-      context.addIssue({
-        code: "custom",
-        path: ["url"],
-        message: "portable qualification run URL does not bind the trusted repository and run",
-      });
-    }
   });
+  return z
+    .strictObject({
+      id: githubRunIdSchema,
+      attempt: z.number().int().positive(),
+      event: z.literal("push"),
+      headBranch: z.literal("main"),
+      headSha: gitCommitSchema,
+      workflowName: z.literal("CI"),
+      status: z.literal("completed"),
+      conclusion: z.literal("success"),
+      updatedAt: timestampSchema,
+      url: z.url(),
+      jobs: z.array(successfulJobSchema).length(jobNames.length),
+    })
+    .superRefine((run, context) => {
+      const expectedNames = [...jobNames].sort();
+      const observedNames = run.jobs.map((job) => job.name).sort();
+      if (canonicalJson(observedNames) !== canonicalJson(expectedNames)) {
+        context.addIssue({
+          code: "custom",
+          path: ["jobs"],
+          message: "portable qualification requires the exact hosted CI job set",
+        });
+      }
+      const expectedUrl = `https://github.com/${HPI_GITHUB_REPOSITORY}/actions/runs/${String(run.id)}`;
+      if (run.url !== expectedUrl) {
+        context.addIssue({
+          code: "custom",
+          path: ["url"],
+          message: "portable qualification run URL does not bind the trusted repository and run",
+        });
+      }
+    });
+}
+
+const githubActionsPortableQualificationRunV1Schema = createPortableQualificationRunSchema(
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES_V1,
+);
+export const githubActionsPortableQualificationRunSchema = createPortableQualificationRunSchema(
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
+);
 export type GitHubActionsPortableQualificationRun = z.infer<
   typeof githubActionsPortableQualificationRunSchema
 >;
 
-export const windowsPortableQualificationEvidenceSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-windows-portable-qualification-evidence.v1"),
+const qualificationEvidenceFields = {
   evidenceId: evidenceIdSchema,
   repository: z.literal(HPI_GITHUB_REPOSITORY),
   sourceCommit: gitCommitSchema,
@@ -93,9 +119,22 @@ export const windowsPortableQualificationEvidenceSchema = z.strictObject({
     fingerprint: fingerprintSchema,
     byteLength: z.number().int().positive(),
   }),
-  run: githubActionsPortableQualificationRunSchema,
   observedAt: timestampSchema,
+} as const;
+const windowsPortableQualificationEvidenceV1Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-windows-portable-qualification-evidence.v1"),
+  ...qualificationEvidenceFields,
+  run: githubActionsPortableQualificationRunV1Schema,
 });
+export const windowsPortableQualificationEvidenceV2Schema = z.strictObject({
+  schemaVersion: z.literal("hpi-windows-portable-qualification-evidence.v2"),
+  ...qualificationEvidenceFields,
+  run: githubActionsPortableQualificationRunSchema,
+});
+export const windowsPortableQualificationEvidenceSchema = z.discriminatedUnion("schemaVersion", [
+  windowsPortableQualificationEvidenceV1Schema,
+  windowsPortableQualificationEvidenceV2Schema,
+]);
 export type WindowsPortableQualificationEvidence = z.infer<
   typeof windowsPortableQualificationEvidenceSchema
 >;
@@ -233,11 +272,13 @@ export class GhCliGitHubActionsQualificationObserver {
         conclusion: raw.conclusion,
         updatedAt: raw.updatedAt,
         url: raw.url,
-        jobs: raw.jobs.map((job) => ({
-          name: job.name,
-          status: job.status,
-          conclusion: job.conclusion,
-        })),
+        jobs: raw.jobs
+          .filter((job) => windowsPortableQualificationJobNames.has(job.name))
+          .map((job) => ({
+            name: job.name,
+            status: job.status,
+            conclusion: job.conclusion,
+          })),
       });
       downloadRoot = await mkdtemp(join(this.#temporaryParent, "hunter-pi-gh-qualification-"));
       const download = await runGh(
@@ -399,7 +440,7 @@ export class GitHubActionsWindowsPortableQualificationAuthority implements Windo
     const evidenceId = evidenceIdSchema.parse(`evidence_main-ci-${String(run.id)}-portable`);
     const candidateIdentity = windowsPortableQualificationCandidateIdentity(candidate);
     const evidence = windowsPortableQualificationEvidenceSchema.parse({
-      schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+      schemaVersion: "hpi-windows-portable-qualification-evidence.v2",
       evidenceId,
       repository: source.repository,
       sourceCommit: bundle.manifest.sourceCommit,

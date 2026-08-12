@@ -97,7 +97,7 @@ function portableCandidate(releaseId: string): {
   const { qualification, ...candidateIdentity } = candidate;
   void qualification;
   const evidence = windowsPortableQualificationEvidenceSchema.parse({
-    schemaVersion: "hpi-windows-portable-qualification-evidence.v1",
+    schemaVersion: "hpi-windows-portable-qualification-evidence.v2",
     evidenceId: `evidence_main-ci-${String(runId)}-portable`,
     repository: "hunterzheng1/hunter-pi",
     sourceCommit,

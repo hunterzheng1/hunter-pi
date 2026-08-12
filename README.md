@@ -18,7 +18,7 @@ Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **W
 - 最终 Windows pilot 完成 10/10 个预注册任务，覆盖两个 disposable Git 仓库。
 - 3/3 个受控中断保留失败历史并在同一 Run 中恢复。
 - 两轮资格更新与回滚通过；五组对抗性插件在 Safe Mode 中未执行用户代码。
-- 当前 `0.1.0-dev.1` 本地完整门禁通过 73 个测试文件、746 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、干净安装和 Pi `0.84.1` 公共接口探针；历史 `0.83` 日用 Evidence 由严格 v1 读取合同保持可读，但不能据此判定新版本日用 `GO`。
+- 当前 `0.1.0-dev.1` 本地完整门禁通过 73 个测试文件、748 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、干净安装和 Pi `0.84.1` 公共接口探针；历史 `0.83` 日用 Evidence 由严格 v1 读取合同保持可读，但不能据此判定新版本日用 `GO`。
 - 验收 PR [#83](https://github.com/hunterzheng1/hunter-pi/pull/83) 和精确合并提交的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) 均通过六个 Windows/Ubuntu 必需作业。
 - 最终文档合并提交 `aa2b836ab46a83de2fa01b17a8e203b5515748ac` 的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31589912791) 通过全部六个必需作业。
 

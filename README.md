@@ -2,7 +2,7 @@
 
 Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版本的 Pi Engine、Hunter Pi 自有的 Workflow Kernel、独立验证、恢复、插件策略和更新回滚组合为一个可独立运行的产品，不依赖 Hunter-Harness 或 Hunter Platform。
 
-Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **Windows x64 unsigned developer-preview 日常使用 GO**。当前 `0.1.0-dev.1` 更新到 Pi `0.84.1` 并新增 ZIP 安装分发；它必须完成自己的 Windows/Ubuntu CI、Release 和发布后下载验证，不能继承旧版本的日常使用结论。两个版本都不是已签名的 Stable 版本。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **Windows x64 unsigned developer-preview 日常使用 GO**。当前 `0.1.0-dev.1` 已更新到 Pi `0.84.1`，并完成 Windows ZIP、PowerShell 安装器、精确 Windows/Ubuntu CI、公开 prerelease 和发布后隔离安装验证。它可以用于 Windows x64 的 Provider-neutral 评估，但不能继承旧版本的日常使用结论。两个版本都不是已签名的 Stable 版本。
 
 ## 从这里开始
 
@@ -19,10 +19,12 @@ Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **W
 - 3/3 个受控中断保留失败历史并在同一 Run 中恢复。
 - 两轮资格更新与回滚通过；五组对抗性插件在 Safe Mode 中未执行用户代码。
 - 当前 `0.1.0-dev.1` 本地完整门禁通过 73 个测试文件、748 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、干净安装和 Pi `0.84.1` 公共接口探针；历史 `0.83` 日用 Evidence 由严格 v1 读取合同保持可读，但不能据此判定新版本日用 `GO`。
+- 精确源码 `d9f2d931b9fc42d23ceae60fada2aee811caf2ec` 的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274) 通过全部 Windows/Ubuntu、portable、containment 和 Evidence 门禁；[`v0.1.0-dev.1`](https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.1.0-dev.1) 已作为未签名 GitHub prerelease 发布。
+- 从实际 GitHub URL 下载后，在没有 ambient Node.js、npm、Pi 或 `hpi` 的隔离 PATH 和包含空格、中文的临时路径中完成远程安装。版本、更新状态、disposable Git fixture 和真实 TUI smoke 通过；没有发起 Provider 请求，Provider 认证仍为 `BLOCKED`。
 - 验收 PR [#83](https://github.com/hunterzheng1/hunter-pi/pull/83) 和精确合并提交的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) 均通过六个 Windows/Ubuntu 必需作业。
 - 最终文档合并提交 `aa2b836ab46a83de2fa01b17a8e203b5515748ac` 的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31589912791) 通过全部六个必需作业。
 
-完整身份、性能样本、Provider 用量和保留失败见[最终日用验收记录](docs/validation/2026-08-12-task12-daily-use-go.md)。
+Pi 0.84.1 的发布身份、资产哈希、CI、失败历史和适用边界见[当前发布验证](docs/validation/2026-08-13-pi-0.84.1-windows-release.md)。Pi 0.83 的历史性能、Provider 用量和日用验收见[最终日用验收记录](docs/validation/2026-08-12-task12-daily-use-go.md)。
 
 ## 5 分钟上手
 

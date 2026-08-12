@@ -1,0 +1,87 @@
+{
+  "artifact": {
+    "byteLength": 64936745,
+    "fingerprint": "sha256:5091110764aa5e7499f4b00e9e9b800cab6d739a17303d8b547dd8827186b983",
+    "name": "hpi-windows-x64-portable"
+  },
+  "candidateIdentityFingerprint": "sha256:a4c95e75ac5396aa1e5f3ee453143defa45e38fc50e14833febf0f9d535bc52d",
+  "evidenceId": "evidence_main-ci-31643808274-portable",
+  "observedAt": "2026-08-12T21:52:32Z",
+  "repository": "hunterzheng1/hunter-pi",
+  "run": {
+    "attempt": 1,
+    "conclusion": "success",
+    "event": "push",
+    "headBranch": "main",
+    "headSha": "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+    "id": 31643808274,
+    "jobs": [
+      {
+        "conclusion": "success",
+        "name": "Windows clean locked install",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Quality + platform Evidence / windows-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Task 7 containment / ubuntu-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Tests / windows-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Tests / ubuntu-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Quality + platform Evidence / ubuntu-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Task 7 containment / windows-latest",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Windows external package smoke",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Windows x64 portable artifact",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Task 7 Evidence / Windows + Ubuntu identity",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "CI gate",
+        "status": "completed"
+      }
+    ],
+    "status": "completed",
+    "updatedAt": "2026-08-12T21:52:32Z",
+    "url": "https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274",
+    "workflowName": "CI"
+  },
+  "schemaVersion": "hpi-windows-portable-qualification-evidence.v2",
+  "sourceCommit": "d9f2d931b9fc42d23ceae60fada2aee811caf2ec"
+}

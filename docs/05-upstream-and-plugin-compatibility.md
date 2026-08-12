@@ -45,7 +45,7 @@ Qualification states:
 
 The dated [0.84.1 assessment](research/2026-08-13-pi-0.84.1-upgrade-assessment.md) binds npm/Git identity `@earendil-works/pi-coding-agent@0.84.1` / `53fa77ccd8a279eb87e92294ef3687b03ff80112`. The provider-independent probe explicitly verifies the v0.84 delta-only JSON/RPC `message_update`: records carry typed `assistantMessageEvent` deltas, omit cumulative `message` and `assistantMessageEvent.partial`, and retain final `message_end.message` as authoritative. The same completed segment must pass Hunter Pi's production completion predicate and final-`message_end` Provider-usage accounting. Current observations use the strict v2 probe receipt; a separate strict v1 reader preserves the immutable Pi 0.83 Evidence without treating it as current acceptance.
 
-Local Windows Extension, JSON, RPC, and SDK checks pass. Exact merged-head Windows/Ubuntu identity, published Windows assets, and any new real-use acceptance remain bound to the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md); until those facts exist they remain `PENDING` or `NOT_PROVEN`.
+Windows and Ubuntu Extension, JSON, RPC, SDK, portable and Evidence gates pass on exact source `d9f2d931b9fc42d23ceae60fada2aee811caf2ec`. The published Windows assets, real-URL isolated install, Provider-neutral update/rollback and offline TUI startup also pass within the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md). Pi 0.84.1 Provider use, real-repository safety and new daily-use acceptance remain `NOT_PROVEN`.
 
 ### Historical Task 4 candidate result
 

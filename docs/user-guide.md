@@ -2,7 +2,7 @@
 
 本手册面向在 Windows x64 上使用 Hunter Pi unsigned developer-preview 的个人开发者。内容覆盖安装、首次配置、Quick Session、Managed Change、插件、更新、故障排查和安全边界。
 
-Pi 0.83 / Hunter Pi `0.1.0-dev.0` 已在预注册的真实 Windows pilot 中得到历史 `GO`。当前 `0.1.0-dev.1` 升级到 Pi 0.84.1，并改用 ZIP 与 PowerShell 安装；它不能继承旧版本的日用结论，在新的发布和日用 Evidence 完成前保持 `NOT_PROVEN`。两个版本都不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 已在预注册的真实 Windows pilot 中得到历史 `GO`。当前 `0.1.0-dev.1` 已升级到 Pi 0.84.1，并完成 ZIP、PowerShell 安装器、公开 prerelease 和发布后隔离安装验证。Provider-neutral 安装、更新、回滚和 TUI 启动可用；Pi 0.84.1 的真实 Provider 与日用 Evidence 仍为 `NOT_PROVEN`。两个版本都不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
 
 ## 1. 使用前确认
 

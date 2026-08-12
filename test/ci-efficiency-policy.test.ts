@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -7,12 +8,29 @@ const workflow = await readFile(
   resolve(import.meta.dirname, "..", ".github", "workflows", "ci.yml"),
   "utf8",
 );
+const scopeScriptSource = await readFile(
+  resolve(import.meta.dirname, "..", "scripts", "ci-scope.mjs"),
+  "utf8",
+);
 const manifest = JSON.parse(
   await readFile(resolve(import.meta.dirname, "..", "package.json"), "utf8"),
 ) as { readonly scripts?: Readonly<Record<string, string>> };
+const repositoryRoot = resolve(import.meta.dirname, "..");
+
+function classify(paths: readonly string[]): string {
+  const result = spawnSync(
+    process.execPath,
+    [resolve(repositoryRoot, "scripts", "ci-scope.mjs"), "--paths-json", JSON.stringify(paths)],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return result.stdout.trim();
+}
 
 describe("GitHub Actions CI efficiency policy", () => {
-  it("gates the expensive containment matrix and serializes its host-sensitive jobs", () => {
+  it("runs the containment matrix in parallel behind the full-change scope", () => {
     const task7Section =
       /\x20{2}task7-platform:\r?\n([\s\S]*?)\r?\n\x20{2}task7-evidence-consistency:/u.exec(
         workflow,
@@ -23,8 +41,9 @@ describe("GitHub Actions CI efficiency policy", () => {
 
     expect(task7Section).toBeDefined();
     expect(task7EvidenceSection).toBeDefined();
-    expect(task7Section).toMatch(/^\x20{4}needs: quality\s*$/mu);
-    expect(task7Section).toMatch(/^\x20{6}max-parallel: 1\s*$/mu);
+    expect(task7Section).toMatch(/^\x20{4}needs: scope\s*$/mu);
+    expect(task7Section).toMatch(/^\x20{4}if: needs\.scope\.outputs\.mode == 'full'\s*$/mu);
+    expect(task7Section).toMatch(/^\x20{6}max-parallel: 2\s*$/mu);
 
     const task7BuildIndex = task7Section?.indexOf("run: npm run build") ?? -1;
     const task7ProbeIndex = task7Section?.indexOf("run: npm run probe:task7:compiled") ?? -1;
@@ -35,6 +54,30 @@ describe("GitHub Actions CI efficiency policy", () => {
     expect(task7ProbeIndex).toBeGreaterThan(task7BuildIndex);
     expect(task7EvidenceBuildIndex).toBeGreaterThanOrEqual(0);
     expect(task7CompareIndex).toBeGreaterThan(task7EvidenceBuildIndex);
+  });
+
+  it("routes documentation-only changes through a stable inexpensive gate", () => {
+    expect(classify(["README.md", "docs/user-guide.md"])).toBe("docs");
+    expect(classify(["docs/user-guide.md", "packages/domain/src/schemas.ts"])).toBe("full");
+    expect(classify(["README.md", "packages/domain/src/deleted-schema.ts"])).toBe("full");
+    expect(classify(["packages/domain/src/old.ts", "docs/old.ts"])).toBe("full");
+    expect(classify([".github/workflows/ci.yml"])).toBe("full");
+    expect(scopeScriptSource).toContain('"--no-renames"');
+    expect(scopeScriptSource).toContain('"--diff-filter=ACDMRTUXB"');
+    expect(workflow).toMatch(/^\x20{2}docs-quality:\s*$/mu);
+    expect(workflow).toMatch(/^\x20{2}tests:\s*$/mu);
+    expect(workflow).toMatch(/^\x20{2}windows-portable:\s*$/mu);
+    expect(workflow).toMatch(/^\x20{2}windows-package-smoke:\s*$/mu);
+    expect(workflow).toMatch(/^\x20{2}windows-clean-install:\s*$/mu);
+    expect(workflow).toMatch(/^\x20{2}ci-gate:\s*$/mu);
+
+    const gateSection = /\x20{2}ci-gate:\r?\n([\s\S]*)$/u.exec(workflow)?.[1];
+    expect(gateSection).toContain("- windows-package-smoke");
+    expect(gateSection).toContain("- windows-clean-install");
+    expect(gateSection).toContain("WINDOWS_PACKAGE_RESULT:");
+    expect(gateSection).toContain("WINDOWS_CLEAN_INSTALL_RESULT:");
+    expect(gateSection).toContain("process.env.WINDOWS_PACKAGE_RESULT");
+    expect(gateSection).toContain("process.env.WINDOWS_CLEAN_INSTALL_RESULT");
   });
 
   it("uses cached locked installs and avoids rebuilding the same artifact repeatedly", () => {
@@ -52,12 +95,18 @@ describe("GitHub Actions CI efficiency policy", () => {
       ),
     ).toBe(true);
 
-    expect(workflow).toContain("timeout-minutes: 55");
+    expect(workflow).not.toContain("timeout-minutes: 55");
+    expect(workflow).toContain("timeout-minutes: 15");
     expect(workflow).toContain("run: npm run package-smoke:compiled");
     expect(workflow).toContain("run: npm run pack:preview:compiled");
     expect(workflow).toContain("npm run pack:windows-portable:compiled");
     expect(workflow).toContain("name: Build exact Windows x64 portable update artifact");
-    expect(workflow).toContain("if: runner.os == 'Windows'");
+    expect(workflow).toMatch(
+      /- name: Test packed packages externally\s+if: runner\.os == 'Linux'/u,
+    );
+    expect(workflow).toMatch(/- name: Test a clean locked install\s+if: runner\.os == 'Linux'/u);
+    expect(workflow).toContain("name: Test packed packages externally on Windows");
+    expect(workflow).toContain("name: Test a clean locked install on Windows");
     expect(workflow).toContain("run: npm run probe:pi:compiled");
     expect(workflow).toContain("run: npm run probe:task7:compiled");
     expect(workflow).toContain("npm run probe:task9:compiled");
@@ -73,7 +122,6 @@ describe("GitHub Actions CI efficiency policy", () => {
   });
 
   it("cannot hide missing workspace references behind stale build outputs", async () => {
-    const repositoryRoot = resolve(import.meta.dirname, "..");
     const workspaceDirectories = (
       await Promise.all(
         ["apps", "packages"].map(async (workspaceRoot) =>

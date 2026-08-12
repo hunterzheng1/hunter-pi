@@ -35,7 +35,10 @@ describe("Windows portable package launcher", () => {
       'await readFile(join(repositoryRoot, ".node-version"), "utf8")',
     );
     expect(portablePackerSource).toContain("process.versions.node !== windowsPortableNodeVersion");
-    expect(hostedVersionFiles).toEqual(Array.from({ length: 4 }, () => ".node-version"));
+    expect(hostedVersionFiles.length).toBeGreaterThanOrEqual(4);
+    expect(hostedVersionFiles).toEqual(
+      Array.from({ length: hostedVersionFiles.length }, () => ".node-version"),
+    );
     expect(ciWorkflowSource).not.toMatch(/^\s*node-version:\s*/gmu);
   });
 

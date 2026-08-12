@@ -136,6 +136,22 @@ npm run verify
 
 根目录的 `npm run doctor` 检查开发仓库前置条件；安装后的 `hpi doctor --json` 检查产品安装、Provider 配置、认证元数据、TUI acknowledgement 和制品完整性。两者用途不同。
 
+### 提交方式
+
+日常的小范围文档、测试或低风险修复直接在 `main` 上完成。提交前运行与改动范围相称的本地检查，然后推送 `main`。默认不创建 Pull Request（PR）。
+
+大型改动、高风险改动或需要隔离实验的改动使用临时分支。完成验证后，在本地合并回 `main`，推送 `main`，再删除临时分支和工作树。仅在分支保护、多人评审、外部协作或明确要求时创建远端 PR；不得绕过仓库保护规则。
+
+### CI 路径
+
+CI 始终提供名称固定的 `CI gate` 结果，但会按改动范围选择执行路径：
+
+- 仅修改 `README.md`、根目录治理文档或 `docs/` 时，运行文档快通道。快通道检查依赖锁定安装、格式和空白错误，不重复构建 portable 制品或运行跨平台 Evidence。
+- 修改源码、测试、依赖、脚本或 `.github/` 时，运行完整通道。完整通道保留 Windows/Ubuntu 单元测试、静态检查、平台 Evidence、Task 7 containment 和 Windows x64 portable 构建。
+- 手动触发 `workflow_dispatch` 时，无论文件范围如何，都运行完整通道。
+
+完整通道把单元测试、质量检查、Task 7 探针、Windows portable 构建、Windows 外部包检查和 Windows 干净安装检查并行执行。Ubuntu 仍执行外部包和干净安装检查，Windows 覆盖不降级。根据 2026-08-12 优化前一次主线运行的步骤耗时，新的关键路径目标约为 10 分钟。GitHub 托管 Runner 的排队和负载仍可能造成波动。
+
 ## 架构概览
 
 ```text

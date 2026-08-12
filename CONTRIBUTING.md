@@ -6,14 +6,16 @@ Hunter Pi currently follows a documentation-first delivery plan. Read `AGENTS.md
 
 1. Select one task from `docs/plans/2026-08-03-foundation-to-daily-use.md`.
 2. Before executable code, confirm the repository license and NOTICE/provenance policy are committed.
-3. Create an isolated `codex/*` or other contributor topic branch/worktree.
+3. For a small, low-risk change in a repository that permits direct pushes, work on `main`. For a large, high-risk, multi-stage, or experimental change, create an isolated `codex/*` or other contributor topic branch/worktree.
 4. Freeze the task's acceptance criteria and non-goals.
 5. For behavior, write the smallest failing test first.
 6. Implement only enough to make the test pass, then refactor.
 7. Run the exact tests, then the task-level gates.
 8. Update contracts and documentation in the same change.
-9. Commit one coherent outcome; open a PR; wait for actual Windows and Ubuntu results.
-10. After merge, verify no unique work remains before cleaning the worktree and branch.
+9. Commit one coherent outcome. Push `main` directly when repository policy permits. Open a PR only when branch protection, external review, team coordination, release policy, or the maintainer requires it.
+10. Wait for the selected CI path to finish. For a topic branch, merge it locally when permitted, then verify no unique work remains before cleaning the worktree and branch.
+
+Direct pushes never bypass branch protection or required checks. Documentation-only changes use the inexpensive documentation path; source, test, dependency, script, and CI changes use the complete Windows/Ubuntu path. Manual workflow runs always select the complete path.
 
 ## Engineering commands
 

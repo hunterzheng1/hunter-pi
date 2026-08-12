@@ -121,15 +121,20 @@ Configuration/docs-only changes use schema/link/static checks instead of manufac
 
 ## CI matrix
 
-Task 1 starts with one `quality` matrix job on both required platforms. Later tasks add or split focused jobs only when their corresponding contracts are exercised:
+The current workflow selects a documentation or complete path, then runs the complete path's focused jobs in parallel where their contracts permit it:
 
 | Job | Platform | Required content |
 |---|---|---|
-| `quality` (Task 1) | Windows and Ubuntu | locked install, repository Doctor, lint, typecheck, unit tests, strict compiler fixture, build, format, external package import, and clean-install smoke |
+| `scope` + `docs-quality` | Ubuntu | fail-closed change classification; documentation-only locked install, format, and exact-range whitespace checks |
+| `tests` | Windows and Ubuntu | the non-Evidence unit-test shard |
+| `quality` | Windows and Ubuntu | locked install, repository Doctor, lint, typecheck, strict compiler fixture, build, format, fixed Pi probe, and Task 9/10 platform Evidence |
+| `windows-package-smoke` + `windows-clean-install` | Windows | external package import and clean locked install, parallel with the other full-path jobs |
+| `windows-portable` | Windows | exact Windows x64 portable artifact assembly and upload |
 | `core` (Task 2+) | Windows and Ubuntu | domain/kernel/Fake/plugin fixture tests as those packages gain behavior |
 | `pi-contract` (Task 4+) | Windows and Ubuntu | fixed free/provider-independent Pi surfaces; paid/login cases explicitly skipped and reported |
 | `task7-platform` (Task 7+) | Windows and Ubuntu | exact structured argv, nested cancel/timeout, delayed-handle finality, bounded output, and identity-mismatch fixtures |
 | `task7-evidence-consistency` (Task 7+) | Ubuntu aggregate | strict Windows/Ubuntu source, command, test-file, schema, and six-check identity comparison |
+| `ci-gate` | Ubuntu | one stable fail-closed result that requires the selected documentation or complete path to pass |
 
 A configured but unrun job is `PENDING`. A skipped provider-dependent test is not a platform PASS for that capability.
 

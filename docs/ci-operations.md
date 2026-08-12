@@ -5,10 +5,16 @@ inspection into a high-frequency API poller.
 
 ## Workflow policy
 
-- `quality` is the first hosted stage. The host-sensitive Task 7 matrix starts
-  only after quality passes and runs one platform at a time; it is the sole
-  hosted execution of the managed-process platform suite and emits the bound
-  Task 7 receipts.
+- `scope` classifies the exact push or pull-request range. Documentation-only
+  changes run `docs-quality`; source, test, dependency, script, CI, deletion,
+  rename, unknown, and manually dispatched changes run the complete path.
+  Classification errors fail closed. The stable `CI gate` requires every job
+  selected for that path to pass.
+- The complete path starts Windows/Ubuntu tests, quality and platform Evidence,
+  the Task 7 matrix, Windows portable assembly, Windows package smoke, and
+  Windows clean-install smoke in parallel. Task 7 runs both platforms in
+  parallel and remains the sole hosted execution of the managed-process
+  platform suite.
 - Locked installs use npm's offline-preferred mode and disable audit/fund
   network work. Compiled checks reuse the build already produced by the same
   job instead of rebuilding before each smoke.
@@ -18,11 +24,11 @@ inspection into a high-frequency API poller.
   therefore exercise its packed tarball and locked clean-install closure in
   the same CI run; an npm `E404` for `@hunter-pi/*` is a local closure defect,
   not a registry error to retry.
-- The Windows `quality` job has a 55-minute bound because hosted filesystem
-  variance affects the two isolated npm installation smokes and the exact
-  portable artifact assembly. The portable artifact is still built once, only
-  on Windows, after the shared quality build; the wider bound prevents a
-  passing artifact from consuming the old 40-minute margin.
+- Ubuntu `quality` retains external package and clean-install smokes. Windows
+  runs the same two checks in separate parallel jobs so hosted filesystem
+  variance does not serialize the complete path. The Windows portable artifact
+  is built once in its own parallel job. The measured critical-path target is
+  approximately 10 minutes; hosted-runner queueing and load can exceed it.
 - Task 9 and Task 10 contract matrices are excluded from the generic unit-test
   invocation and run exactly once inside their source-bound platform probes.
   Task 10 reuses the existing Windows/Ubuntu `quality` jobs and the existing

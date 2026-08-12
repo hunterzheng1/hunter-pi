@@ -15,13 +15,96 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: ${{ matrix.os }} / Node 24
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      base: ${{ steps.scope.outputs.base }}
+      mode: ${{ steps.scope.outputs.mode }}
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Select CI path
+        id: scope
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          CI_FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: >-
+          node scripts/ci-scope.mjs
+          --base "$CI_BASE_SHA"
+          --head "$GITHUB_SHA"
+          --github-output "$GITHUB_OUTPUT"
+
+  docs-quality:
+    name: Documentation quality
+    needs: scope
+    if: needs.scope.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Reject whitespace errors
+        env:
+          CI_BASE_SHA: ${{ needs.scope.outputs.base }}
+        run: git diff --check "$CI_BASE_SHA" "$GITHUB_SHA"
+
+  tests:
+    name: Tests / ${{ matrix.os }}
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ${{ matrix.os }}
-    # Windows runs two isolated npm installation smokes plus the exact portable
-    # artifact assembly; hosted filesystem variance can exceed 40 minutes even
-    # when every completed assertion passes.
-    timeout-minutes: 55
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Unit tests
+        run: npm run test:ci
+
+  quality:
+    name: Quality + platform Evidence / ${{ matrix.os }}
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -48,9 +131,6 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (Task 9 and Task 10 acceptance run once in their Evidence probes)
-        run: npm run test:ci
-
       - name: Strict compiler fixture
         run: npm run strict:check
 
@@ -61,36 +141,24 @@ jobs:
         run: npm run format:check
 
       - name: Test packed packages externally
+        if: runner.os == 'Linux'
         run: npm run package-smoke:compiled
 
       - name: Build exact hpi developer-preview artifact
+        if: runner.os == 'Linux'
         run: npm run pack:preview:compiled
 
       - name: Upload hpi developer-preview artifact
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: hpi-developer-preview-${{ runner.os }}
+          name: hpi-developer-preview
           path: .artifacts/hpi-developer-preview/hunter-pi-cli-0.1.0-dev.0.tgz
           if-no-files-found: error
           retention-days: 14
 
-      - name: Build exact Windows x64 portable update artifact
-        if: runner.os == 'Windows'
-        run: >-
-          npm run pack:windows-portable:compiled --
-          --output .artifacts/hpi-windows-x64-portable
-
-      - name: Upload Windows x64 portable update artifact
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hpi-windows-x64-portable
-          path: .artifacts/hpi-windows-x64-portable/
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 14
-
       - name: Test a clean locked install
+        if: runner.os == 'Linux'
         run: npm run clean-install-smoke
 
       - name: Check repository prerequisites
@@ -136,9 +204,98 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  windows-portable:
+    name: Windows x64 portable artifact
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
+    runs-on: windows-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Build exact Windows x64 portable update artifact
+        run: >-
+          npm run pack:windows-portable:compiled --
+          --output .artifacts/hpi-windows-x64-portable
+
+      - name: Upload Windows x64 portable update artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hpi-windows-x64-portable
+          path: .artifacts/hpi-windows-x64-portable/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+  windows-package-smoke:
+    name: Windows external package smoke
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Test packed packages externally on Windows
+        run: npm run package-smoke:compiled
+
+  windows-clean-install:
+    name: Windows clean locked install
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Test a clean locked install on Windows
+        run: npm run clean-install-smoke
+
   pi-evidence-consistency:
     name: Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity
-    needs: quality
+    needs:
+      - scope
+      - quality
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -241,12 +398,13 @@ jobs:
 
   task7-platform:
     name: Task 7 containment / ${{ matrix.os }}
-    needs: quality
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         os:
           - ubuntu-latest
@@ -321,7 +479,10 @@ jobs:
 
   task7-evidence-consistency:
     name: Task 7 Evidence / Windows + Ubuntu identity
-    needs: task7-platform
+    needs:
+      - scope
+      - task7-platform
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -368,3 +529,47 @@ jobs:
           path: .artifacts/task7-platform-aggregate/consistency.json
           if-no-files-found: error
           retention-days: 14
+
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs:
+      - scope
+      - docs-quality
+      - tests
+      - quality
+      - windows-portable
+      - windows-package-smoke
+      - windows-clean-install
+      - pi-evidence-consistency
+      - task7-platform
+      - task7-evidence-consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Require the selected path to pass
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          DOCS_RESULT: ${{ needs.docs-quality.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          PORTABLE_RESULT: ${{ needs.windows-portable.result }}
+          WINDOWS_PACKAGE_RESULT: ${{ needs.windows-package-smoke.result }}
+          WINDOWS_CLEAN_INSTALL_RESULT: ${{ needs.windows-clean-install.result }}
+          PLATFORM_EVIDENCE_RESULT: ${{ needs.pi-evidence-consistency.result }}
+          TASK7_RESULT: ${{ needs.task7-platform.result }}
+          TASK7_EVIDENCE_RESULT: ${{ needs.task7-evidence-consistency.result }}
+        run: >-
+          node -e "const mode = process.env.CI_MODE;
+          const expected = mode === 'docs'
+            ? [process.env.DOCS_RESULT]
+            : [process.env.TESTS_RESULT, process.env.QUALITY_RESULT,
+               process.env.PORTABLE_RESULT, process.env.WINDOWS_PACKAGE_RESULT,
+               process.env.WINDOWS_CLEAN_INSTALL_RESULT,
+               process.env.PLATFORM_EVIDENCE_RESULT,
+               process.env.TASK7_RESULT, process.env.TASK7_EVIDENCE_RESULT];
+          if (!['docs', 'full'].includes(mode) || expected.some((value) => value !== 'success')) {
+            console.error({ mode, expected });
+            process.exit(1);
+          }"

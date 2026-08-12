@@ -42,11 +42,21 @@ describe("Vitest resource fixture runtime", () => {
       new URL("./real-managed-change-cli.test.ts", import.meta.url),
       "utf8",
     );
+    const qualificationSource = await readFile(
+      new URL("./task11-github-actions-qualification.test.ts", import.meta.url),
+      "utf8",
+    );
 
     expect(managedProcessTimeout).toBe(60_000);
     expect(managedProcessTimeout).toBeGreaterThan(vitestResourcePolicy.testTimeoutMs);
     expect(managedChangeSource).toMatch(
       /it\(\s*"uses the qualified process and writer-lease path by default",\s*\{\s*timeout:\s*vitestResourcePolicy\.managedProcessIntegrationTimeoutMs\s*\}/u,
+    );
+    expect(qualificationSource).toMatch(
+      /it\(\s*"settles one short-lived bare executable through the real platform driver",\s*\{\s*timeout:\s*vitestResourcePolicy\.managedProcessIntegrationTimeoutMs\s*\*\s*2\s*\}/u,
+    );
+    expect(qualificationSource).toMatch(
+      /resolveQualificationCliExecutable\([\s\S]*?vitestResourcePolicy\.managedProcessIntegrationTimeoutMs[\s\S]*?runQualificationCliProcess\([\s\S]*?vitestResourcePolicy\.managedProcessIntegrationTimeoutMs/u,
     );
   });
 

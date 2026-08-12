@@ -1235,15 +1235,20 @@ describe("Task 11 GitHub Actions portable qualification", () => {
   });
 
   it("fails closed within the caller budget when a bare executable is unavailable", async () => {
+    const createDriver = vi.fn(() => {
+      throw new Error("a Windows bare executable must fail before driver creation");
+    });
     const startedAt = Date.now();
     await expect(
       qualificationCliProcess.runQualificationCliProcess(
         "hunter-pi-qualification-cli-that-does-not-exist-5b43d868",
         [],
         250,
+        ...(process.platform === "win32" ? [{ createDriver }] : []),
       ),
     ).resolves.toEqual({ exitCode: null, stdout: "", stderr: "" });
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+    if (process.platform === "win32") expect(createDriver).not.toHaveBeenCalled();
   }, 10_000);
 
   it("settles one short-lived bare executable through the real platform driver", async () => {

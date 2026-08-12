@@ -92,7 +92,7 @@ function hasExactPiAgentTail(
 }
 
 /**
- * Accepts only the live completion tail emitted by the bundled Pi 0.83 Engine.
+ * Accepts only the live completion tail emitted by the bundled Pi Engine.
  * Historical receipts are replayed from their immutable facts, not through this predicate.
  */
 export function hasExactPiAgentCompletion(eventTypes: readonly string[]): boolean {

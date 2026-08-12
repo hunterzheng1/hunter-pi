@@ -10,14 +10,15 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 
 ## Status
 
-- Baseline date: 2026-08-12
-- Product status: **TASKS_0_TO_12_COMPLETE_WITHIN_RECORDED_BOUNDS / REAL_WINDOWS_DAILY_USE_GO**
+- Baseline date: 2026-08-13
+- Product status: **0.83 TASKS_0_TO_12_COMPLETE_WITHIN_RECORDED_BOUNDS / 0.84.1 RELEASE QUALIFICATION IN PROGRESS**
+- Current release work: Hunter Pi `0.1.0-dev.1` pins Pi `0.84.1` and adds a Windows ZIP plus single-source PowerShell installer. Local Provider-neutral implementation gates pass; exact main CI, GitHub Release, published-URL install, and any new daily-use acceptance remain `PENDING`. See the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md).
 - Last qualified product baseline (2026-08-12): `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7`; exact merge-head main CI [`31573580277`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31573580277) passed all six required Windows/Ubuntu quality, portable artifact, containment, and Evidence jobs without a rerun.
 - Current implementation: Tasks 1–11 and the Task 12 capture/evaluation path are implemented. Qualified portable artifact `sha256:d2fda8a443a294f8ed9f1c4484eb41bbcf74be6515aeca3f68df718f8a32c082` on source `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7` completed the real disposable-repository Windows pilot. The immutable Archive first retained a 3-second performance `REVISE`; after the documented Windows security-software variance criterion changed to 3.5 seconds, the same Evidence replayed as `GO` without changing observations.
 - Completion audit: **REAL WINDOWS DAILY-USE GO WITHIN RECORDED BOUNDS** — see the [2026-08-12 final pilot record](validation/2026-08-12-task12-daily-use-go.md). PR #83 run [`31582820744`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31582820744) and exact merged-head main run [`31584966554`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) passed all six required jobs. The earlier [2026-08-08 audit](validation/2026-08-08-daily-use-completion-audit.md) remains historical.
-- Current verification: a fresh clean-first `npm run verify` passes 71 files / 727 tests, strict compilation, production build, formatting, all 13 external package smokes, the single CLI artifact smoke, clean npm installation, and the Provider-independent Pi public-interface probe. The unchanged immutable real-use Evidence evaluates to `GO` with exact fingerprint continuity. Final diff review found no P0–P3 issue, and the exact acceptance merge passed hosted Windows/Ubuntu gates.
-- Next gate: no further Task 12 gate is required within the unsigned Windows developer-preview boundary. Signing, Stable publication, broader plugin qualification, physical power-loss testing, non-Windows daily-use acceptance, and arbitrary real-user-repository safety require separately scoped work.
-- Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
+- Current verification: a fresh clean-first `npm run verify` for Hunter Pi `0.1.0-dev.1` passes 73 files / 733 tests, strict compilation, production build, formatting, all 13 external package smokes, the single CLI artifact smoke, clean npm installation, and the Provider-independent Pi `0.84.1` public-interface probe. The immutable Pi `0.83` real-use Evidence remains historical and is not replayed as acceptance for this release.
+- Next gate: exact merged-head Windows/Ubuntu CI, release-asset publication, and an isolated install downloaded from the actual GitHub Release URL remain required for `0.1.0-dev.1`. Signing, Stable publication, broader plugin qualification, physical power-loss testing, non-Windows daily-use acceptance, and arbitrary real-user-repository safety require separately scoped work.
+- Active plan: [Pi 0.84.1 and Windows release](plans/2026-08-13-pi-0.84.1-windows-release.md)
 
 ### Historical delivery ledger
 

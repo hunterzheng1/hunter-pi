@@ -51,12 +51,12 @@ describe("fixed Pi public-interface probe", () => {
     expect(piPublicInterfaceProbeReportSchema.parse(completedReport)).toEqual(completedReport);
     expect(completedReport.candidate).toMatchObject({
       packageName: "@earendil-works/pi-coding-agent",
-      version: "0.83.0",
-      registryGitHead: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
-      installedFileCount: 884,
-      installedBytes: 13_104_822,
+      version: "0.84.1",
+      registryGitHead: "53fa77ccd8a279eb87e92294ef3687b03ff80112",
+      installedFileCount: 968,
+      installedBytes: 13_649_587,
       installedPackageFingerprint:
-        "sha256:42b89fef9bf22021cb3d2ec4d187ad3a6a9444b90d8191e749b63cd5ea2cabdd",
+        "sha256:54bc309babee1b4175d66ea54f63d72ca89bd30be77e5c4dabcdd64e1edfcdcd",
     });
     expect(completedReport.candidate.integrity).toBe(PI_CANDIDATE.integrity);
     expect(completedReport.implementation.sourceDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
@@ -100,6 +100,13 @@ describe("fixed Pi public-interface probe", () => {
     expect(completedReport.surfaces.json).toMatchObject({
       status: "SUPPORTED",
       framing: "NDJSON",
+      messageUpdateContract: {
+        mode: "DELTA_ONLY",
+        assistantMessageEventObserved: true,
+        cumulativeMessageAbsent: true,
+        assistantPartialAbsent: true,
+        authoritativeMessageEndObserved: true,
+      },
     });
     expect(completedReport.surfaces.json.eventTypes).toEqual(
       expect.arrayContaining([
@@ -113,6 +120,13 @@ describe("fixed Pi public-interface probe", () => {
     expect(completedReport.surfaces.rpc).toMatchObject({
       status: "SUPPORTED",
       framing: "NDJSON",
+      messageUpdateContract: {
+        mode: "DELTA_ONLY",
+        assistantMessageEventObserved: true,
+        cumulativeMessageAbsent: true,
+        assistantPartialAbsent: true,
+        authoritativeMessageEndObserved: true,
+      },
       cancellationScope: "SINGLE_IN_FLIGHT_AGENT_OPERATION",
       correlationById: true,
       concurrentRequestIds: ["state-before-a", "state-before-b"],
@@ -126,7 +140,14 @@ describe("fixed Pi public-interface probe", () => {
       descendantProcessCleanup: "NOT_PROVEN",
     });
     expect([...completedReport.surfaces.rpc.correlatedResponseIds].sort()).toEqual(
-      ["abort-active", "prompt-cancel", "state-after", "state-before-a", "state-before-b"].sort(),
+      [
+        "abort-active",
+        "prompt-cancel",
+        "prompt-stream-proof",
+        "state-after",
+        "state-before-a",
+        "state-before-b",
+      ].sort(),
     );
 
     expect(completedReport.surfaces.sdk).toMatchObject({

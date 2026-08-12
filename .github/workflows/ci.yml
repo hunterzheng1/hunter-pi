@@ -153,7 +153,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hpi-developer-preview
-          path: .artifacts/hpi-developer-preview/hunter-pi-cli-0.1.0-dev.0.tgz
+          path: .artifacts/hpi-developer-preview/hunter-pi-cli-0.1.0-dev.1.tgz
           if-no-files-found: error
           retention-days: 14
 
@@ -209,7 +209,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.mode == 'full'
     runs-on: windows-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -232,6 +232,43 @@ jobs:
           npm run pack:windows-portable:compiled --
           --output .artifacts/hpi-windows-x64-portable
 
+      - name: Build Windows release ZIP and checksum
+        run: >-
+          npm run pack:windows-release:compiled --
+          --portable-root .artifacts/hpi-windows-x64-portable
+          --output .artifacts/hpi-windows-x64-release
+
+      - name: Run isolated Windows installer end-to-end
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:RUNNER_TEMP ("HunterPi-" + [guid]::NewGuid().ToString("N"))
+          $env:HUNTER_PI_HOME = Join-Path $env:RUNNER_TEMP ("HunterPiHome-" + [guid]::NewGuid().ToString("N"))
+          try {
+            $output = & .artifacts/hpi-windows-x64-release/install.ps1 `
+              -Source LocalArchive `
+              -ArchivePath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip `
+              -ChecksumPath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip.sha256 `
+              -InstallRoot $installRoot `
+              -PathMode Process `
+              -Json
+            if ($LASTEXITCODE -ne 0) { throw "installer returned a nonzero status" }
+            $receipt = $output[-1] | ConvertFrom-Json
+            if ($receipt.status -ne "INSTALLED" -or
+                $receipt.checksum -ne "VERIFIED" -or
+                -not $receipt.stableCommandReady -or
+                $receipt.providerRequestPerformed) {
+              throw "installer receipt did not prove the isolated install"
+            }
+            & (Join-Path $installRoot "bin/hpi.cmd") version --json
+            if ($LASTEXITCODE -ne 0) { throw "installed hpi version probe failed" }
+            & (Join-Path $installRoot "bin/hpi.cmd") update status --json
+            if ($LASTEXITCODE -ne 0) { throw "installed hpi update status probe failed" }
+          } finally {
+            if (Test-Path -LiteralPath $installRoot) {
+              Remove-Item -LiteralPath $installRoot -Recurse -Force
+            }
+          }
+
       - name: Upload Windows x64 portable update artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -239,6 +276,17 @@ jobs:
           path: .artifacts/hpi-windows-x64-portable/
           if-no-files-found: error
           include-hidden-files: true
+          retention-days: 14
+
+      - name: Upload Windows x64 release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hpi-windows-x64-release
+          path: |
+            .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip
+            .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip.sha256
+            .artifacts/hpi-windows-x64-release/install.ps1
+          if-no-files-found: error
           retention-days: 14
 
   windows-package-smoke:

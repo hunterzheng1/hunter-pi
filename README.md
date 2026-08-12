@@ -2,7 +2,7 @@
 
 Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版本的 Pi Engine、Hunter Pi 自有的 Workflow Kernel、独立验证、恢复、插件策略和更新回滚组合为一个可独立运行的产品，不依赖 Hunter-Harness 或 Hunter Platform。
 
-当前版本已达到 **Windows x64 unsigned developer-preview 日常使用 GO**。它适合在有 Git 备份、由开发者最终检查变更的个人项目中使用。当前版本不是已签名的 Stable 版本，也不承诺任意第三方插件、任意真实仓库或非 Windows 平台均已完成同等级验证。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **Windows x64 unsigned developer-preview 日常使用 GO**。当前 `0.1.0-dev.1` 更新到 Pi `0.84.1` 并新增 ZIP 安装分发；它必须完成自己的 Windows/Ubuntu CI、Release 和发布后下载验证，不能继承旧版本的日常使用结论。两个版本都不是已签名的 Stable 版本。
 
 ## 从这里开始
 
@@ -10,6 +10,7 @@ Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版�
 - 了解已验证范围：阅读[最终日用验收记录](docs/validation/2026-08-12-task12-daily-use-go.md)。
 - 了解设计和历史证据：从[文档索引](docs/README.md)开始。
 - 参与开发：阅读[贡献指南](CONTRIBUTING.md)。
+- 跟踪当前升级：[Pi 0.84.1 与 Windows Release 验证](docs/validation/2026-08-13-pi-0.84.1-windows-release.md)。
 
 ## 已验证状态
 
@@ -17,7 +18,7 @@ Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版�
 - 最终 Windows pilot 完成 10/10 个预注册任务，覆盖两个 disposable Git 仓库。
 - 3/3 个受控中断保留失败历史并在同一 Run 中恢复。
 - 两轮资格更新与回滚通过；五组对抗性插件在 Safe Mode 中未执行用户代码。
-- 本地完整门禁通过 71 个测试文件、727 个测试，以及 lint、类型检查、严格编译、构建、格式、外部包 smoke、干净安装和 Pi 公共接口探针。
+- 当前 `0.1.0-dev.1` 本地完整门禁通过 73 个测试文件、733 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、干净安装和 Pi `0.84.1` 公共接口探针；历史 `0.83` 日用 Evidence 保持不变，不能据此判定新版本日用 `GO`。
 - 验收 PR [#83](https://github.com/hunterzheng1/hunter-pi/pull/83) 和精确合并提交的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) 均通过六个 Windows/Ubuntu 必需作业。
 - 最终文档合并提交 `aa2b836ab46a83de2fa01b17a8e203b5515748ac` 的 [main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/31589912791) 通过全部六个必需作业。
 
@@ -25,35 +26,38 @@ Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版�
 
 ## 5 分钟上手
 
-### 1. 构建 Windows portable 目录
+### 1. 安装 Windows x64 预览版
 
-前置条件：Windows x64、Git、Node.js 24 和 npm 11。当前仓库没有公开 npm 包或签名安装程序，因此从干净源码构建：
+不需要预装 Node.js、npm 或 Pi。下载唯一维护的脚本，并固定到精确预览 tag：
 
 ```powershell
-git clone https://github.com/hunterzheng1/hunter-pi.git
-cd hunter-pi
-npm ci
-npm run pack:windows-portable
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/hunterzheng1/hunter-pi/main/scripts/install.ps1 `
+  -OutFile .\install.ps1
+
+powershell -ExecutionPolicy Bypass -File .\install.ps1 `
+  -Source Remote `
+  -ReleaseTag v0.1.0-dev.1
 ```
 
-构建结果位于：
+脚本下载精确 Release 的 ZIP 和 SHA-256 文件，校验后安装到：
 
 ```text
-.artifacts\hpi-windows-x64-portable\
+%LOCALAPPDATA%\HunterPi
 ```
 
-确认版本和更新状态：
+关闭当前终端并打开新的 PowerShell，然后确认版本和更新状态：
 
 ```powershell
-& ".\.artifacts\hpi-windows-x64-portable\hpi.cmd" version --json
-& ".\.artifacts\hpi-windows-x64-portable\hpi.cmd" update status --json
+hpi version --json
+hpi update status --json
 ```
 
-预期更新状态为 `READY`。可将整个 portable 目录复制到固定位置；不要只复制 `hpi.cmd`。
+预期更新状态为 `READY`。如果系统已有其他来源的 `hpi`，安装脚本只告警，不会删除或覆盖旧命令；用 `Get-Command hpi -All` 检查解析顺序。本地 ZIP 和人工校验步骤见[操作手册](docs/user-guide.md#22-从本地-zip-安装)。
 
 ### 2. 完成首次配置
 
-以下示例假设 portable 目录已加入当前终端的 `PATH`，因此可以直接运行 `hpi`：
+安装脚本会幂等维护用户 `PATH`，因此新终端可以直接运行 `hpi`：
 
 ```powershell
 hpi setup

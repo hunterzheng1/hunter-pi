@@ -50,6 +50,7 @@ export default function coreExtensionProbe(pi: ExtensionAPI): void {
 
   if (responseMode === "wait-for-abort") {
     faux.setResponses([
+      fauxAssistantMessage("rpc delta proof", { timestamp: 946_684_800_000 }),
       async (_context, options) => {
         record({ event: "probe_stream_waiting" });
         await new Promise<void>((resolve, reject) => {
@@ -70,7 +71,7 @@ export default function coreExtensionProbe(pi: ExtensionAPI): void {
         record({ event: "probe_stream_aborted" });
         return fauxAssistantMessage("cancelled", {
           stopReason: "aborted",
-          timestamp: 946_684_800_000,
+          timestamp: 946_684_800_001,
         });
       },
     ]);

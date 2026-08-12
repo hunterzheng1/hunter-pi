@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import {
   FilePiPackageBindingStore,
+  PI_CANDIDATE,
   PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
   PiPackageManifestResolver,
   Task6PiEngineHost,
@@ -169,17 +170,18 @@ export interface HpiCliDependencies {
 }
 
 const pilotPortableManifestSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-windows-portable.v2"),
+  schemaVersion: z.literal("hpi-windows-portable.v3"),
   product: z.literal("Hunter Pi"),
   platform: z.literal("win32-x64"),
   nodeVersion: z.string().min(1).max(64),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
   sourceState: z.literal("CLEAN"),
   updateChannel: z.literal("developer-preview"),
-  installer: z.literal("PORTABLE_DIRECTORY"),
+  installer: z.literal("PORTABLE_ZIP"),
   signed: z.boolean(),
   releaseId: z.string().min(1).max(256),
   productVersion: z.string().min(1).max(128),
+  engineVersion: z.literal(PI_CANDIDATE.version),
   engineReleaseId: z.string().min(1).max(256),
   engineReleaseFingerprint: fingerprintSchema,
   artifactFingerprint: fingerprintSchema,
@@ -2551,7 +2553,7 @@ async function tuiSmokeCommand(dependencies: HpiCliDependencies, paths: HpiPaths
     interactiveTuiReadiness: {
       status: "DETECTED",
       checkedAt: dependencies.now(),
-      engineVersion: "0.83.0",
+      engineVersion: version.engine.version,
       productVersion: version.productVersion,
       sourceCommit: version.sourceCommit,
       sourceState: version.sourceState,

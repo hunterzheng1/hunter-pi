@@ -11,6 +11,16 @@ import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 import { packCliArtifact } from "./cli-package.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
+const cliSourceManifest = z
+  .looseObject({
+    version: z.string().regex(/^\d+\.\d+\.\d+-dev\.\d+$/u),
+    dependencies: z.strictObject({
+      "@earendil-works/pi-coding-agent": z.string().regex(/^\d+\.\d+\.\d+$/u),
+    }),
+  })
+  .parse(JSON.parse(await readFile(join(repositoryRoot, "apps", "cli", "package.json"), "utf8")));
+const piEngineVersion = cliSourceManifest.dependencies["@earendil-works/pi-coding-agent"];
+const productVersion = cliSourceManifest.version;
 const packageManifestSchema = z.looseObject({
   name: z.string().regex(/^@hunter-pi\/[a-z0-9-]+$/u),
   version: z.literal("0.0.0"),
@@ -40,10 +50,10 @@ const parseJson = JSON.parse;
 const packOutputSchema = z.array(z.looseObject({ filename: z.string() })).length(1);
 const cliVersionSchema = z.strictObject({
   product: z.literal("Hunter Pi"),
-  productVersion: z.literal("0.1.0-dev.0"),
+  productVersion: z.literal(productVersion),
   engine: z.strictObject({
     packageName: z.literal("@earendil-works/pi-coding-agent"),
-    version: z.literal("0.83.0"),
+    version: z.literal(piEngineVersion),
   }),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
   sourceState: z.enum(["CLEAN", "DIRTY"]),
@@ -376,11 +386,11 @@ try {
     const packageBasename = packageName.slice(packageName.indexOf("/") + 1);
     const locked = piShrinkwrap.packages[shrinkwrapKey];
     if (
-      locked?.version !== "0.83.0" ||
+      locked?.version !== piEngineVersion ||
       locked.resolved !==
-        `https://registry.npmjs.org/${packageName}/-/${packageBasename}-0.83.0.tgz`
+        `https://registry.npmjs.org/${packageName}/-/${packageBasename}-${piEngineVersion}.tgz`
     ) {
-      throw new Error(`Published Pi shrinkwrap does not freeze ${packageName} 0.83.0.`);
+      throw new Error(`Published Pi shrinkwrap does not freeze ${packageName} ${piEngineVersion}.`);
     }
     let installedRecord;
     for (const packagePath of [
@@ -396,8 +406,10 @@ try {
         if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT") throw error;
       }
     }
-    if (installedRecord?.name !== packageName || installedRecord.version !== "0.83.0") {
-      throw new Error(`Installed Pi runtime component ${packageName} drifted from 0.83.0.`);
+    if (installedRecord?.name !== packageName || installedRecord.version !== piEngineVersion) {
+      throw new Error(
+        `Installed Pi runtime component ${packageName} drifted from ${piEngineVersion}.`,
+      );
     }
   }
 

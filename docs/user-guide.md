@@ -2,16 +2,17 @@
 
 本手册面向在 Windows x64 上使用 Hunter Pi unsigned developer-preview 的个人开发者。内容覆盖安装、首次配置、Quick Session、Managed Change、插件、更新、故障排查和安全边界。
 
-当前版本已在预注册的真实 Windows pilot 中得到 `GO`，但仍不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 已在预注册的真实 Windows pilot 中得到历史 `GO`。当前 `0.1.0-dev.1` 升级到 Pi 0.84.1，并改用 ZIP 与 PowerShell 安装；它不能继承旧版本的日用结论，在新的发布和日用 Evidence 完成前保持 `NOT_PROVEN`。两个版本都不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
 
 ## 1. 使用前确认
 
 ### 1.1 支持范围
 
 - 操作系统：Windows x64。
+- 最终用户运行：不需要预装 Node.js、npm 或 Pi。
 - 源码构建：Node.js 24、npm 11、Git。
-- Engine：固定的 Pi `0.83.0`。
-- 产品形态：unsigned `developer-preview` portable 目录或本地 npm tarball。
+- Engine：固定的 Pi `0.84.1`。
+- 产品形态：unsigned `developer-preview` Windows x64 ZIP；同一 `install.ps1` 同时作为 ZIP 内文件和独立 GitHub Release 资产。
 
 Ubuntu 是必需 CI 平台，但当前没有通过同等级日用 pilot。其他平台保持 `NOT_PROVEN`。
 
@@ -34,44 +35,51 @@ hpi plugin doctor
 
 ## 2. 安装
 
-### 2.1 构建 portable 目录
+### 2.1 从固定 GitHub 入口安装
 
-当前仓库没有公开 npm 包或签名安装程序。从干净源码构建 portable 目录：
-
-```powershell
-git clone https://github.com/hunterzheng1/hunter-pi.git
-cd hunter-pi
-npm ci
-npm run pack:windows-portable
-```
-
-输出目录：
-
-```text
-.artifacts\hpi-windows-x64-portable\
-```
-
-portable 目录包含固定 Node.js 运行时、产品 launcher、当前版本和更新元数据。必须整体复制或移动，不要只复制 `hpi.cmd`。
-
-### 2.2 放到固定位置
-
-以下位置只是示例，可换成其他由当前用户控制的绝对路径：
+Windows x64 用户不需要预装 Node.js、npm 或 Pi。先下载并检查仓库维护的唯一安装脚本，再安装精确预览版本：
 
 ```powershell
-New-Item -ItemType Directory -Force C:\Tools\HunterPi | Out-Null
-Copy-Item -Recurse -Force ".\.artifacts\hpi-windows-x64-portable\*" C:\Tools\HunterPi\
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/hunterzheng1/hunter-pi/main/scripts/install.ps1 `
+  -OutFile .\install.ps1
+
+powershell -ExecutionPolicy Bypass -File .\install.ps1 `
+  -Source Remote `
+  -ReleaseTag v0.1.0-dev.1
 ```
 
-在当前 PowerShell 会话中创建便捷命令：
+脚本从该精确 GitHub Release 下载 `hpi-windows-x64.zip` 和 `hpi-windows-x64.zip.sha256`，先验证 SHA-256，再安装。默认根目录为 `%LOCALAPPDATA%\HunterPi`；稳定命令位于 `%LOCALAPPDATA%\HunterPi\bin\hpi.cmd`，该 `bin` 目录会幂等加入用户 `PATH`。
+
+如果系统中已有 npm 或其他来源的 `hpi`，脚本会告警并把 Hunter Pi 的稳定目录放到用户 PATH 前部，但不会覆盖、删除或卸载原命令。保留告警，安装后在新终端用 `Get-Command hpi -All` 检查解析顺序。
+
+### 2.2 从本地 ZIP 安装
+
+把 Release 的三个文件放在同一目录，然后让脚本验证并解压：
 
 ```powershell
-$HpiRoot = "C:\Tools\HunterPi"
-function hpi { & "$HpiRoot\hpi.cmd" @args }
+.\install.ps1 `
+  -Source LocalArchive `
+  -ArchivePath .\hpi-windows-x64.zip `
+  -ChecksumPath .\hpi-windows-x64.zip.sha256
 ```
 
-如需长期使用，可将 portable 根目录加入用户 `PATH`。不要把内部 `versions` 子目录单独加入 `PATH`；根 launcher 负责选择当前版本和执行回滚。
+ZIP 内也包含字节相同的 `install.ps1`。如需先人工解压，必须先核对外层 SHA-256，再运行内嵌脚本：
+
+```powershell
+$expected = (Get-Content .\hpi-windows-x64.zip.sha256).Split()[0]
+$actual = (Get-FileHash .\hpi-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch" }
+
+Expand-Archive .\hpi-windows-x64.zip .\hpi-windows-x64
+.\hpi-windows-x64\install.ps1 -Source LocalDirectory
+```
+
+安装包内部还带有逐文件 SHA-256 清单。外层 ZIP 或解压后的 payload 发生漂移时，安装会在创建安装根目录前失败。
 
 ### 2.3 验证安装
+
+关闭当前终端并打开新的 PowerShell：
 
 ```powershell
 hpi version --json
@@ -83,6 +91,7 @@ hpi update status --json
 - `version` 应返回产品版本、源码提交、源码状态和 Engine 版本。
 - `update status` 应返回 `status=READY` 和当前 `releaseId`。
 - 如果 launcher 返回 `BLOCKED`、`INCOMPATIBLE` 或非零退出码，停止首次配置并检查输出。
+- 当前发布仍是未签名 `developer-preview`，不是 Stable 或已签名 Windows 安装程序。
 
 ### 2.4 配置目录
 

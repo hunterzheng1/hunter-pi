@@ -205,6 +205,14 @@ The Workspace adapter runs Git with an owned empty hooks directory, disables con
 
 The file-backed Lease adapter commits an operation receipt and all resulting lease generations in one immutable transaction. Managed-process startup uses the canonical start operation identity itself as the durable reservation key, including when no resource lease is requested; callers cannot select an independent reservation identity. It atomically binds every declared lease to one session fingerprint before launch, and only that exact binding may release it, so an inspect/start race or a second Host cannot attach one operation or lease to two external processes.
 
+### Windows installer and updater adapters
+
+The Windows Release wraps the portable root in a ZIP. `scripts/install.ps1` is the only maintained installer source; the asset builder copies those exact bytes both into the ZIP and into the standalone GitHub Release asset. The installer uses only Windows PowerShell and the bundled payload, so ambient Node.js, npm, raw Pi, and a global `hpi` are not dependencies.
+
+The installer verifies the release ZIP SHA-256 when an archive is used, then verifies a strict path-safe per-file manifest before creating `%LOCALAPPDATA%\HunterPi`. It publishes one stable `bin\hpi.cmd`, maintains the user PATH idempotently, and reports other `hpi` commands without deleting or overwriting them. It never reads or migrates `%USERPROFILE%\.hunter-pi` during installation.
+
+Installation does not replace update qualification. A first install carries the complete `.hpi-update` state from the selected Distribution Release. An exact same-release invocation is idempotent and rechecks payload bytes. If a different release is already active, the installer fails closed; side-by-side staging, activation, migration, rollback, and reconciliation remain owned by `FileUpdateManager` and `FileWindowsPortableReleaseAdapter`. An unsigned checksum proves byte integrity only, not publisher identity.
+
 ## Event and decision flow
 
 ```text

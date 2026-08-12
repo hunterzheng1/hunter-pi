@@ -149,12 +149,15 @@ try {
   if (dirtyOutput.length > 0) {
     throw new Error("The Windows portable package requires a clean source tree.");
   }
+  const enginePackageName = "@earendil-works/pi-coding-agent";
   const cliPackage = z
-    .looseObject({ version: z.string() })
+    .looseObject({
+      version: z.string(),
+      dependencies: z.strictObject({ [enginePackageName]: z.string().regex(/^\d+\.\d+\.\d+$/u) }),
+    })
     .parse(JSON.parse(await readFile(join(repositoryRoot, "apps", "cli", "package.json"), "utf8")));
   const productVersion = cliPackage.version;
-  const enginePackageName = "@earendil-works/pi-coding-agent";
-  const engineVersion = "0.83.0";
+  const engineVersion = cliPackage.dependencies[enginePackageName];
   const engineReleaseId = `engine-release_pi-${engineVersion}`;
   const engineReleaseFingerprint = sha256(
     Buffer.from(JSON.stringify({ packageName: enginePackageName, version: engineVersion }), "utf8"),
@@ -295,17 +298,18 @@ try {
   );
   await writeFile(join(outputDirectory, "update.bundle.tgz"), bundle);
   const manifest = {
-    schemaVersion: "hpi-windows-portable.v2",
+    schemaVersion: "hpi-windows-portable.v3",
     product: "Hunter Pi",
     platform: "win32-x64",
     nodeVersion: process.versions.node,
     sourceCommit,
     sourceState: "CLEAN",
     updateChannel: "developer-preview",
-    installer: "PORTABLE_DIRECTORY",
+    installer: "PORTABLE_ZIP",
     signed: false,
     releaseId,
     productVersion,
+    engineVersion,
     engineReleaseId,
     engineReleaseFingerprint,
     artifactFingerprint,

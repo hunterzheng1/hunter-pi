@@ -20,6 +20,18 @@ _Avoid_: latest files, mutable installation
 An exact upstream Pi artifact selected for compatibility qualification.
 _Avoid_: whatever `pi update` installs
 
+**Release Installer**:
+The Distribution Release bootstrap that verifies and places one exact artifact. It does not qualify, apply, or roll back a different release.
+_Avoid_: updater, package manager, Stable proof
+
+**Installation Root**:
+The user-controlled directory containing the stable launcher, side-by-side release directories, active pointer, and installation-owned update state. The Windows preview default is `%LOCALAPPDATA%\HunterPi`.
+_Avoid_: `%USERPROFILE%\.hunter-pi` state root, project directory, one version directory
+
+**Release File Manifest**:
+The strict path-safe inventory of files and SHA-256 values inside a Windows Release ZIP. It proves payload integrity after extraction but not publisher identity.
+_Avoid_: code signature, qualification receipt
+
 **Engine Host**:
 The provider-neutral Interface through which the Workflow Kernel starts, observes, steers, interrupts, resumes, and closes an Agent engine.
 _Avoid_: Pi-private event object, provider API

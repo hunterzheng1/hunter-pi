@@ -26,13 +26,13 @@ Hunter Pi uses semantic versions for its own public behavior. The Pi engine vers
   "hunterPi": "0.x.y",
   "engine": {
     "product": "pi",
-    "version": "0.83.0",
+    "version": "0.84.1",
     "qualification": "NOT_PROVEN"
   }
 }
 ```
 
-The example is not a shipped manifest. Pi `0.83.0` is the initial research candidate, not yet qualified.
+The example describes the current `0.1.0-dev.1` candidate before its exact remote gates finish. Historical 0.83 Distribution Releases and Evidence retain their original identities.
 
 Schema versions evolve independently and declare readable/migratable ranges. A Hunter Pi patch release may include a new qualified Pi version only if compatibility and rollback gates pass and the user-visible risk is documented.
 
@@ -79,9 +79,13 @@ Publish or pack an exact CLI artifact that depends on or bundles the qualified P
 
 ### Stage C — Windows daily-use preview
 
-Provide a Windows x64 installer or portable artifact. The current Task 11 implementation selects a portable directory as the first usable shape; installer technology remains an open decision. The artifact must:
+Provide a Windows x64 installer or portable artifact. Hunter Pi `0.1.0-dev.1` packages the existing versioned portable layout as `hpi-windows-x64.zip` and publishes the single maintained `scripts/install.ps1` both inside the ZIP and as a standalone Release asset. The artifact must:
 
 - expose `hpi` predictably;
+- install under the current user's `%LOCALAPPDATA%\HunterPi` by default without requiring ambient Node.js, npm, or Pi;
+- verify the outer ZIP SHA-256 and the inner per-file manifest before installation;
+- keep one stable `bin\hpi.cmd` on user PATH and update that PATH entry idempotently;
+- detect other `hpi` commands, report the conflict, and never overwrite or uninstall them;
 - preserve the operator's current working directory when the portable launcher starts the packaged CLI, including after the complete installation directory is copied outside the source repository;
 - pin one exact Node 24 patch runtime through `.node-version`, shared by local packaging and every hosted CI job, plus the exact CLI dependency tree;
 - select one active release through a Hunter-owned atomic pointer;
@@ -94,7 +98,9 @@ Provide a Windows x64 installer or portable artifact. The current Task 11 implem
 - uninstall without deleting projects or user-selected archives;
 - support rollback.
 
-Task 11's portable artifact is intentionally unsigned `developer-preview` with `qualification=NOT_PROVEN`. It is suitable for bounded local evaluation of the Hunter-owned launcher/update path; it is not a Stable or publisher-qualified release. The supported update commands are `hpi update status --json`, `hpi update check`, `hpi update apply`, and `hpi update rollback`. The Windows CI job builds this artifact from the already completed quality build and retains it for 14 days; Ubuntu validates the provider-neutral and cross-platform contracts but does not emit a Windows package.
+Task 11's original portable directory remains historical. The `0.1.0-dev.1` ZIP and PowerShell entry point are still intentionally unsigned `developer-preview`; checksums prove integrity, not publisher identity. The supported update commands remain `hpi update status --json`, `hpi update check`, `hpi update apply`, and `hpi update rollback`. `install.ps1` performs only a first installation or exact-release idempotent replay. If another release is already active, it fails closed and directs the operator to the update manager rather than bypassing qualification history. Windows CI builds both the complete hidden-state portable artifact and the three release assets, then installs the ZIP in an isolated temporary root. Ubuntu validates provider-neutral and cross-platform contracts but does not emit a Windows package.
+
+The fixed hosted script entry is `https://raw.githubusercontent.com/hunterzheng1/hunter-pi/main/scripts/install.ps1`. Operators should download and inspect it, then pass an exact `-ReleaseTag`. The immutable asset URLs are under `https://github.com/hunterzheng1/hunter-pi/releases/download/<tag>/`. The Release must contain exactly `install.ps1`, `hpi-windows-x64.zip`, and `hpi-windows-x64.zip.sha256` for this distribution shape.
 
 After the exact artifact's required main CI has passed, the release operator may run `npm run promote:windows-portable:compiled -- --root <portable-directory> --run <main-ci-run-id>`. The command does not accept caller-authored `PASS` metadata. It performs one `gh run view` and one `gh run download`, with no polling or log download, then requires an exact `push` to `main` in repository `hunterzheng1/hunter-pi`, workflow `CI`, the artifact's source commit, and the six declared Windows/Ubuntu quality, containment, and Evidence jobs all completed successfully. It also requires the downloaded `hpi-windows-x64-portable` bundle bytes and every non-qualification field in its packaged candidate to match the local installation exactly.
 

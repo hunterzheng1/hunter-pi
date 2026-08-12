@@ -1,6 +1,6 @@
 {
   "name": "@hunter-pi/cli",
-  "version": "0.1.0-dev.0",
+  "version": "0.1.0-dev.1",
   "private": true,
   "description": "Hunter Pi developer-preview product shell",
   "license": "MIT",
@@ -21,13 +21,13 @@
     "third-party/zod-LICENSE"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0"
+    "@earendil-works/pi-coding-agent": "0.84.1"
   },
   "devDependencies": {
     "@hunter-pi/execution": "0.0.0",
     "@hunter-pi/managed-change": "0.0.0",
-    "@hunter-pi/pilot": "0.0.0",
     "@hunter-pi/pi-host": "0.0.0",
+    "@hunter-pi/pilot": "0.0.0",
     "@hunter-pi/plugin-manager": "0.0.0",
     "@hunter-pi/updater": "0.0.0",
     "@hunter-pi/verification": "0.0.0",

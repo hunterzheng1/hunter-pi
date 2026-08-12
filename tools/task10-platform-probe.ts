@@ -27,6 +27,7 @@ import {
 } from "@hunter-pi/evidence";
 import {
   FilePiPackageBindingStore,
+  PI_CANDIDATE,
   PI_PACKAGE_INSTALL_WORKER_ARGUMENT,
   PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
   PiPackageManifestResolver,
@@ -272,7 +273,7 @@ async function runPackageFixtures(
         localPackages: new Map([[label, packageRoot]]),
         provenance: {
           upstreamName: "@earendil-works/pi-coding-agent examples",
-          sourceReference: "npm @earendil-works/pi-coding-agent@0.83.0",
+          sourceReference: `npm ${PI_CANDIDATE.packageName}@${PI_CANDIDATE.version}`,
           license: "MIT",
           licenseReference: "upstream package.json license field",
         },
@@ -472,7 +473,7 @@ async function runPackageFixtures(
     const skillCompatibilityContext = {
       qualificationStateRoot: skillQualificationStateRoot,
       distributionReleaseId: "release_hunter-pi-task10-probe",
-      engineReleaseId: "engine-release_pi-0.83.0",
+      engineReleaseId: `engine-release_pi-${PI_CANDIDATE.version}`,
       engineReleaseFingerprint: sha256Fingerprint("task10-probe-engine"),
       platformFingerprint: sha256Fingerprint(`task10-probe-platform:${platform}`),
       compatibilityVerifierFingerprint: PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,

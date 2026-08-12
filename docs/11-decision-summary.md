@@ -38,12 +38,21 @@ The following decisions form the initial owner-approved Hunter Pi baseline.
     the mutable source; bounded child-process installation and exact managed-snapshot cleanup are
     required. This is not an OS-containment claim against same-authority concurrent mutation.
 
+## 2026-08-13 release addendum
+
+28. Hunter Pi `0.1.0-dev.1` selects exact Engine Release `@earendil-works/pi-coding-agent@0.84.1`; npm integrity, Git commit, installed tree, JSON/RPC delta-only streaming, Extension, and SDK are independently probed.
+29. The Windows preview distribution is one checksummed `hpi-windows-x64.zip` plus one maintained `scripts/install.ps1`, published both inside the ZIP and as a standalone GitHub Release asset. The script depends only on Windows PowerShell and the bundled runtime.
+30. The default installation root is `%LOCALAPPDATA%\HunterPi`; the stable command is `bin\hpi.cmd`. PATH mutation is user-scoped and idempotent. Other `hpi` commands are reported but never overwritten or uninstalled.
+31. The installer owns bootstrap only. A different active release must flow through the existing qualified update manager; the installer cannot bypass its Evidence, journal, side-by-side activation, or rollback rules.
+32. Checksums and local CI establish integrity, not code-signing identity. The artifact remains unsigned `developer-preview`.
+33. Task 12 Evidence from the 0.83 Distribution Release remains historical and cannot establish 0.84.1 Provider reliability, real-repository safety, production readiness, or daily-use acceptance.
+
 ## Open owner decisions
 
 These choices are intentionally not frozen by this baseline:
 
 - final npm package and executable names after registry/name checks;
-- Windows installer technology and signing/publisher arrangement;
+- Windows signing/publisher arrangement and any future installer technology beyond the preview PowerShell/ZIP shape;
 - whether Stable 1.0 defaults to `Balanced` or another permission profile after usability/security evidence;
 - optional cloud synchronization or Hunter-Harness interoperability protocol;
 - whether a future interface blocker justifies a Pi patch or fork;

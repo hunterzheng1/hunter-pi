@@ -1,13 +1,13 @@
 # User experience
 
-The current Windows developer preview implements `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, an explicitly scoped JSON-plan Managed Change entry point, resource-oriented Plugin management, and qualified portable update/rollback commands. Task 12's real Windows pilot evaluates to `GO` within the unsigned developer-preview boundary. A signed installer, Stable publication, broad executable-Plugin qualification, physical power-loss proof, and non-Windows daily-use acceptance remain unproven. For executable instructions, use the [Windows user guide](user-guide.md); this document retains the product interaction model and detailed behavior.
+The current Windows developer preview implements `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, an explicitly scoped JSON-plan Managed Change entry point, resource-oriented Plugin management, and qualified portable update/rollback commands. Task 12's real Windows pilot evaluates the historical Pi 0.83 Distribution Release as `GO` within its unsigned developer-preview boundary. Hunter Pi `0.1.0-dev.1` uses Pi 0.84.1 and must retain its separate `NOT_PROVEN` daily-use disposition until new acceptance exists. A signed installer, Stable publication, broad executable-Plugin qualification, physical power-loss proof, and non-Windows daily-use acceptance remain unproven. For executable instructions, use the [Windows user guide](user-guide.md); this document retains the product interaction model and detailed behavior.
 
 ## Installation experience
 
 The delivery path has two stages:
 
 1. **Developer preview package** — an exact local npm tarball built from source and installed with Node.js 24.
-2. **Daily-use preview** — the implemented unsigned Windows x64 portable directory, which carries its required Node.js runtime and exposes the root `hpi.cmd` launcher.
+2. **Windows release preview** — one unsigned Windows x64 ZIP carrying Node.js 24, the versioned portable root, a stable `hpi` launcher, and the same `install.ps1` published as a standalone asset. End users do not need ambient Node.js, npm, or Pi.
 
 The user should not separately install, update, or configure raw Pi. Hunter Pi owns the qualified Engine Release. Git remains an explicit prerequisite until the installer decision proves that safely bundling it is worthwhile.
 

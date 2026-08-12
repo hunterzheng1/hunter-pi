@@ -23,11 +23,11 @@ const changedProductShellIntegrity = `sha256:${"d".repeat(64)}`;
 const detectedCoreExtension = () =>
   Promise.resolve({
     detected: true,
-    version: "0.1.0-dev.0",
+    version: "0.1.0-dev.1",
     integrity: coreIntegrity,
   });
 const testProductIdentity = {
-  productVersion: "0.1.0-dev.0",
+  productVersion: "0.1.0-dev.1",
   sourceCommit: "NOT_STAMPED",
   sourceState: "NOT_STAMPED" as const,
   coreExtensionIntegrity: coreIntegrity,
@@ -75,7 +75,7 @@ describe("Hunter Pi Doctor", () => {
   it("detects the actually installed fixed Pi Engine Release through its ESM export", async () => {
     await expect(inspectPiEngineRelease()).resolves.toEqual({
       detected: true,
-      version: "0.83.0",
+      version: "0.84.1",
     });
   });
 
@@ -152,7 +152,7 @@ describe("Hunter Pi Doctor", () => {
       interactiveTuiReadiness: {
         status: "DETECTED",
         checkedAt: "2026-08-03T12:01:30.000Z",
-        engineVersion: "0.83.0",
+        engineVersion: "0.84.1",
         productVersion: testProductIdentity.productVersion,
         sourceCommit: testProductIdentity.sourceCommit,
         sourceState: testProductIdentity.sourceState,
@@ -193,7 +193,7 @@ describe("Hunter Pi Doctor", () => {
       inspectCoreExtension: () =>
         Promise.resolve({
           detected: true,
-          version: "0.1.0-dev.0",
+          version: "0.1.0-dev.1",
           integrity: changedCoreIntegrity,
         }),
       productIdentity: { ...testProductIdentity, coreExtensionIntegrity: changedCoreIntegrity },
@@ -215,7 +215,7 @@ describe("Hunter Pi Doctor", () => {
       interactiveTuiReadiness: {
         status: "DETECTED",
         checkedAt: "2026-08-03T12:01:30.000Z",
-        engineVersion: "0.83.0",
+        engineVersion: "0.84.1",
         productVersion: testProductIdentity.productVersion,
         sourceCommit: testProductIdentity.sourceCommit,
         sourceState: testProductIdentity.sourceState,
@@ -259,7 +259,7 @@ describe("Hunter Pi Doctor", () => {
       interactiveTuiReadiness: {
         status: "DETECTED",
         checkedAt: "2026-08-03T12:01:30.000Z",
-        engineVersion: "0.83.0",
+        engineVersion: "0.84.1",
         productVersion: testProductIdentity.productVersion,
         sourceCommit: testProductIdentity.sourceCommit,
         sourceState: testProductIdentity.sourceState,

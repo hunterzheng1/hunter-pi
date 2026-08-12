@@ -6,11 +6,12 @@ Hunter Pi is a downstream distribution of official Pi, not a source fork in the 
 
 Pi officially exposes TypeScript Extensions, Skills, prompt templates, themes, Pi Packages, JSON mode, RPC, and an SDK. Pi Packages may be installed from npm, Git, or local paths. These are suitable public seams, but official documentation is a capability claim rather than Hunter Pi local proof:
 
-- [Pi coding-agent README](https://github.com/earendil-works/pi/blob/v0.83.0/packages/coding-agent/README.md)
-- [Pi extensions](https://github.com/earendil-works/pi/blob/v0.83.0/packages/coding-agent/docs/extensions.md)
-- [Pi packages](https://github.com/earendil-works/pi/blob/v0.83.0/packages/coding-agent/docs/packages.md)
-- [Pi RPC](https://github.com/earendil-works/pi/blob/v0.83.0/packages/coding-agent/docs/rpc.md)
-- [Pi SDK](https://github.com/earendil-works/pi/blob/v0.83.0/packages/coding-agent/docs/sdk.md)
+- [Pi coding-agent README](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/README.md)
+- [Pi extensions](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/docs/extensions.md)
+- [Pi packages](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/docs/packages.md)
+- [Pi JSON](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/docs/json.md)
+- [Pi RPC](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/docs/rpc.md)
+- [Pi SDK](https://github.com/earendil-works/pi/blob/v0.84.1/packages/coding-agent/docs/sdk.md)
 
 ## Engine qualification
 
@@ -40,7 +41,13 @@ Qualification states:
 | `INCOMPATIBLE` | a required contract reproduced a mismatch |
 | `RETIRED` | no longer offered for new installations; retained for rollback/history |
 
-### Task 4 candidate result
+### Current 0.84.1 candidate
+
+The dated [0.84.1 assessment](research/2026-08-13-pi-0.84.1-upgrade-assessment.md) binds npm/Git identity `@earendil-works/pi-coding-agent@0.84.1` / `53fa77ccd8a279eb87e92294ef3687b03ff80112`. The provider-independent probe explicitly verifies the v0.84 delta-only JSON/RPC `message_update`: records carry `assistantMessageEvent`, omit cumulative `message` and `assistantMessageEvent.partial`, and retain final `message_end.message` as authoritative. Hunter Pi's Provider accounting reads only final assistant `message_end` records, so it does not reconstruct usage from streaming deltas.
+
+Local Windows Extension, JSON, RPC, and SDK checks pass. Exact merged-head Windows/Ubuntu identity, published Windows assets, and any new real-use acceptance remain bound to the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md); until those facts exist they remain `PENDING` or `NOT_PROVEN`.
+
+### Historical Task 4 candidate result
 
 The dated [public-interface recheck](research/2026-08-03-pi-public-interface-recheck.md) intentionally retains `@earendil-works/pi-coding-agent@0.83.0`, registry `gitHead` `845d6ff1f6643aba440341cce877ce1c43ebbc39`, and the exact npm integrity recorded in the lockfile. The local Windows [Task 4 validation](validation/2026-08-03-task4-pi-public-interface.md) exercises only public package exports and CLI modes in an automatically created temporary Git fixture with isolated configuration, isolated Sessions, Pi's documented offline startup/package mode, and a deterministic faux provider. Operating-system network isolation was not established and remains `NOT_PROVEN`.
 

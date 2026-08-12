@@ -54,9 +54,9 @@ const updateCandidateFixture = releaseCandidateSchema.parse({
     byteLength: updateArtifactFixture.byteLength,
   },
   engine: {
-    releaseId: "engine-release_pi-0.83.0",
+    releaseId: "engine-release_pi-0.84.1",
     fingerprint: `sha256:${"a".repeat(64)}`,
-    piVersion: "0.83.0",
+    piVersion: "0.84.1",
   },
   qualification: {
     status: "PASS",
@@ -172,10 +172,10 @@ async function createDependencies(
       (() =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.0",
+          productVersion: "0.1.0-dev.1",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
-            version: "0.83.0",
+            version: "0.84.1",
           },
           sourceCommit: "NOT_STAMPED",
           sourceState: "NOT_STAMPED",
@@ -837,10 +837,10 @@ describe("hpi command", () => {
     const version = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(version).toMatchObject({
       product: "Hunter Pi",
-      productVersion: "0.1.0-dev.0",
+      productVersion: "0.1.0-dev.1",
       engine: {
         packageName: "@earendil-works/pi-coding-agent",
-        version: "0.83.0",
+        version: "0.84.1",
       },
       updateChannel: "developer-preview",
     });
@@ -858,8 +858,8 @@ describe("hpi command", () => {
     expect(sample).toMatchObject({
       schemaVersion: "hpi-pilot-runtime-sample.v1",
       product: "Hunter Pi",
-      productVersion: "0.1.0-dev.0",
-      engineVersion: "0.83.0",
+      productVersion: "0.1.0-dev.1",
+      engineVersion: "0.84.1",
       sourceState: "NOT_STAMPED",
     });
     expect(sample).toHaveProperty("sourceCommit");
@@ -1333,10 +1333,10 @@ describe("hpi command", () => {
       getVersionInfo: () =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.0",
+          productVersion: "0.1.0-dev.1",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
-            version: "0.83.0",
+            version: "0.84.1",
           },
           sourceCommit,
           sourceState: "CLEAN",
@@ -1571,9 +1571,9 @@ describe("hpi command", () => {
     };
     const compatibilityReceipt = listed.records?.[0]?.assurance?.compatibilityReceipt;
     expect(compatibilityReceipt?.distributionReleaseId).toBe(
-      "release_hunter-pi-0.1.0-dev.0-workspace",
+      "release_hunter-pi-0.1.0-dev.1-workspace",
     );
-    expect(compatibilityReceipt?.engineReleaseId).toBe("engine-release_pi-0.83.0");
+    expect(compatibilityReceipt?.engineReleaseId).toBe("engine-release_pi-0.84.1");
     expect(compatibilityReceipt?.platformFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
     const firstQuickExit = await runHpiCli([], dependencies);
     expect(firstQuickExit, io.stderr.join("\n")).toBe(0);
@@ -1705,8 +1705,8 @@ describe("hpi command", () => {
     expect(readiness).toMatchObject({
       status: "DETECTED",
       checkedAt: "2026-08-03T13:00:00.000Z",
-      engineVersion: "0.83.0",
-      productVersion: "0.1.0-dev.0",
+      engineVersion: "0.84.1",
+      productVersion: "0.1.0-dev.1",
       sourceCommit: "NOT_STAMPED",
       sourceState: "NOT_STAMPED",
       platform: process.platform,
@@ -1744,10 +1744,10 @@ describe("hpi command", () => {
       getVersionInfo: () =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.0",
+          productVersion: "0.1.0-dev.1",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
-            version: "0.83.0",
+            version: "0.84.1",
           },
           sourceCommit: "NOT_STAMPED",
           sourceState: "NOT_STAMPED",

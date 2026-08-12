@@ -8,14 +8,14 @@ import {
 
 export const PI_CANDIDATE = {
   packageName: "@earendil-works/pi-coding-agent",
-  version: "0.83.0",
-  registryGitHead: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
+  version: "0.84.1",
+  registryGitHead: "53fa77ccd8a279eb87e92294ef3687b03ff80112",
   integrity:
-    "sha512-uYhF+FsZxogoSX/AxBcUdiY+ZklubwaXyAoEGA2eQwsHcyEAhUYIKh/WLXe/a8+k8eTCmxb+ZN2Zo9mzQtzbWw==",
+    "sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==",
   installedPackageFingerprint:
-    "sha256:42b89fef9bf22021cb3d2ec4d187ad3a6a9444b90d8191e749b63cd5ea2cabdd",
-  installedFileCount: 884,
-  installedBytes: 13_104_822,
+    "sha256:54bc309babee1b4175d66ea54f63d72ca89bd30be77e5c4dabcdd64e1edfcdcd",
+  installedFileCount: 968,
+  installedBytes: 13_649_587,
 } as const;
 
 export const PI_PROBE_SOURCE_FILES = [
@@ -167,12 +167,21 @@ const extensionSurfaceSchema = z
     }
   });
 
+const deltaOnlyMessageUpdateContractSchema = z.strictObject({
+  mode: z.literal("DELTA_ONLY"),
+  assistantMessageEventObserved: z.literal(true),
+  cumulativeMessageAbsent: z.literal(true),
+  assistantPartialAbsent: z.literal(true),
+  authoritativeMessageEndObserved: z.literal(true),
+});
+
 const jsonSurfaceSchema = z
   .strictObject({
     status: piProbeStatusSchema,
     framing: z.enum(["NDJSON", "NOT_PROVEN"]),
     eventTypes: z.array(z.string().min(1).max(128)),
     parsedLineCount: z.number().int().nonnegative(),
+    messageUpdateContract: deltaOnlyMessageUpdateContractSchema,
   })
   .superRefine((surface, context) => {
     const requiredEvents = [
@@ -197,6 +206,7 @@ const jsonSurfaceSchema = z
 const requiredRpcResponseIds = [
   "state-before-a",
   "state-before-b",
+  "prompt-stream-proof",
   "prompt-cancel",
   "abort-active",
   "state-after",
@@ -211,6 +221,7 @@ const rpcSurfaceSchema = z
     concurrentRequestIds: z.tuple([z.literal("state-before-a"), z.literal("state-before-b")]),
     requestScopedCancellation: z.literal(false),
     correlatedResponseIds: z.array(z.string().min(1).max(128)),
+    messageUpdateContract: deltaOnlyMessageUpdateContractSchema,
     promptAccepted: z.boolean(),
     abortAccepted: z.boolean(),
     streamStoppedAfterAbort: z.boolean(),

@@ -117,6 +117,49 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+function requireProbeFact(condition: boolean, message: string): true {
+  if (!condition) throw new Error(message);
+  return true;
+}
+
+function inspectDeltaOnlyMessageUpdates(records: readonly Record<string, unknown>[]) {
+  const updates = records.filter((record) => record["type"] === "message_update");
+  const assistantEvents = updates.map((record) => record["assistantMessageEvent"]);
+  return {
+    mode: "DELTA_ONLY" as const,
+    assistantMessageEventObserved: requireProbeFact(
+      assistantEvents.length > 0 &&
+        assistantEvents.every(
+          (event) => typeof event === "object" && event !== null && !Array.isArray(event),
+        ),
+      "Pi message_update did not expose assistantMessageEvent deltas",
+    ),
+    cumulativeMessageAbsent: requireProbeFact(
+      updates.every((record) => !Object.prototype.hasOwnProperty.call(record, "message")),
+      "Pi message_update unexpectedly exposed a cumulative message",
+    ),
+    assistantPartialAbsent: requireProbeFact(
+      assistantEvents.every(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          !Object.prototype.hasOwnProperty.call(event, "partial"),
+      ),
+      "Pi message_update unexpectedly exposed assistantMessageEvent.partial",
+    ),
+    authoritativeMessageEndObserved: requireProbeFact(
+      records.some(
+        (record) =>
+          record["type"] === "message_end" &&
+          typeof record["message"] === "object" &&
+          record["message"] !== null &&
+          Reflect.get(record["message"], "role") === "assistant",
+      ),
+      "Pi did not expose an authoritative assistant message_end",
+    ),
+  };
+}
+
 function sha256(content: string | Buffer): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
@@ -447,6 +490,7 @@ async function runJsonAndExtensionProbe(
       framing: "NDJSON",
       eventTypes,
       parsedLineCount: records.length,
+      messageUpdateContract: inspectDeltaOnlyMessageUpdates(records),
     },
   };
 }
@@ -523,7 +567,7 @@ async function runRpcProcess(
   });
 
   const waitFor = async (
-    predicate: (record: Record<string, unknown>) => boolean,
+    predicate: (record: Record<string, unknown>, index: number) => boolean,
   ): Promise<Record<string, unknown>> =>
     new Promise((resolveRecord, reject) => {
       const timeout = setTimeout(() => {
@@ -566,9 +610,9 @@ async function runRpcProcess(
     (record: Record<string, unknown>): boolean =>
       record["type"] === "response" && record["id"] === id;
   const eventWithType =
-    (type: string) =>
-    (record: Record<string, unknown>): boolean =>
-      record["type"] === type;
+    (type: string, minimumIndex = 0) =>
+    (record: Record<string, unknown>, index: number): boolean =>
+      index >= minimumIndex && record["type"] === type;
 
   try {
     send({ id: "state-before-a", type: "get_state" });
@@ -578,13 +622,19 @@ async function runRpcProcess(
       waitFor(responseWithId("state-before-b")),
     ]);
 
+    const streamProofStart = records.length;
+    send({ id: "prompt-stream-proof", type: "prompt", message: "Emit a bounded stream." });
+    await waitFor(responseWithId("prompt-stream-proof"));
+    await waitFor(eventWithType("agent_settled", streamProofStart));
+
+    const cancellationStart = records.length;
     send({ id: "prompt-cancel", type: "prompt", message: "Wait for cancellation." });
     await waitFor(responseWithId("prompt-cancel"));
-    await waitFor(eventWithType("agent_start"));
+    await waitFor(eventWithType("agent_start", cancellationStart));
 
     send({ id: "abort-active", type: "abort" });
     await waitFor(responseWithId("abort-active"));
-    await waitFor(eventWithType("agent_end"));
+    await waitFor(eventWithType("agent_end", cancellationStart));
 
     send({ id: "state-after", type: "get_state" });
     await waitFor(responseWithId("state-after"));
@@ -623,6 +673,7 @@ async function runRpcCancellationProbe(
   const responseIds = result.records.flatMap((record) =>
     record["type"] === "response" && typeof record["id"] === "string" ? [record["id"]] : [],
   );
+  const streamPrompt = result.records.find((record) => record["id"] === "prompt-stream-proof");
   const prompt = result.records.find((record) => record["id"] === "prompt-cancel");
   const abort = result.records.find((record) => record["id"] === "abort-active");
   const stateAfter = result.records.find((record) => record["id"] === "state-after");
@@ -641,7 +692,12 @@ async function runRpcCancellationProbe(
     concurrentRequestIds: ["state-before-a", "state-before-b"],
     requestScopedCancellation: false,
     correlatedResponseIds: responseIds,
-    promptAccepted: prompt !== undefined && isSuccessfulRpcResponse(prompt, "prompt"),
+    messageUpdateContract: inspectDeltaOnlyMessageUpdates(result.records),
+    promptAccepted:
+      streamPrompt !== undefined &&
+      isSuccessfulRpcResponse(streamPrompt, "prompt") &&
+      prompt !== undefined &&
+      isSuccessfulRpcResponse(prompt, "prompt"),
     abortAccepted: abort !== undefined && isSuccessfulRpcResponse(abort, "abort"),
     streamStoppedAfterAbort,
     childExited: result.exitCode !== null,

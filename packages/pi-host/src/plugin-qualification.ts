@@ -16,6 +16,9 @@ import {
   assertResolverPiPackageInspection,
   type PiPackageInspection,
 } from "./pi-package-resolver.js";
+import { PI_CANDIDATE } from "./schemas.js";
+
+const PI_ENGINE_RELEASE = `${PI_CANDIDATE.packageName}@${PI_CANDIDATE.version}` as const;
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -40,7 +43,7 @@ function comparablePath(value: string): string {
 export const PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT = digest({
   implementation: "hunter-pi-public-package-metadata-verifier",
   version: 1,
-  engineRelease: "@earendil-works/pi-coding-agent@0.83.0",
+  engineRelease: PI_ENGINE_RELEASE,
   executablePolicy: "RESOURCE_ONLY",
 });
 
@@ -65,7 +68,7 @@ export const piPackageQualificationReceiptSchema = z
     packageFingerprint: fingerprintSchema,
     manifestFingerprint: fingerprintSchema,
     verifierFingerprint: z.literal(PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT),
-    engineRelease: z.literal("@earendil-works/pi-coding-agent@0.83.0"),
+    engineRelease: z.literal(PI_ENGINE_RELEASE),
     compatibility: z.enum(["VERIFIED", "UNVERIFIED"]),
     checks: z
       .array(qualificationCheckSchema)
@@ -171,7 +174,7 @@ export async function qualifyPiPackageInspection(options: {
     packageFingerprint: manifest.packageFingerprint,
     manifestFingerprint,
     verifierFingerprint: PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
-    engineRelease: "@earendil-works/pi-coding-agent@0.83.0",
+    engineRelease: PI_ENGINE_RELEASE,
     compatibility: executableSurfacePass ? "VERIFIED" : "UNVERIFIED",
     checks: [
       { checkId: "PUBLIC_PACKAGE_MANAGER_RESOLUTION", outcome: "PASS" },

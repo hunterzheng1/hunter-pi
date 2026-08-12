@@ -1,13 +1,13 @@
 # User experience
 
-Task 5 implements the bounded developer-preview subset: `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, and plugin doctor/disable. Task 12 adds an explicitly scoped JSON-plan Managed Change entry point; conversational planning, full plugin management, installer/update UI, and other commands remain target designs unless a dated validation record says otherwise.
+The current Windows developer preview implements `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, an explicitly scoped JSON-plan Managed Change entry point, resource-oriented Plugin management, and qualified portable update/rollback commands. Task 12's real Windows pilot evaluates to `GO` within the unsigned developer-preview boundary. A signed installer, Stable publication, broad executable-Plugin qualification, physical power-loss proof, and non-Windows daily-use acceptance remain unproven. For executable instructions, use the [Windows user guide](user-guide.md); this document retains the product interaction model and detailed behavior.
 
 ## Installation experience
 
 The delivery path has two stages:
 
-1. **Developer preview** — an exact npm package invoked with `npx` or installed globally.
-2. **Daily-use preview** — a downloadable Windows installer or portable package that carries its required JavaScript runtime and exposes `hpi` on `PATH`.
+1. **Developer preview package** — an exact local npm tarball built from source and installed with Node.js 24.
+2. **Daily-use preview** — the implemented unsigned Windows x64 portable directory, which carries its required Node.js runtime and exposes the root `hpi.cmd` launcher.
 
 The user should not separately install, update, or configure raw Pi. Hunter Pi owns the qualified Engine Release. Git remains an explicit prerequisite until the installer decision proves that safely bundling it is worthwhile.
 
@@ -190,16 +190,17 @@ No output is summarized as “all tests passed” unless the exact required set 
 
 ## Plugin experience
 
-Target commands:
+Implemented commands:
 
 ```powershell
-hpi plugin search <term>
-hpi plugin install npm:example-package
-hpi plugin install git:github.com/owner/repo@tag
 hpi plugin list
 hpi plugin doctor
 hpi plugin disable <id>
-hpi plugin import-from-pi
+hpi plugin remove <id>
+hpi plugin install local <directory> --label <name> --acknowledge-provenance --allow-process-authority
+hpi plugin install npm <name@version> --integrity <registry-SRI> --acknowledge-provenance --allow-process-authority
+hpi plugin install git <https-url> --commit <sha> --tree-fingerprint <sha256> --acknowledge-provenance --allow-process-authority
+hpi plugin import-pi <directory> --package <name@version> --integrity <sha256> --acknowledge-provenance --allow-process-authority
 ```
 
 Before installation, Hunter Pi displays source, resolved version/ref, integrity when available, declared resources, and the fact that Pi extensions can execute local code.
@@ -246,16 +247,17 @@ Target locations:
 | Project | `<repo>/.hunter-pi/` | `<repo>/.hunter-pi/` | versioned project rules, workflows, check definitions |
 | Runtime | local state under user/project roots | same | sessions, logs, locks, checkpoints; gitignored |
 
-Hunter Pi does not automatically reuse raw Pi's configuration directory. `import-from-pi` imports selected package declarations and preferences, never credentials by copying opaque files.
+Hunter Pi does not automatically reuse raw Pi's configuration directory. `hpi plugin import-pi` imports one explicitly selected package directory with an exact package identity and integrity value; it does not copy raw Pi credentials or opaque configuration files.
 
 ## Update experience
 
-Target commands:
+Implemented portable commands:
 
 ```powershell
-hpi update check
-hpi update apply
-hpi update rollback
+hpi update status --json
+hpi update check --candidate <file> --artifact <file> --json
+hpi update apply --candidate <file> --artifact <file> --json
+hpi update rollback <release-id> --json
 hpi version --json
 ```
 

@@ -2,6 +2,12 @@
 
 This directory is the canonical product and delivery baseline for Hunter Pi.
 
+## User entry points
+
+- [Windows user guide](user-guide.md) — install, configure, run Quick Session and Managed Change, manage plugins, update, roll back, and troubleshoot.
+- [Root README](../README.md) — current status and five-minute quick start.
+- [Final daily-use acceptance](validation/2026-08-12-task12-daily-use-go.md) — exact evidence, measured results, and remaining boundaries.
+
 ## Status
 
 - Baseline date: 2026-08-12
@@ -12,6 +18,11 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Current verification: a fresh clean-first `npm run verify` passes 71 files / 727 tests, strict compilation, production build, formatting, all 13 external package smokes, the single CLI artifact smoke, clean npm installation, and the Provider-independent Pi public-interface probe. The unchanged immutable real-use Evidence evaluates to `GO` with exact fingerprint continuity. Final diff review found no P0–P3 issue, and the exact acceptance merge passed hosted Windows/Ubuntu gates.
 - Next gate: no further Task 12 gate is required within the unsigned Windows developer-preview boundary. Signing, Stable publication, broader plugin qualification, physical power-loss testing, non-Windows daily-use acceptance, and arbitrary real-user-repository safety require separately scoped work.
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
+
+### Historical delivery ledger
+
+The entries below preserve the status and failures observed at each delivery stage. Earlier `PENDING`, `BLOCKED`, or `NOT_PROVEN` text is an append-only historical snapshot; it does not override the current status above.
+
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
 - Task 3 remote CI: **PASS** — exact implementation `1c90395a2fd1d2df8f8b69270e28fd8a7da2d1f2` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818956056), and merge `62b46cbc179bb8bb3c7a3195f4924d5b0c6c9524` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30819181475). The superseded `e1b06c523084a34c8b32a852848c906fa9877236` run remains recorded as [Ubuntu PASS / Windows FAIL](https://github.com/hunterzheng1/hunter-pi/actions/runs/30818314313).
@@ -64,6 +75,7 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 | [10 — Risk register](10-risk-register.md) | Product, upstream, plugin, security, and maintenance risks |
 | [11 — Decision summary](11-decision-summary.md) | Compact list of approved baseline decisions and open owner choices |
 | [12 — Requirements traceability](12-requirements-traceability.md) | User-story and NFR ownership across delivery tasks and evidence gates |
+| [Windows user guide](user-guide.md) | Installation, daily operation, Managed Change plans, plugins, updates, and troubleshooting |
 
 ## Migration, research, and planning
 

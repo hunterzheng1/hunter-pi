@@ -91,6 +91,9 @@ export async function runQualificationCliProcess(
   timeoutMs: number,
   options: QualificationCliProcessOptions = {},
 ): Promise<GhCliCommandResult> {
+  if (process.platform === "win32" && !win32.isAbsolute(executable)) {
+    return failedResult();
+  }
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
   const deadline = monotonicNow() + timeoutMs;
   const driver = (options.createDriver ?? createLocalManagedProcessDriver)();

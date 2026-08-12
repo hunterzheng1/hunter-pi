@@ -5,12 +5,12 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 ## Status
 
 - Baseline date: 2026-08-12
-- Product status: **TASKS_0_TO_11_COMPLETE_WITHIN_RECORDED_BOUNDS / TASK_12_REAL_WINDOWS_PILOT_GO_LOCAL / FINAL_ACCEPTANCE_PR_AND_EXACT_MAIN_CI_PENDING**
+- Product status: **TASKS_0_TO_12_COMPLETE_WITHIN_RECORDED_BOUNDS / REAL_WINDOWS_DAILY_USE_GO**
 - Last qualified product baseline (2026-08-12): `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7`; exact merge-head main CI [`31573580277`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31573580277) passed all six required Windows/Ubuntu quality, portable artifact, containment, and Evidence jobs without a rerun.
 - Current implementation: Tasks 1–11 and the Task 12 capture/evaluation path are implemented. Qualified portable artifact `sha256:d2fda8a443a294f8ed9f1c4484eb41bbcf74be6515aeca3f68df718f8a32c082` on source `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7` completed the real disposable-repository Windows pilot. The immutable Archive first retained a 3-second performance `REVISE`; after the documented Windows security-software variance criterion changed to 3.5 seconds, the same Evidence replayed as `GO` without changing observations.
-- Completion audit: **LOCAL DAILY-USE GO / HOSTED ACCEPTANCE PENDING** — see the [2026-08-12 final pilot record](validation/2026-08-12-task12-daily-use-go.md). The earlier [2026-08-08 audit](validation/2026-08-08-daily-use-completion-audit.md) remains historical.
-- Current verification: a fresh clean-first `npm run verify` passes 71 files / 727 tests, strict compilation, production build, formatting, all 13 external package smokes, the single CLI artifact smoke, clean npm installation, and the Provider-independent Pi public-interface probe. The unchanged immutable real-use Evidence evaluates to `GO` with exact fingerprint continuity. Final diff review found no P0–P3 issue; hosted acceptance for the criterion-only change remains pending.
-- Next gate: pass the acceptance-threshold PR and exact merged-head main CI, then record those hosted identities without changing the immutable pilot Archive.
+- Completion audit: **REAL WINDOWS DAILY-USE GO WITHIN RECORDED BOUNDS** — see the [2026-08-12 final pilot record](validation/2026-08-12-task12-daily-use-go.md). PR #83 run [`31582820744`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31582820744) and exact merged-head main run [`31584966554`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) passed all six required jobs. The earlier [2026-08-08 audit](validation/2026-08-08-daily-use-completion-audit.md) remains historical.
+- Current verification: a fresh clean-first `npm run verify` passes 71 files / 727 tests, strict compilation, production build, formatting, all 13 external package smokes, the single CLI artifact smoke, clean npm installation, and the Provider-independent Pi public-interface probe. The unchanged immutable real-use Evidence evaluates to `GO` with exact fingerprint continuity. Final diff review found no P0–P3 issue, and the exact acceptance merge passed hosted Windows/Ubuntu gates.
+- Next gate: no further Task 12 gate is required within the unsigned Windows developer-preview boundary. Signing, Stable publication, broader plugin qualification, physical power-loss testing, non-Windows daily-use acceptance, and arbitrary real-user-repository safety require separately scoped work.
 - Active plan: [Foundation to daily use](plans/2026-08-03-foundation-to-daily-use.md)
 - Task 1 remote CI: **PASS** — exact merge commit `cf0a4fb817f5052ca7683338510dd78f71938ccb` passed [Windows and Ubuntu CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30795095555)
 - Task 2 remote CI: **PASS** — exact implementation commit `71542e91d5f92cb62cc6002cf64456fe3d7d8248` passed [Windows and Ubuntu PR CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807281376), and exact merge commit `fb162bf2126b356750dd327cef7b8e2fb26cde09` passed [Windows and Ubuntu main CI](https://github.com/hunterzheng1/hunter-pi/actions/runs/30807557882)
@@ -46,7 +46,7 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 - Real Provider: **DETECTED for the exact Task 6 disposable-fixture request; broader reliability, recovery, real-repository safety, and production readiness remain NOT_PROVEN**
 - Third-party plugin compatibility: **NOT_PROVEN**
 - Windows installer and signing: **NOT_PROVEN**
-- Daily-use acceptance: **LOCAL GO / FINAL HOSTED ACCEPTANCE PENDING** — the exact real-use Archive exists and evaluates to `GO`; the acceptance-threshold PR and exact merged-head main CI remain required before closure
+- Daily-use acceptance: **GO WITHIN THE WINDOWS UNSIGNED DEVELOPER-PREVIEW BOUNDARY** — the exact real-use Archive evaluates to `GO`; PR #83 and exact merged-head main CI passed all six required jobs
 
 ## Product and architecture
 

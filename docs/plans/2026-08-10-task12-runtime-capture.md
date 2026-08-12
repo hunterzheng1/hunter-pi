@@ -1,6 +1,6 @@
 # Task 12 — trusted runtime capture coordination
 
-- Status: **REAL WINDOWS PILOT ARCHIVED / LOCAL EVALUATOR GO / FINAL ACCEPTANCE PR AND EXACT MAIN CI PENDING**
+- Status: **REAL WINDOWS PILOT ARCHIVED / EVALUATOR GO / PR AND EXACT MERGED-HEAD MAIN CI PASS**
 - Source baseline: merged main `81f7a956bfe24687671340946c1e2d593277aa6a`
 - Product outcome: the real Windows pilot must be assembled from product-observed, plan-bound facts and written through the existing opaque capture/final Archive authority; caller-authored complete Evidence JSON must remain unable to promote itself to a live pilot.
 

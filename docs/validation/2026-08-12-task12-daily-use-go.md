@@ -2,7 +2,7 @@
 
 ## Disposition
 
-The final disposable-repository pilot is complete and its immutable Archive evaluates to `GO` under the documented Windows acceptance criterion. Hosted acceptance for the criterion change remains pending until its PR and exact merged-head main CI pass.
+The final disposable-repository pilot is complete and its immutable Archive evaluates to `GO` under the documented Windows acceptance criterion. PR #83 run [`31582820744`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31582820744) and exact merged-head main run [`31584966554`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) passed all six required Windows/Ubuntu quality, portable-artifact, containment, and Evidence jobs. Task 12 is accepted within the boundary below.
 
 ## Exact identities
 
@@ -15,6 +15,8 @@ The final disposable-repository pilot is complete and its immutable Archive eval
 - Archive: `pilot-archive-b174ac7-final-01`.
 - Evidence: `sha256:5a10d9a2afb6482c6bf025cc73e4ebdb6a8d265442b8aa7461c8f2aaa2e5d283`.
 - Archive fingerprint: `sha256:5f778a0fc967d4ed0c31a0690b7ba715bdf3aaccdbf550ed8bed15056ee84b3a`.
+- Acceptance source: `48cc38aea79fd7b04b3d3333ea1596fef56d62ab`; PR #83 run `31582820744` passed all six required jobs.
+- Acceptance merge: `b41eb33ce4a8267b5ce0d22404b10ebb02264fd3`; exact main run `31584966554` passed all six required jobs.
 
 ## Real observations
 

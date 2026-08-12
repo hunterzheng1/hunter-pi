@@ -165,6 +165,39 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     expect(decision.outcome).toBe("GO");
   });
 
+  it("counts equal Attempt IDs independently when they belong to different Runs", () => {
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const repeatedRecoveryAttemptId = "att-recovery-shared-across-runs";
+    const evidenceWithRunLocalAttemptIds = pilotEvidenceSchema.parse({
+      ...evidence,
+      runArchives: evidence.runArchives.map((run) => ({
+        ...run,
+        recoveryLinks: run.recoveryLinks.map((link) => ({
+          ...link,
+          recoveryAttemptId: repeatedRecoveryAttemptId,
+        })),
+      })),
+      interruptions: evidence.interruptions.map((interruption) => ({
+        ...interruption,
+        recoveryAttemptId: repeatedRecoveryAttemptId,
+      })),
+    });
+
+    const decision = new PilotEvaluator().evaluate(
+      evidenceWithRunLocalAttemptIds,
+      plan,
+      trustedArchiveFor(
+        evidenceWithRunLocalAttemptIds,
+        plan,
+        "pilot-archive-run-local-attempt-id-test",
+      ),
+    );
+
+    expect(decision.metrics.resumedInterruptionCount).toBe(3);
+    expect(decision.outcome).toBe("GO");
+  });
+
   it("rejects an extra Managed Archive instead of accepting a detached Run chain", () => {
     const evidence = completeEvidence();
     const task = evidence.taskOracles.find((candidate) => candidate.mode === "MANAGED");

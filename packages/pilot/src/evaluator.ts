@@ -61,7 +61,7 @@ function median(samples: readonly number[]): number {
 
 function successfullyResumedInterruptionCount(evidence: PilotEvidence): number {
   const runById = new Map(evidence.runArchives.map((run) => [run.runId, run]));
-  const countedRecoveryAttemptIds = new Set<string>();
+  const countedRecoveryAttemptKeys = new Set<string>();
   return evidence.interruptions.filter((interruption) => {
     const run = runById.get(interruption.runId);
     const recoveryLink = run?.recoveryLinks.find(
@@ -77,8 +77,9 @@ function successfullyResumedInterruptionCount(evidence: PilotEvidence): number {
       recoveryLink?.checkpointId === interruption.checkpointId &&
       recoveryLink.interruptedAttemptId === interruption.interruptedAttemptId &&
       recoveryLink.recoveryAttemptId === interruption.recoveryAttemptId;
-    if (!resumed || countedRecoveryAttemptIds.has(interruption.recoveryAttemptId)) return false;
-    countedRecoveryAttemptIds.add(interruption.recoveryAttemptId);
+    const recoveryAttemptKey = `${interruption.runId}\0${interruption.recoveryAttemptId}`;
+    if (!resumed || countedRecoveryAttemptKeys.has(recoveryAttemptKey)) return false;
+    countedRecoveryAttemptKeys.add(recoveryAttemptKey);
     return true;
   }).length;
 }

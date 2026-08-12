@@ -1,15 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { z } from "zod";
 
 import {
   FilePiPackageBindingStore,
-  PI_CANDIDATE,
   PI_PACKAGE_METADATA_VERIFIER_FINGERPRINT,
   PiPackageManifestResolver,
   Task6PiEngineHost,
@@ -105,11 +104,19 @@ import {
 import { createPilotCaptureProductExecutionRuntime } from "@hunter-pi/pilot/internal-capture";
 import { createRealManagedChangePilotExecutionRuntime } from "@hunter-pi/managed-change/internal-pilot-execution";
 import { createQualifiedControlledCommandRunner } from "@hunter-pi/verification";
-import { archiveIdSchema, fingerprintSchema, operationIdSchema } from "@hunter-pi/domain";
 import {
+  archiveIdSchema,
+  distributionReleaseIdSchema,
+  fingerprintSchema,
+  operationIdSchema,
+  timestampSchema,
+} from "@hunter-pi/domain";
+import {
+  decodePortableBundle,
   FileUpdateManager,
   FileWindowsPortableReleaseAdapter,
   HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+  portableBundleFingerprint,
   releaseCandidateSchema,
   windowsPortableUpdateManagerStateRoot,
   type ReleaseCandidate,
@@ -169,29 +176,180 @@ export interface HpiCliDependencies {
   }) => Promise<UpdateManager | undefined>;
 }
 
-const pilotPortableManifestSchema = z.strictObject({
-  schemaVersion: z.literal("hpi-windows-portable.v3"),
-  product: z.literal("Hunter Pi"),
-  platform: z.literal("win32-x64"),
-  nodeVersion: z.string().min(1).max(64),
-  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
-  sourceState: z.literal("CLEAN"),
-  updateChannel: z.literal("developer-preview"),
-  installer: z.literal("PORTABLE_ZIP"),
-  signed: z.boolean(),
-  releaseId: z.string().min(1).max(256),
-  productVersion: z.string().min(1).max(128),
-  engineVersion: z.literal(PI_CANDIDATE.version),
-  engineReleaseId: z.string().min(1).max(256),
-  engineReleaseFingerprint: fingerprintSchema,
+const pilotActivePointerSchema = z.strictObject({
+  schemaVersion: z.literal("hpi-portable-active.v1"),
+  releaseId: distributionReleaseIdSchema,
   artifactFingerprint: fingerprintSchema,
-  artifactByteLength: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  versionDirectory: z.string().min(1).max(1_024),
-  cliPackageFingerprint: fingerprintSchema,
-  productShellIntegrity: fingerprintSchema,
-  coreExtensionIntegrity: fingerprintSchema,
-  nodeRuntimeIntegrity: fingerprintSchema,
+  productVersion: z.string().min(1).max(128),
+  activatedAt: timestampSchema,
 });
+
+const PILOT_RUNTIME_IDENTITY_FILE_LIMIT = 256 * 1024;
+const PILOT_RUNTIME_ARTIFACT_LIMIT = 512 * 1024 * 1024;
+const PILOT_PRODUCT_SHELL_PATH = "node_modules/@hunter-pi/cli/dist/hpi.js";
+const PILOT_CORE_EXTENSION_PATH = "node_modules/@hunter-pi/cli/dist/core-extension.js";
+
+function samePhysicalPath(left: string, right: string): boolean {
+  const normalizedLeft = resolve(left);
+  const normalizedRight = resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function containedPilotPath(root: string, ...segments: readonly string[]): string {
+  const target = resolve(root, ...segments);
+  const relativeTarget = relative(resolve(root), target);
+  if (
+    relativeTarget.length === 0 ||
+    relativeTarget === ".." ||
+    relativeTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeTarget)
+  ) {
+    throw new Error("pilot runtime identity path escaped its installation root");
+  }
+  return target;
+}
+
+async function assertPilotPhysicalDirectory(path: string): Promise<void> {
+  const status = await lstat(path);
+  if (!status.isDirectory() || status.isSymbolicLink()) {
+    throw new Error("pilot runtime identity directory is not physical");
+  }
+  if (!samePhysicalPath(await realpath(path), path)) {
+    throw new Error("pilot runtime identity directory is redirected");
+  }
+}
+
+async function readPilotPhysicalFile(
+  path: string,
+  maximumByteLength: number,
+  dependencies: HpiCliDependencies,
+  minimumByteLength = 1,
+): Promise<Uint8Array> {
+  const before = await lstat(path);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    !Number.isSafeInteger(before.size) ||
+    before.size < minimumByteLength ||
+    before.size > maximumByteLength ||
+    !samePhysicalPath(await realpath(path), path)
+  ) {
+    throw new Error("pilot runtime identity file is not one exact bounded physical file");
+  }
+  const bytes =
+    dependencies.readBinaryFile === undefined
+      ? await readFile(path)
+      : await dependencies.readBinaryFile(path);
+  const after = await lstat(path);
+  if (
+    !after.isFile() ||
+    after.isSymbolicLink() ||
+    after.nlink !== 1 ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs ||
+    bytes.byteLength !== after.size
+  ) {
+    throw new Error("pilot runtime identity file changed while it was read");
+  }
+  return bytes;
+}
+
+function bytesFingerprint(value: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function verifyPilotVersionDirectory(options: {
+  readonly versionDirectory: string;
+  readonly files: readonly { readonly path: string; readonly bytes: Uint8Array }[];
+  readonly dependencies: HpiCliDependencies;
+}): Promise<void> {
+  const expectedFiles = new Map<string, { readonly path: string; readonly bytes: Uint8Array }>();
+  const expectedDirectories = new Set<string>();
+  for (const file of options.files) {
+    const key = file.path.toLowerCase();
+    if (expectedFiles.has(key)) {
+      throw new Error("portable bundle contains a case-aliased file path");
+    }
+    expectedFiles.set(key, file);
+    const segments = file.path.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      expectedDirectories.add(segments.slice(0, index).join("/").toLowerCase());
+    }
+  }
+
+  const expectedMetadata = new Set([".hpi-artifact", ".hpi-candidate.json"]);
+  const seenFiles = new Set<string>();
+  const seenMetadata = new Set<string>();
+  const pending: { readonly directory: string; readonly portablePath: string }[] = [
+    { directory: options.versionDirectory, portablePath: "" },
+  ];
+  let entryCount = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    await assertPilotPhysicalDirectory(current.directory);
+    for (const entry of await readdir(current.directory, { withFileTypes: true })) {
+      entryCount += 1;
+      if (entryCount > 200_000) {
+        throw new Error("active portable release exceeds its entry limit");
+      }
+      const portablePath =
+        current.portablePath.length === 0 ? entry.name : `${current.portablePath}/${entry.name}`;
+      const key = portablePath.toLowerCase();
+      const path = containedPilotPath(options.versionDirectory, ...portablePath.split("/"));
+      const status = await lstat(path);
+      if (status.isSymbolicLink()) {
+        throw new Error("active portable release contains a redirected entry");
+      }
+      if (status.isDirectory()) {
+        if (!expectedDirectories.has(key)) {
+          throw new Error("active portable release contains an undeclared directory");
+        }
+        pending.push({ directory: path, portablePath });
+        continue;
+      }
+      if (!status.isFile()) {
+        throw new Error("active portable release contains a non-file entry");
+      }
+      if (current.portablePath.length === 0 && expectedMetadata.has(key)) {
+        if (seenMetadata.has(key)) {
+          throw new Error("active portable release contains duplicate metadata");
+        }
+        seenMetadata.add(key);
+        continue;
+      }
+      const expected = expectedFiles.get(key);
+      if (expected === undefined || seenFiles.has(key)) {
+        throw new Error("active portable release contains an undeclared or duplicate file");
+      }
+      const bytes = await readPilotPhysicalFile(
+        path,
+        expected.bytes.byteLength,
+        options.dependencies,
+        0,
+      );
+      if (
+        bytes.byteLength !== expected.bytes.byteLength ||
+        bytesFingerprint(bytes) !== bytesFingerprint(expected.bytes)
+      ) {
+        throw new Error("active portable release file bytes do not match the artifact");
+      }
+      seenFiles.add(key);
+    }
+  }
+  if (
+    seenFiles.size !== expectedFiles.size ||
+    seenMetadata.size !== expectedMetadata.size ||
+    [...expectedFiles.keys()].some((key) => !seenFiles.has(key))
+  ) {
+    throw new Error("active portable release file inventory is incomplete");
+  }
+}
 
 async function readInstalledPilotRuntimeBinding(options: {
   readonly dependencies: HpiCliDependencies;
@@ -214,66 +372,93 @@ async function readInstalledPilotRuntimeBinding(options: {
       "pilot runtime identity is incomplete",
     );
   }
-  const manifestPath = join(resolve(portableRoot), "portable-manifest.json");
-  let stats;
-  try {
-    stats = await lstat(manifestPath);
-  } catch {
-    throw new PilotCaptureCoordinatorError(
-      "RUNTIME_BINDING_MISMATCH",
-      "pilot portable manifest is unavailable",
-    );
-  }
   if (
-    !stats.isFile() ||
-    stats.isSymbolicLink() ||
-    stats.nlink !== 1 ||
-    !Number.isSafeInteger(stats.size) ||
-    stats.size <= 0 ||
-    stats.size > 64 * 1024
+    options.version.sourceState !== "CLEAN" ||
+    options.version.productShellIntegrity === null ||
+    options.version.coreExtensionIntegrity === null
   ) {
     throw new PilotCaptureCoordinatorError(
       "RUNTIME_BINDING_MISMATCH",
-      "pilot portable manifest is not one exact bounded file",
+      "pilot runtime identity is incomplete",
     );
   }
-  let manifest: z.infer<typeof pilotPortableManifestSchema>;
+  const root = resolve(portableRoot);
   try {
-    const text =
-      options.dependencies.readTextFile === undefined
-        ? await readFile(manifestPath, "utf8")
-        : await options.dependencies.readTextFile(manifestPath);
-    manifest = pilotPortableManifestSchema.parse(JSON.parse(text) as unknown);
+    await assertPilotPhysicalDirectory(root);
+    await assertPilotPhysicalDirectory(containedPilotPath(root, ".hpi-update"));
+    await assertPilotPhysicalDirectory(containedPilotPath(root, "versions"));
+    const activeBytes = await readPilotPhysicalFile(
+      containedPilotPath(root, ".hpi-update", "active.json"),
+      PILOT_RUNTIME_IDENTITY_FILE_LIMIT,
+      options.dependencies,
+    );
+    const active = pilotActivePointerSchema.parse(
+      JSON.parse(Buffer.from(activeBytes).toString("utf8")) as unknown,
+    );
+    const versionDirectory = containedPilotPath(root, "versions", active.releaseId);
+    await assertPilotPhysicalDirectory(versionDirectory);
+    const candidateBytes = await readPilotPhysicalFile(
+      containedPilotPath(versionDirectory, ".hpi-candidate.json"),
+      PILOT_RUNTIME_IDENTITY_FILE_LIMIT,
+      options.dependencies,
+    );
+    const candidate = releaseCandidateSchema.parse(
+      JSON.parse(Buffer.from(candidateBytes).toString("utf8")) as unknown,
+    );
+    const artifact = await readPilotPhysicalFile(
+      containedPilotPath(versionDirectory, ".hpi-artifact"),
+      PILOT_RUNTIME_ARTIFACT_LIMIT,
+      options.dependencies,
+    );
+    const artifactFingerprint = portableBundleFingerprint(artifact);
+    const bundle = decodePortableBundle(artifact);
+    const productShell = bundle.files.find((file) => file.path === PILOT_PRODUCT_SHELL_PATH);
+    const coreExtension = bundle.files.find((file) => file.path === PILOT_CORE_EXTENSION_PATH);
+    if (productShell === undefined || coreExtension === undefined) {
+      throw new Error("portable bundle does not contain the running product files");
+    }
+    await verifyPilotVersionDirectory({
+      versionDirectory,
+      files: bundle.files,
+      dependencies: options.dependencies,
+    });
+    const binding = createPilotRuntimeBinding({
+      sourceCommit: bundle.manifest.sourceCommit,
+      artifactFingerprint,
+      enginePackageName: options.version.engine.packageName,
+      engineVersion: options.version.engine.version,
+      providerId: options.configuration.provider.id,
+      modelId,
+      configuredOrigin: options.destination.configuredOrigin,
+      pristineOrigin: options.destination.pristineOrigin,
+      credentialSource: options.auth.source,
+    });
+    if (
+      active.releaseId !== candidate.releaseId ||
+      active.productVersion !== candidate.productVersion ||
+      active.artifactFingerprint !== candidate.artifact.fingerprint ||
+      artifactFingerprint !== candidate.artifact.fingerprint ||
+      artifact.byteLength !== candidate.artifact.byteLength ||
+      bundle.manifest.releaseId !== candidate.releaseId ||
+      bundle.manifest.productVersion !== candidate.productVersion ||
+      bundle.manifest.engineReleaseId !== candidate.engine.releaseId ||
+      bundle.manifest.engineReleaseFingerprint !== candidate.engine.fingerprint ||
+      bundle.manifest.sourceCommit !== options.version.sourceCommit ||
+      candidate.productVersion !== options.version.productVersion ||
+      candidate.engine.piVersion !== options.version.engine.version ||
+      candidate.engine.fingerprint !== binding.engineReleaseFingerprint ||
+      bytesFingerprint(productShell.bytes) !== options.version.productShellIntegrity ||
+      bytesFingerprint(coreExtension.bytes) !== options.version.coreExtensionIntegrity
+    ) {
+      throw new Error("active portable release does not match the running product");
+    }
+    return pilotRuntimeBindingSchema.parse(binding);
   } catch {
     throw new PilotCaptureCoordinatorError(
       "RUNTIME_BINDING_MISMATCH",
-      "pilot portable manifest is invalid",
+      "pilot active portable release is unavailable, invalid, or does not match the running product",
     );
   }
-  const binding = createPilotRuntimeBinding({
-    sourceCommit: options.version.sourceCommit,
-    artifactFingerprint: manifest.artifactFingerprint,
-    enginePackageName: options.version.engine.packageName,
-    engineVersion: options.version.engine.version,
-    providerId: options.configuration.provider.id,
-    modelId,
-    configuredOrigin: options.destination.configuredOrigin,
-    pristineOrigin: options.destination.pristineOrigin,
-    credentialSource: options.auth.source,
-  });
-  if (
-    manifest.sourceCommit !== options.version.sourceCommit ||
-    manifest.productVersion !== options.version.productVersion ||
-    manifest.engineReleaseFingerprint !== binding.engineReleaseFingerprint ||
-    manifest.productShellIntegrity !== options.version.productShellIntegrity ||
-    manifest.coreExtensionIntegrity !== options.version.coreExtensionIntegrity
-  ) {
-    throw new PilotCaptureCoordinatorError(
-      "RUNTIME_BINDING_MISMATCH",
-      "pilot portable manifest does not match the running product",
-    );
-  }
-  return pilotRuntimeBindingSchema.parse(binding);
 }
 
 export function inspectHpiRepository(cwd: string): Promise<HpiRepositoryState> {

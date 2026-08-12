@@ -178,10 +178,14 @@ describe("Task 11 Windows portable release adapter", () => {
       [second.candidate.releaseId, second.artifact],
     ]);
     const mutableState = join(root, "user-state");
+    const portableRoot = join(root, "portable");
+    const retainedRootManifest = '{"schemaVersion":"hpi-windows-portable.v2"}\n';
     await mkdir(mutableState, { recursive: true });
+    await mkdir(portableRoot, { recursive: true });
     await writeFile(join(mutableState, "settings.json"), "before-first\n", "utf8");
+    await writeFile(join(portableRoot, "portable-manifest.json"), retainedRootManifest, "utf8");
     const adapter = new FileWindowsPortableReleaseAdapter({
-      installationRoot: join(root, "portable"),
+      installationRoot: portableRoot,
       mutableStateDirectory: mutableState,
       targetPlatform: "win32-x64",
       healthCheck: () => Promise.resolve({ status: "PASS" }),
@@ -229,6 +233,9 @@ describe("Task 11 Windows portable release adapter", () => {
     await expect(manager.current()).resolves.toMatchObject({
       releaseId: first.candidate.releaseId,
     });
+    await expect(readFile(join(portableRoot, "portable-manifest.json"), "utf8")).resolves.toBe(
+      retainedRootManifest,
+    );
     await expect(manager.history()).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ releaseId: first.candidate.releaseId }),

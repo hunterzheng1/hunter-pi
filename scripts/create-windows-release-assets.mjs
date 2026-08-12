@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
@@ -35,8 +35,6 @@ const portableRoot = oneArtifactChild(
   join(artifactRoot, "hpi-windows-x64-portable"),
 );
 const outputRoot = oneArtifactChild("--output", join(artifactRoot, "hpi-windows-x64-release"));
-if (portableRoot === outputRoot)
-  throw new Error("release output must differ from the portable root");
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("Windows release assets can be assembled only on Windows x64");
 }
@@ -71,6 +69,26 @@ async function releaseFiles(root) {
 const portable = await lstat(portableRoot);
 if (!portable.isDirectory() || portable.isSymbolicLink()) {
   throw new Error("portable root must be one physical directory");
+}
+const canonicalArtifactRoot = await realpath(artifactRoot);
+const canonicalPortableRoot = await realpath(portableRoot);
+const outputParent = await realpath(resolve(outputRoot, ".."));
+let canonicalOutputRoot = join(outputParent, basename(outputRoot));
+try {
+  const existingOutput = await lstat(outputRoot);
+  if (existingOutput.isSymbolicLink()) {
+    throw new Error("release output cannot replace a symbolic link");
+  }
+  canonicalOutputRoot = await realpath(outputRoot);
+} catch (error) {
+  if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+}
+if (
+  canonicalPortableRoot.toLowerCase() === canonicalOutputRoot.toLowerCase() ||
+  canonicalPortableRoot.toLowerCase() === outputRoot.toLowerCase() ||
+  canonicalArtifactRoot.toLowerCase() !== outputParent.toLowerCase()
+) {
+  throw new Error("release output must differ from the portable root");
 }
 const temporaryRoot = await createCanonicalTemporaryDirectory("hunter-pi-release-assets-");
 const stage = join(temporaryRoot, "payload");

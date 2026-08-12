@@ -2,9 +2,15 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
+
+import {
+  FileWindowsPortableReleaseAdapter,
+  createPortableBundle,
+  releaseCandidateSchema,
+} from "@hunter-pi/updater";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const installerPath = join(repositoryRoot, "scripts", "install.ps1");
@@ -70,40 +76,103 @@ async function createReleaseFixture(
   productVersion: string,
 ): Promise<void> {
   const versionDirectory = join(root, "versions", releaseId);
+  const sourceCommit = "a".repeat(40);
+  const engineFingerprint =
+    "sha256:a41dddea11dee5fce40f7f100d99f76fcac88281efc8f067c0f6b57b86fdb27e";
+  const productShellIntegrity = `sha256:${"d".repeat(64)}`;
+  const coreExtensionIntegrity = `sha256:${"e".repeat(64)}`;
   await Promise.all([
     mkdir(versionDirectory, { recursive: true }),
     mkdir(join(root, ".hpi-update"), { recursive: true }),
   ]);
+  const versionOutput = JSON.stringify({
+    product: "Hunter Pi",
+    productVersion,
+    engine: { packageName: "@earendil-works/pi-coding-agent", version: "0.84.1" },
+    sourceCommit,
+    sourceState: "CLEAN",
+    coreExtensionIntegrity,
+    productShellIntegrity,
+    updateChannel: "developer-preview",
+  });
+  const versionCommand = Buffer.from(`@echo off\r\necho ${versionOutput}\r\n`, "utf8");
+  const versionRuntime = Buffer.from("fixture runtime\n", "utf8");
+  const artifactBytes = createPortableBundle({
+    releaseId,
+    productVersion,
+    engineReleaseId: "engine-release_pi-0.84.1",
+    engineReleaseFingerprint: engineFingerprint,
+    sourceCommit,
+    files: [
+      { path: "hpi.cmd", bytes: versionCommand },
+      { path: "node.exe", bytes: versionRuntime },
+    ],
+  });
+  const artifactFingerprint = `sha256:${createHash("sha256").update(artifactBytes).digest("hex")}`;
   const candidate = {
     schemaVersion: "hpi-release-candidate.v1",
     releaseId,
     productVersion,
     channel: "PREVIEW",
-    engine: { piVersion: "0.84.1" },
-    qualification: { status: "NOT_PROVEN" },
+    artifact: {
+      reference: "update.bundle.tgz",
+      fingerprint: artifactFingerprint,
+      byteLength: artifactBytes.byteLength,
+    },
+    engine: {
+      releaseId: "engine-release_pi-0.84.1",
+      fingerprint: engineFingerprint,
+      piVersion: "0.84.1",
+    },
+    qualification: {
+      status: "NOT_PROVEN",
+      verifierFingerprint:
+        "sha256:91015d5db9376b5e86a25538034c76609dcfddee1d7975faf64cca2bcbffe0c6",
+      checks: [
+        {
+          name: "windows-portable-ci",
+          outcome: "NOT_PROVEN",
+          evidenceIds: [],
+          reason: "fixture qualification is intentionally not proven",
+        },
+      ],
+      qualifiedAt: "2026-08-13T00:00:00.000Z",
+    },
+    updatePolicy: { piSelfUpdate: "DISABLED", unsigned: true },
+    licenses: [
+      {
+        name: "Hunter Pi",
+        version: productVersion,
+        license: "MIT",
+        sourceReference: "NOTICE.md",
+      },
+      {
+        name: "@earendil-works/pi-coding-agent",
+        version: "0.84.1",
+        license: "SEE_PACKAGE_NOTICE",
+        sourceReference: "NOTICE.md",
+      },
+    ],
   };
-  const versionOutput = JSON.stringify({
-    product: "Hunter Pi",
-    productVersion,
-    releaseId,
-    engine: { packageName: "@earendil-works/pi-coding-agent", version: "0.84.1" },
-  });
   await Promise.all([
-    writeFile(join(root, "hpi.cmd"), `@echo off\r\necho ${versionOutput}\r\n`, "utf8"),
+    writeFile(join(root, "hpi.cmd"), versionCommand),
     writeFile(join(root, "hpi-launcher.mjs"), "// fixture launcher\n", "utf8"),
-    writeFile(join(root, "node.exe"), "fixture runtime\n", "utf8"),
+    writeFile(join(root, "node.exe"), versionRuntime),
     writeFile(join(root, "LICENSE"), "MIT fixture\n", "utf8"),
     writeFile(join(root, "NOTICE.md"), "fixture notice\n", "utf8"),
     writeFile(join(root, "portable-release-candidate.json"), `${JSON.stringify(candidate)}\n`),
     writeFile(join(versionDirectory, ".hpi-candidate.json"), `${JSON.stringify(candidate)}\n`),
-    writeFile(join(versionDirectory, "hpi.cmd"), `@echo off\r\necho ${versionOutput}\r\n`),
+    writeFile(join(root, "update.bundle.tgz"), artifactBytes),
+    writeFile(join(versionDirectory, ".hpi-artifact"), artifactBytes),
+    writeFile(join(versionDirectory, "hpi.cmd"), versionCommand),
+    writeFile(join(versionDirectory, "node.exe"), versionRuntime),
     writeFile(
       join(root, ".hpi-update", "active.json"),
       `${JSON.stringify({
         schemaVersion: "hpi-portable-active.v1",
         releaseId,
         productVersion,
-        artifactFingerprint: `sha256:${"a".repeat(64)}`,
+        artifactFingerprint,
         activatedAt: "2026-08-13T00:00:00.000Z",
       })}\n`,
     ),
@@ -113,13 +182,24 @@ async function createReleaseFixture(
         schemaVersion: "hpi-windows-portable.v3",
         product: "Hunter Pi",
         platform: "win32-x64",
+        nodeVersion: "24.14.0",
+        sourceCommit,
+        sourceState: "CLEAN",
         updateChannel: "developer-preview",
         installer: "PORTABLE_ZIP",
         signed: false,
         releaseId,
         productVersion,
         engineVersion: "0.84.1",
+        engineReleaseId: "engine-release_pi-0.84.1",
+        engineReleaseFingerprint: engineFingerprint,
+        artifactFingerprint,
+        artifactByteLength: artifactBytes.byteLength,
         versionDirectory: `versions/${releaseId}`,
+        cliPackageFingerprint: `sha256:${"c".repeat(64)}`,
+        productShellIntegrity,
+        coreExtensionIntegrity,
+        nodeRuntimeIntegrity: `sha256:${"f".repeat(64)}`,
       })}\n`,
     ),
   ]);
@@ -235,7 +315,8 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     expect(JSON.parse(probe.stdout.trim())).toMatchObject({
       product: "Hunter Pi",
       productVersion: "0.1.0-dev.1",
-      releaseId: "release_fixture-a",
+      engine: { version: "0.84.1" },
+      sourceState: "CLEAN",
     });
 
     const second = runInstaller([...commonArguments, "-LocalSource", sourceA], {
@@ -249,6 +330,16 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
       pathChanged: false,
     });
 
+    const prefixConflictRoot = join(installRoot, "bin-old");
+    await mkdir(prefixConflictRoot, { recursive: true });
+    await writeFile(join(prefixConflictRoot, "hpi.cmd"), "@echo sibling conflict\r\n", "utf8");
+    const siblingConflict = runInstaller([...commonArguments, "-LocalSource", sourceA], {
+      ...baseEnvironment,
+      PATH: `${prefixConflictRoot};${stableBin};${baseEnvironment.PATH}`,
+    });
+    expect(siblingConflict.status, siblingConflict.stderr).toBe(0);
+    expect(receiptFrom(siblingConflict.stdout)).toMatchObject({ conflictDetected: true });
+
     const unsafeOverwrite = runInstaller([...commonArguments, "-LocalSource", sourceB], {
       ...baseEnvironment,
       PATH: `${stableBin};${baseEnvironment.PATH}`,
@@ -261,7 +352,117 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     await expect(
       readFile(join(installRoot, "versions", "release_fixture-b", ".hpi-candidate.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const redirectedBinTarget = join(root, "redirected-bin-target");
+    await Promise.all([
+      rm(stableBin, { force: true, recursive: true }),
+      mkdir(redirectedBinTarget, { recursive: true }),
+    ]);
+    const junction = spawnSync(
+      "cmd.exe",
+      ["/d", "/c", "mklink", "/J", stableBin, redirectedBinTarget],
+      { encoding: "utf8", windowsHide: true },
+    );
+    expect(junction.status, junction.stderr).toBe(0);
+    const redirected = runInstaller([...commonArguments, "-LocalSource", sourceA], baseEnvironment);
+    expect(redirected.status).not.toBe(0);
+    expect(`${redirected.stdout}\n${redirected.stderr}`).toMatch(/physical|redirect/iu);
+    await expect(readFile(join(redirectedBinTarget, "hpi.cmd"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   }, 60_000);
+
+  it("routes installer replay through the update manager after activation and accepts it after restore", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-replay-"));
+    cleanupRoots.push(root);
+    const sourceInitial = join(root, "source-initial");
+    const sourceUpdate = join(root, "source-update");
+    const installRoot = join(root, "install");
+    await Promise.all([
+      createReleaseFixture(sourceInitial, "release_fixture-replay-initial", "0.1.0-dev.1"),
+      createReleaseFixture(sourceUpdate, "release_fixture-replay-update", "0.1.0-dev.2"),
+    ]);
+    const commonArguments = [
+      "-Source",
+      "LocalDirectory",
+      "-LocalSource",
+      sourceInitial,
+      "-InstallRoot",
+      installRoot,
+      "-PathMode",
+      "Process",
+      "-Json",
+    ] as const;
+    const environment = { ...process.env, LOCALAPPDATA: join(root, "local-app-data") };
+    const initialInstall = runInstaller(commonArguments, environment);
+    expect(initialInstall.status, initialInstall.stderr).toBe(0);
+
+    const initialCandidate = releaseCandidateSchema.parse(
+      JSON.parse(
+        await readFile(join(sourceInitial, "portable-release-candidate.json"), "utf8"),
+      ) as unknown,
+    );
+    const updateBase = releaseCandidateSchema.parse(
+      JSON.parse(
+        await readFile(join(sourceUpdate, "portable-release-candidate.json"), "utf8"),
+      ) as unknown,
+    );
+    const futureEngineFingerprint = `sha256:${"b".repeat(64)}` as const;
+    const updateArtifact = createPortableBundle({
+      releaseId: updateBase.releaseId,
+      productVersion: updateBase.productVersion,
+      engineReleaseId: "engine-release_pi-0.85.0",
+      engineReleaseFingerprint: futureEngineFingerprint,
+      sourceCommit: "a".repeat(40),
+      files: [
+        { path: "hpi.cmd", bytes: Buffer.from("@echo off\r\necho future release\r\n", "utf8") },
+        { path: "node.exe", bytes: Buffer.from("future runtime\n", "utf8") },
+      ],
+    });
+    const updateCandidate = releaseCandidateSchema.parse({
+      ...updateBase,
+      channel: "STABLE",
+      artifact: {
+        ...updateBase.artifact,
+        fingerprint: `sha256:${createHash("sha256").update(updateArtifact).digest("hex")}`,
+        byteLength: updateArtifact.byteLength,
+      },
+      engine: {
+        releaseId: "engine-release_pi-0.85.0",
+        fingerprint: futureEngineFingerprint,
+        piVersion: "0.85.0",
+      },
+      qualification: {
+        ...updateBase.qualification,
+        verifierFingerprint: `sha256:${"c".repeat(64)}`,
+      },
+      updatePolicy: { piSelfUpdate: "ENABLED", unsigned: false },
+      licenses: updateBase.licenses.map((license) =>
+        license.name === "@earendil-works/pi-coding-agent"
+          ? { ...license, version: "0.85.0" }
+          : license,
+      ),
+    });
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: installRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const stagedUpdate = await adapter.stage(updateCandidate, updateArtifact);
+    await adapter.activate(stagedUpdate);
+
+    const afterApply = runInstaller(commonArguments, environment);
+    expect(afterApply.status).not.toBe(0);
+    expect(`${afterApply.stdout}\n${afterApply.stderr}`).toMatch(/hpi update apply/iu);
+
+    await adapter.restore({ releaseId: initialCandidate.releaseId });
+    const afterRollback = runInstaller(commonArguments, environment);
+    expect(afterRollback.status, afterRollback.stderr).toBe(0);
+    expect(receiptFrom(afterRollback.stdout)).toMatchObject({
+      status: "ALREADY_INSTALLED",
+      releaseId: "release_fixture-replay-initial",
+    });
+  }, 120_000);
 
   it("builds a ZIP whose embedded and standalone installers are identical and locally usable", async () => {
     const root = await mkdtemp(join(tmpdir(), "hunter-pi-release-assets-"));
@@ -411,6 +612,302 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
 
+  it("rejects incomplete or wrong-Pi release identities before installation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-identity-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    await createReleaseFixture(source, "release_fixture-identity", "0.1.0-dev.1");
+    const rootCandidatePath = join(source, "portable-release-candidate.json");
+    const versionCandidatePath = join(
+      source,
+      "versions",
+      "release_fixture-identity",
+      ".hpi-candidate.json",
+    );
+    const candidate = JSON.parse(await readFile(rootCandidatePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const invalidCandidate = { ...candidate, undeclaredField: true };
+    await Promise.all([
+      writeFile(rootCandidatePath, JSON.stringify(invalidCandidate), "utf8"),
+      writeFile(versionCandidatePath, JSON.stringify(invalidCandidate), "utf8"),
+    ]);
+    await writeReleaseFileManifest(source);
+
+    const incomplete = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(incomplete.status).not.toBe(0);
+    expect(`${incomplete.stdout}\n${incomplete.stderr}`).toMatch(/schema|properties|candidate/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await createReleaseFixture(source, "release_fixture-identity", "0.1.0-dev.1");
+    const portablePath = join(source, "portable-manifest.json");
+    const wrongPiPortable = JSON.parse(await readFile(portablePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(portablePath, JSON.stringify({ ...wrongPiPortable, engineVersion: "0.83.0" }));
+    await writeReleaseFileManifest(source);
+    const wrongPi = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(wrongPi.status).not.toBe(0);
+    expect(`${wrongPi.stdout}\n${wrongPi.stderr}`).toMatch(/Pi|Engine|identity/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 60_000);
+
+  it("rejects candidate property casing and scalar values where JSON arrays are required", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-strict-json-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    const releaseId = "release_fixture-strict-json";
+    const candidatePaths = [
+      join(source, "portable-release-candidate.json"),
+      join(source, "versions", releaseId, ".hpi-candidate.json"),
+    ];
+    await createReleaseFixture(source, releaseId, "0.1.0-dev.1");
+    const candidate = JSON.parse(await readFile(candidatePaths[0] ?? "", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const { schemaVersion, ...candidateWithoutSchemaVersion } = candidate;
+    const wrongCase = { ...candidateWithoutSchemaVersion, SchemaVersion: schemaVersion };
+    await Promise.all(candidatePaths.map((path) => writeFile(path, JSON.stringify(wrongCase))));
+    await writeReleaseFileManifest(source);
+    const caseResult = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(caseResult.status).not.toBe(0);
+    expect(`${caseResult.stdout}\n${caseResult.stderr}`).toMatch(/schema|property/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await createReleaseFixture(source, releaseId, "0.1.0-dev.1");
+    const scalarCandidate = JSON.parse(await readFile(candidatePaths[0] ?? "", "utf8")) as {
+      qualification: { checks: unknown[] };
+    };
+    scalarCandidate.qualification.checks = scalarCandidate.qualification.checks[0] as never;
+    await Promise.all(
+      candidatePaths.map((path) => writeFile(path, JSON.stringify(scalarCandidate))),
+    );
+    await writeReleaseFileManifest(source);
+    const scalarResult = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(scalarResult.status).not.toBe(0);
+    expect(`${scalarResult.stdout}\n${scalarResult.stderr}`).toMatch(/JSON array/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await createReleaseFixture(source, releaseId, "0.1.0-dev.1");
+    const enumCandidate = JSON.parse(await readFile(candidatePaths[0] ?? "", "utf8")) as {
+      qualification: {
+        status: string;
+        checks: { outcome: string; evidenceIds: string[] }[];
+      };
+    };
+    enumCandidate.qualification.status = "pass";
+    const firstCheck = enumCandidate.qualification.checks[0];
+    if (firstCheck === undefined) throw new Error("strict candidate fixture lacks a check");
+    enumCandidate.qualification.checks[0] = {
+      ...firstCheck,
+      outcome: "pass",
+      evidenceIds: ["not-an-evidence-id"],
+    };
+    await Promise.all(candidatePaths.map((path) => writeFile(path, JSON.stringify(enumCandidate))));
+    await writeReleaseFileManifest(source);
+    const enumResult = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(enumResult.status).not.toBe(0);
+    expect(`${enumResult.stdout}\n${enumResult.stderr}`).toMatch(/status|outcome|Evidence/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const invalidLicenses = [
+      { name: "Third Party", version: "garbage", license: "MIT", sourceReference: "NOTICE.md" },
+      { name: " padded ", version: "1.0.0", license: "MIT", sourceReference: "NOTICE.md" },
+      {
+        name: "Third Party",
+        version: "1.0.0",
+        license: "x".repeat(4_097),
+        sourceReference: "NOTICE.md",
+      },
+    ];
+    for (const [index, invalidLicense] of invalidLicenses.entries()) {
+      await createReleaseFixture(source, releaseId, "0.1.0-dev.1");
+      const licenseCandidate = JSON.parse(await readFile(candidatePaths[0] ?? "", "utf8")) as {
+        licenses: typeof invalidLicenses;
+      };
+      licenseCandidate.licenses.push(invalidLicense);
+      await Promise.all(
+        candidatePaths.map((path) => writeFile(path, JSON.stringify(licenseCandidate))),
+      );
+      await writeReleaseFileManifest(source);
+      const licenseResult = runInstaller(
+        [
+          "-Source",
+          "LocalDirectory",
+          "-LocalSource",
+          source,
+          "-InstallRoot",
+          `${installRoot}-${String(index)}`,
+          "-PathMode",
+          "Process",
+          "-Json",
+        ],
+        { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+      );
+      expect(licenseResult.status).not.toBe(0);
+      expect(`${licenseResult.stdout}\n${licenseResult.stderr}`).toMatch(/license|version/iu);
+    }
+  }, 120_000);
+
+  it("rolls back a newly published installation even when user PATH writes fail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-path-failure-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    await createReleaseFixture(source, "release_fixture-path-failure", "0.1.0-dev.1");
+    const result = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "User",
+        "-Json",
+      ],
+      {
+        ...process.env,
+        HUNTER_PI_INSTALL_TEST_FAIL_USER_PATH_WRITE: "1",
+        LOCALAPPDATA: join(root, "local-app-data"),
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/PATH write failure/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 60_000);
+
+  it("directs an existing legacy portable install to the update manager", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-legacy-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    await Promise.all([
+      createReleaseFixture(source, "release_fixture-current", "0.1.0-dev.1"),
+      createReleaseFixture(installRoot, "release_fixture-legacy", "0.1.0-dev.0"),
+    ]);
+    await writeFile(
+      join(installRoot, "portable-manifest.json"),
+      JSON.stringify({ schemaVersion: "hpi-windows-portable.v2" }),
+      "utf8",
+    );
+    const result = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/hpi update apply/iu);
+  }, 60_000);
+
+  it("does not publish an installation whose staged command fails its health probe", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-health-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    await createReleaseFixture(source, "release_fixture-health", "0.1.0-dev.1");
+    await writeFile(join(source, "hpi.cmd"), "@echo off\r\nexit /b 9\r\n", "utf8");
+    await writeReleaseFileManifest(source);
+
+    const result = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/version probe|health/iu);
+    await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 60_000);
+
   it("builds a release manifest for a portable tree larger than the Windows handle limit", async () => {
     const suffix = randomUUID().replaceAll("-", "");
     const portableRoot = join(repositoryRoot, ".artifacts", `installer-large-${suffix}`);
@@ -422,11 +919,7 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     for (let start = 0; start < 8_300; start += 100) {
       await Promise.all(
         Array.from({ length: Math.min(100, 8_300 - start) }, (_, offset) =>
-          writeFile(
-            join(bulkRoot, `entry-${String(start + offset)}.txt`),
-            "bounded\n",
-            "utf8",
-          ),
+          writeFile(join(bulkRoot, `entry-${String(start + offset)}.txt`), "bounded\n", "utf8"),
         ),
       );
     }
@@ -444,4 +937,61 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     );
     expect(build.status, build.stderr).toBe(0);
   }, 120_000);
+
+  it("rejects a case-aliased output without deleting the portable input", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const directoryName = `Installer-Case-${suffix}`;
+    const portableRoot = join(repositoryRoot, ".artifacts", directoryName);
+    const aliasedOutput = join(repositoryRoot, ".artifacts", directoryName.toLowerCase());
+    cleanupRoots.push(portableRoot);
+    await createReleaseFixture(portableRoot, "release_fixture-case", "0.1.0-dev.1");
+
+    const build = spawnSync(
+      process.execPath,
+      [
+        join(repositoryRoot, "scripts", "create-windows-release-assets.mjs"),
+        "--portable-root",
+        portableRoot,
+        "--output",
+        aliasedOutput,
+      ],
+      { cwd: repositoryRoot, encoding: "utf8", windowsHide: true },
+    );
+    expect(build.status).not.toBe(0);
+    expect(build.stderr).toMatch(/output must differ/iu);
+    await expect(readFile(join(portableRoot, "portable-manifest.json"), "utf8")).resolves.toContain(
+      "hpi-windows-portable.v3",
+    );
+
+    const shortPathResult = spawnSync(
+      "cmd.exe",
+      ["/d", "/c", "for %I in (%HPI_TEST_LONG_PATH%) do @echo %~sI"],
+      {
+        encoding: "utf8",
+        env: { ...process.env, HPI_TEST_LONG_PATH: portableRoot },
+        windowsHide: true,
+      },
+    );
+    expect(shortPathResult.status, shortPathResult.stderr).toBe(0);
+    const shortPath = shortPathResult.stdout.trim();
+    if (shortPath.length > 0 && shortPath.toLowerCase() !== portableRoot.toLowerCase()) {
+      const shortAlias = join(repositoryRoot, ".artifacts", basename(shortPath));
+      const shortAliasBuild = spawnSync(
+        process.execPath,
+        [
+          join(repositoryRoot, "scripts", "create-windows-release-assets.mjs"),
+          "--portable-root",
+          portableRoot,
+          "--output",
+          shortAlias,
+        ],
+        { cwd: repositoryRoot, encoding: "utf8", windowsHide: true },
+      );
+      expect(shortAliasBuild.status).not.toBe(0);
+      expect(shortAliasBuild.stderr).toMatch(/output must differ/iu);
+      await expect(
+        readFile(join(portableRoot, "portable-manifest.json"), "utf8"),
+      ).resolves.toContain("hpi-windows-portable.v3");
+    }
+  });
 });

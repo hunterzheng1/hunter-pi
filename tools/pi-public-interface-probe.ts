@@ -64,7 +64,7 @@ export const createPiProbeFailureEvidence = (
   stage: PiProbeFailureStage = "REPORT_ASSEMBLY",
 ): PiPublicInterfaceProbeFailureReport =>
   piPublicInterfaceProbeFailureReportSchema.parse({
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     kind: "hunter-pi/pi-public-interface-probe-failure",
     observedAt,
     status: "NOT_PROVEN",

@@ -11,6 +11,7 @@ import { capabilityReceiptSchema } from "@hunter-pi/engine-contracts";
 
 import type { PiProbeFixture } from "./fixture.js";
 import { LfOnlyNdjsonDecoder } from "./ndjson.js";
+import { accountPiProviderUsage, hasExactPiAgentCompletion } from "./provider-usage.js";
 import {
   PI_CANDIDATE,
   PI_PROBE_BUILT_EXECUTION_FILES,
@@ -122,17 +123,74 @@ function requireProbeFact(condition: boolean, message: string): true {
   return true;
 }
 
-function inspectDeltaOnlyMessageUpdates(records: readonly Record<string, unknown>[]) {
+function completedAgentSegments(
+  records: readonly Record<string, unknown>[],
+): readonly (readonly Record<string, unknown>[])[] {
+  const segments: Record<string, unknown>[][] = [];
+  let precedingTerminalIndex = -1;
+  for (const [index, record] of records.entries()) {
+    if (record["type"] !== "agent_settled") continue;
+    let start = -1;
+    for (let candidate = index - 1; candidate > precedingTerminalIndex; candidate -= 1) {
+      if (records[candidate]?.["type"] === "agent_start") {
+        start = candidate;
+        break;
+      }
+    }
+    if (start >= 0) segments.push(records.slice(start, index + 1));
+    precedingTerminalIndex = index;
+  }
+  return segments;
+}
+
+export function inspectPiMessageUpdateContract(records: readonly Record<string, unknown>[]) {
   const updates = records.filter((record) => record["type"] === "message_update");
   const assistantEvents = updates.map((record) => record["assistantMessageEvent"]);
+  const typedAssistantEvents = assistantEvents.filter(
+    (event): event is Record<string, unknown> =>
+      typeof event === "object" && event !== null && !Array.isArray(event),
+  );
+  const completedSegment = completedAgentSegments(records).find((segment) => {
+    const eventTypes = segment.map((record) =>
+      typeof record["type"] === "string" ? record["type"] : "",
+    );
+    return (
+      hasExactPiAgentCompletion(eventTypes) &&
+      accountPiProviderUsage(segment, "TRANSPORT_RETRIES_DISABLED").status === "PASS"
+    );
+  });
+  const productionCompletionAccepted = requireProbeFact(
+    completedSegment !== undefined &&
+      hasExactPiAgentCompletion(
+        completedSegment.map((record) =>
+          typeof record["type"] === "string" ? record["type"] : "",
+        ),
+      ),
+    "Pi event stream was not accepted by the production completion predicate",
+  );
+  requireProbeFact(
+    completedSegment !== undefined &&
+      accountPiProviderUsage(completedSegment, "TRANSPORT_RETRIES_DISABLED").status === "PASS",
+    "Pi event stream was not accepted by production Provider usage accounting",
+  );
   return {
     mode: "DELTA_ONLY" as const,
     assistantMessageEventObserved: requireProbeFact(
-      assistantEvents.length > 0 &&
-        assistantEvents.every(
-          (event) => typeof event === "object" && event !== null && !Array.isArray(event),
-        ),
+      assistantEvents.length > 0 && typedAssistantEvents.length === assistantEvents.length,
       "Pi message_update did not expose assistantMessageEvent deltas",
+    ),
+    typedAssistantDeltaObserved: requireProbeFact(
+      typedAssistantEvents.every(
+        (event) => typeof event["type"] === "string" && event["type"].trim().length > 0,
+      ) &&
+        typedAssistantEvents.some(
+          (event) =>
+            typeof event["type"] === "string" &&
+            event["type"].endsWith("_delta") &&
+            typeof event["delta"] === "string" &&
+            event["delta"].length > 0,
+        ),
+      "Pi message_update did not expose a typed assistantMessageEvent delta",
     ),
     cumulativeMessageAbsent: requireProbeFact(
       updates.every((record) => !Object.prototype.hasOwnProperty.call(record, "message")),
@@ -148,15 +206,17 @@ function inspectDeltaOnlyMessageUpdates(records: readonly Record<string, unknown
       "Pi message_update unexpectedly exposed assistantMessageEvent.partial",
     ),
     authoritativeMessageEndObserved: requireProbeFact(
-      records.some(
+      completedSegment?.some(
         (record) =>
           record["type"] === "message_end" &&
           typeof record["message"] === "object" &&
           record["message"] !== null &&
           Reflect.get(record["message"], "role") === "assistant",
-      ),
+      ) === true,
       "Pi did not expose an authoritative assistant message_end",
     ),
+    productionCompletionAccepted,
+    productionUsageAccounting: "PASS" as const,
   };
 }
 
@@ -490,7 +550,7 @@ async function runJsonAndExtensionProbe(
       framing: "NDJSON",
       eventTypes,
       parsedLineCount: records.length,
-      messageUpdateContract: inspectDeltaOnlyMessageUpdates(records),
+      messageUpdateContract: inspectPiMessageUpdateContract(records),
     },
   };
 }
@@ -692,7 +752,7 @@ async function runRpcCancellationProbe(
     concurrentRequestIds: ["state-before-a", "state-before-b"],
     requestScopedCancellation: false,
     correlatedResponseIds: responseIds,
-    messageUpdateContract: inspectDeltaOnlyMessageUpdates(result.records),
+    messageUpdateContract: inspectPiMessageUpdateContract(result.records),
     promptAccepted:
       streamPrompt !== undefined &&
       isSuccessfulRpcResponse(streamPrompt, "prompt") &&
@@ -828,7 +888,7 @@ export async function runPiPublicInterfaceProbe(
     });
 
     return piPublicInterfaceProbeReportSchema.parse({
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       kind: "hunter-pi/pi-public-interface-probe",
       observedAt,
       candidate,

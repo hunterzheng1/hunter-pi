@@ -11,11 +11,13 @@ import {
   createPiProbeFixture,
   derivePiEngineCapabilityResults,
   piPublicInterfaceSurfacesSchema,
+  piPublicInterfaceProbeReportReaderSchema,
   piPublicInterfaceProbeReportSchema,
   runPiPublicInterfaceProbe,
   type PiProbeFixture,
   type PiPublicInterfaceProbeReport,
 } from "@hunter-pi/pi-host";
+import { inspectPiMessageUpdateContract } from "../packages/pi-host/src/probe.js";
 import { comparePiProbeEvidence } from "../tools/compare-pi-probe-evidence.js";
 
 const coreExtensionPath = fileURLToPath(
@@ -49,6 +51,7 @@ describe("fixed Pi public-interface probe", () => {
     const completedReport = report;
 
     expect(piPublicInterfaceProbeReportSchema.parse(completedReport)).toEqual(completedReport);
+    expect(completedReport.schemaVersion).toBe("2.0.0");
     expect(completedReport.candidate).toMatchObject({
       packageName: "@earendil-works/pi-coding-agent",
       version: "0.84.1",
@@ -64,12 +67,16 @@ describe("fixed Pi public-interface probe", () => {
     expect(completedReport.implementation.execution.mode).toBe("SOURCE_TYPESCRIPT");
     expect(completedReport.implementation.execution.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
     for (const sourceFile of [
+      "packages/pi-host/src/provider-usage.ts",
       "tsconfig.base.json",
       "tsconfig.build.json",
       "tools/tsconfig.json",
     ] as const) {
       expect(completedReport.implementation.sourceFiles).toContain(sourceFile);
     }
+    expect(completedReport.implementation.execution.files).toContain(
+      "packages/pi-host/src/provider-usage.ts",
+    );
     expect(completedReport.environment).toMatchObject({
       configurationIsolation: "ISOLATED",
       fixtureKind: "TEMPORARY_GIT",
@@ -106,6 +113,9 @@ describe("fixed Pi public-interface probe", () => {
         cumulativeMessageAbsent: true,
         assistantPartialAbsent: true,
         authoritativeMessageEndObserved: true,
+        productionCompletionAccepted: true,
+        productionUsageAccounting: "PASS",
+        typedAssistantDeltaObserved: true,
       },
     });
     expect(completedReport.surfaces.json.eventTypes).toEqual(
@@ -126,6 +136,9 @@ describe("fixed Pi public-interface probe", () => {
         cumulativeMessageAbsent: true,
         assistantPartialAbsent: true,
         authoritativeMessageEndObserved: true,
+        productionCompletionAccepted: true,
+        productionUsageAccounting: "PASS",
+        typedAssistantDeltaObserved: true,
       },
       cancellationScope: "SINGLE_IN_FLIGHT_AGENT_OPERATION",
       correlationById: true,
@@ -192,6 +205,54 @@ describe("fixed Pi public-interface probe", () => {
 
     const status = await readFile(`${fixture.repository}/.git/HEAD`, "utf8");
     expect(status).toContain("refs/heads/");
+  });
+
+  it("retains an explicit strict reader for the immutable Pi 0.83 v1 Evidence", async () => {
+    const historical = JSON.parse(
+      await readFile(
+        fileURLToPath(
+          new URL("../docs/validation/evidence/pi/windows-node24.json", import.meta.url),
+        ),
+        "utf8",
+      ),
+    ) as unknown;
+
+    expect(piPublicInterfaceProbeReportSchema.safeParse(historical).success).toBe(false);
+    expect(piPublicInterfaceProbeReportReaderSchema.parse(historical)).toMatchObject({
+      schemaVersion: "1.0.0",
+      candidate: { version: "0.83.0" },
+    });
+    expect(() =>
+      piPublicInterfaceProbeReportReaderSchema.parse({
+        ...(historical as Record<string, unknown>),
+        unexpectedCurrentField: true,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an untyped assistantMessageEvent before claiming the delta contract", () => {
+    expect(() =>
+      inspectPiMessageUpdateContract([
+        { type: "agent_start" },
+        { type: "message_update", assistantMessageEvent: {} },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          },
+        },
+        { type: "agent_end" },
+        { type: "agent_settled" },
+      ]),
+    ).toThrow(/typed assistantMessageEvent delta/u);
   });
 
   it("rejects a capability claim that is not derived from the matching surface receipt", () => {

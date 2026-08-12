@@ -44,6 +44,7 @@ describe("Pi public-interface probe CLI", () => {
 
     expect(piPublicInterfaceProbeFailureReportSchema.parse(receipt)).toEqual(receipt);
     expect(receipt).toMatchObject({
+      schemaVersion: "2.0.0",
       kind: "hunter-pi/pi-public-interface-probe-failure",
       status: "NOT_PROVEN",
       failure: { classification: "NOT_PROVEN", code: "PROBE_DID_NOT_COMPLETE", stage: "RPC" },

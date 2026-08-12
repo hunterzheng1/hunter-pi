@@ -43,7 +43,7 @@ Qualification states:
 
 ### Current 0.84.1 candidate
 
-The dated [0.84.1 assessment](research/2026-08-13-pi-0.84.1-upgrade-assessment.md) binds npm/Git identity `@earendil-works/pi-coding-agent@0.84.1` / `53fa77ccd8a279eb87e92294ef3687b03ff80112`. The provider-independent probe explicitly verifies the v0.84 delta-only JSON/RPC `message_update`: records carry `assistantMessageEvent`, omit cumulative `message` and `assistantMessageEvent.partial`, and retain final `message_end.message` as authoritative. Hunter Pi's Provider accounting reads only final assistant `message_end` records, so it does not reconstruct usage from streaming deltas.
+The dated [0.84.1 assessment](research/2026-08-13-pi-0.84.1-upgrade-assessment.md) binds npm/Git identity `@earendil-works/pi-coding-agent@0.84.1` / `53fa77ccd8a279eb87e92294ef3687b03ff80112`. The provider-independent probe explicitly verifies the v0.84 delta-only JSON/RPC `message_update`: records carry typed `assistantMessageEvent` deltas, omit cumulative `message` and `assistantMessageEvent.partial`, and retain final `message_end.message` as authoritative. The same completed segment must pass Hunter Pi's production completion predicate and final-`message_end` Provider-usage accounting. Current observations use the strict v2 probe receipt; a separate strict v1 reader preserves the immutable Pi 0.83 Evidence without treating it as current acceptance.
 
 Local Windows Extension, JSON, RPC, and SDK checks pass. Exact merged-head Windows/Ubuntu identity, published Windows assets, and any new real-use acceptance remain bound to the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md); until those facts exist they remain `PENDING` or `NOT_PROVEN`.
 

@@ -109,7 +109,9 @@ export {
   piProbeImplementationReceiptSchema,
   piProbeStatusSchema,
   piPublicInterfaceProbeFailureReportSchema,
+  piPublicInterfaceProbeReportReaderSchema,
   piPublicInterfaceProbeReportSchema,
+  piPublicInterfaceProbeReportV1Schema,
   piPublicInterfaceSurfacesSchema,
   type PiCandidateReceipt,
   type PiProbeFailureStage,
@@ -117,6 +119,8 @@ export {
   type PiProbeStatus,
   type PiPublicInterfaceProbeFailureReport,
   type PiPublicInterfaceProbeReport,
+  type PiPublicInterfaceProbeReportReader,
+  type PiPublicInterfaceProbeReportV1,
   type PiPublicInterfaceSurfaces,
 } from "./schemas.js";
 export {

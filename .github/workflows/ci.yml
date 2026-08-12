@@ -75,7 +75,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.mode == 'full'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -243,14 +243,15 @@ jobs:
         run: |
           $installRoot = Join-Path $env:RUNNER_TEMP ("HunterPi-" + [guid]::NewGuid().ToString("N"))
           $env:HUNTER_PI_HOME = Join-Path $env:RUNNER_TEMP ("HunterPiHome-" + [guid]::NewGuid().ToString("N"))
+          $originalUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
           try {
-            $output = & .artifacts/hpi-windows-x64-release/install.ps1 `
+            $output = @(& .artifacts/hpi-windows-x64-release/install.ps1 `
               -Source LocalArchive `
               -ArchivePath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip `
               -ChecksumPath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip.sha256 `
               -InstallRoot $installRoot `
-              -PathMode Process `
-              -Json
+              -PathMode User `
+              -Json)
             if ($LASTEXITCODE -ne 0) { throw "installer returned a nonzero status" }
             $receipt = $output[-1] | ConvertFrom-Json
             if ($receipt.status -ne "INSTALLED" -or
@@ -259,13 +260,40 @@ jobs:
                 $receipt.providerRequestPerformed) {
               throw "installer receipt did not prove the isolated install"
             }
-            & (Join-Path $installRoot "bin/hpi.cmd") version --json
-            if ($LASTEXITCODE -ne 0) { throw "installed hpi version probe failed" }
-            & (Join-Path $installRoot "bin/hpi.cmd") update status --json
-            if ($LASTEXITCODE -ne 0) { throw "installed hpi update status probe failed" }
+            $stableBin = Join-Path $installRoot "bin"
+            $persistedUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            $stableMatches = @($persistedUserPath.Split([IO.Path]::PathSeparator) | Where-Object {
+              [IO.Path]::GetFullPath($_.Trim().Trim('"')).TrimEnd("\") -eq $stableBin.TrimEnd("\")
+            })
+            if ($stableMatches.Count -ne 1 -or
+                [IO.Path]::GetFullPath($persistedUserPath.Split([IO.Path]::PathSeparator)[0]) -ne $stableBin) {
+              throw "installer did not persist exactly one leading user PATH entry"
+            }
+            $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            $env:Path = @($persistedUserPath, $machinePath) -join [IO.Path]::PathSeparator
+            & hpi version --json
+            if ($LASTEXITCODE -ne 0) { throw "new-terminal hpi version probe failed" }
+            & hpi update status --json
+            if ($LASTEXITCODE -ne 0) { throw "new-terminal hpi update status probe failed" }
+            $repeatOutput = @(& .artifacts/hpi-windows-x64-release/install.ps1 `
+              -Source LocalArchive `
+              -ArchivePath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip `
+              -ChecksumPath .artifacts/hpi-windows-x64-release/hpi-windows-x64.zip.sha256 `
+              -InstallRoot $installRoot `
+              -PathMode User `
+              -Json)
+            if ($LASTEXITCODE -ne 0) { throw "repeated installer returned a nonzero status" }
+            $repeatReceipt = $repeatOutput[-1] | ConvertFrom-Json
+            if ($repeatReceipt.status -ne "ALREADY_INSTALLED" -or $repeatReceipt.pathChanged) {
+              throw "repeated user PATH installation was not idempotent"
+            }
           } finally {
+            [Environment]::SetEnvironmentVariable("Path", $originalUserPath, "User")
             if (Test-Path -LiteralPath $installRoot) {
               Remove-Item -LiteralPath $installRoot -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $env:HUNTER_PI_HOME) {
+              Remove-Item -LiteralPath $env:HUNTER_PI_HOME -Recurse -Force
             }
           }
 

@@ -39,6 +39,7 @@ import {
   type Task6PiProcessBoundary,
   type Task6PiProcessResult,
 } from "@hunter-pi/pi-host";
+import { createPortableBundle } from "@hunter-pi/updater";
 import { fixturePiProviderUsage } from "./support/pi-provider-usage-fixture.js";
 import { completePilotPlanInput } from "./support/task12-plan-fixture.js";
 import { createTemporaryTestDirectory } from "./support/temporary-test-directory.js";
@@ -47,8 +48,41 @@ import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 const cleanupRoots: string[] = [];
 const coreSource = "export default () => {};\n";
 const coreIntegrity = `sha256:${createHash("sha256").update(coreSource).digest("hex")}`;
-const pilotArtifactFingerprint = `sha256:${"8".repeat(64)}`;
 const pilotSourceCommit = "d".repeat(40);
+const productShellSource = "console.log('fixture hpi');\n";
+const nodeRuntimeSource = "fixture node runtime\n";
+const piEngineSource = "fixture Pi Engine package\n";
+const productShellIntegrity = `sha256:${createHash("sha256")
+  .update(productShellSource)
+  .digest("hex")}`;
+const pilotReleaseId = "release_hunter-pi-fixture-dev1";
+const pilotEngineReleaseFingerprint =
+  "sha256:a41dddea11dee5fce40f7f100d99f76fcac88281efc8f067c0f6b57b86fdb27e";
+const pilotArtifact = createPortableBundle({
+  releaseId: pilotReleaseId,
+  productVersion: "0.1.0-dev.1",
+  engineReleaseId: "engine-release_pi-0.84.1",
+  engineReleaseFingerprint: pilotEngineReleaseFingerprint,
+  sourceCommit: pilotSourceCommit,
+  files: [
+    {
+      path: "node_modules/@hunter-pi/cli/dist/hpi.js",
+      bytes: Buffer.from(productShellSource, "utf8"),
+    },
+    {
+      path: "node_modules/@hunter-pi/cli/dist/core-extension.js",
+      bytes: Buffer.from(coreSource, "utf8"),
+    },
+    {
+      path: "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+      bytes: Buffer.from(piEngineSource, "utf8"),
+    },
+    { path: "node.exe", bytes: Buffer.from(nodeRuntimeSource, "utf8") },
+  ],
+});
+const pilotArtifactFingerprint = `sha256:${createHash("sha256")
+  .update(pilotArtifact)
+  .digest("hex")}`;
 
 function pilotRuntimeBindingForFixture() {
   return createPilotRuntimeBinding({
@@ -221,41 +255,100 @@ async function createCliFixture(): Promise<{
         sourceCommit,
         sourceState: "CLEAN" as const,
         coreExtensionIntegrity: coreIntegrity,
-        productShellIntegrity: `sha256:${"e".repeat(64)}`,
+        productShellIntegrity,
         updateChannel: "developer-preview" as const,
       }),
     readTextFile: (path) => readFile(path, "utf8"),
+    readBinaryFile: (path) => readFile(path),
   };
-  const runtimeBinding = pilotRuntimeBindingForFixture();
+  const versionDirectory = join(root, "versions", pilotReleaseId);
+  const versionCliDirectory = join(versionDirectory, "node_modules", "@hunter-pi", "cli", "dist");
+  const versionPiDirectory = join(
+    versionDirectory,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+  );
+  await mkdir(versionCliDirectory, { recursive: true });
+  await mkdir(versionPiDirectory, { recursive: true });
+  await mkdir(join(root, ".hpi-update"), { recursive: true });
+  const candidate = {
+    schemaVersion: "hpi-release-candidate.v1",
+    releaseId: pilotReleaseId,
+    productVersion: "0.1.0-dev.1",
+    channel: "PREVIEW",
+    artifact: {
+      reference: "update.bundle.tgz",
+      fingerprint: pilotArtifactFingerprint,
+      byteLength: pilotArtifact.byteLength,
+    },
+    engine: {
+      releaseId: "engine-release_pi-0.84.1",
+      fingerprint: pilotEngineReleaseFingerprint,
+      piVersion: "0.84.1",
+    },
+    qualification: {
+      status: "NOT_PROVEN",
+      verifierFingerprint:
+        "sha256:91015d5db9376b5e86a25538034c76609dcfddee1d7975faf64cca2bcbffe0c6",
+      checks: [
+        {
+          name: "windows-portable-ci",
+          outcome: "NOT_PROVEN",
+          evidenceIds: [],
+          reason: "fixture qualification is intentionally not proven",
+        },
+      ],
+      qualifiedAt: "2026-08-06T00:00:00.000Z",
+    },
+    updatePolicy: { piSelfUpdate: "DISABLED", unsigned: true },
+    licenses: [
+      {
+        name: "Hunter Pi",
+        version: "0.1.0-dev.1",
+        license: "MIT",
+        sourceReference: "NOTICE.md",
+      },
+      {
+        name: "@earendil-works/pi-coding-agent",
+        version: "0.84.1",
+        license: "SEE_PACKAGE_NOTICE",
+        sourceReference: "NOTICE.md",
+      },
+    ],
+  } as const;
   await Promise.all([
     writeFile(join(root, "core-extension.js"), coreSource, "utf8"),
     writeFile(
       join(root, "portable-manifest.json"),
       JSON.stringify({
-        schemaVersion: "hpi-windows-portable.v3",
-        product: "Hunter Pi",
-        platform: "win32-x64",
-        nodeVersion: process.versions.node,
-        sourceCommit,
-        sourceState: "CLEAN",
-        updateChannel: "developer-preview",
-        installer: "PORTABLE_ZIP",
-        signed: false,
-        releaseId: "release_hunter-pi-fixture",
-        productVersion: "0.1.0-dev.1",
-        engineVersion: "0.84.1",
-        engineReleaseId: "engine-release_pi-0.84.1",
-        engineReleaseFingerprint: runtimeBinding.engineReleaseFingerprint,
-        artifactFingerprint: runtimeBinding.artifactFingerprint,
-        artifactByteLength: 1,
-        versionDirectory: "versions/release_hunter-pi-fixture",
-        cliPackageFingerprint: `sha256:${"c".repeat(64)}`,
-        productShellIntegrity: `sha256:${"e".repeat(64)}`,
-        coreExtensionIntegrity: coreIntegrity,
-        nodeRuntimeIntegrity: `sha256:${"f".repeat(64)}`,
+        schemaVersion: "hpi-windows-portable.v2",
+        retainedInitialRelease: true,
       }),
       "utf8",
     ),
+    writeFile(
+      join(root, ".hpi-update", "active.json"),
+      `${JSON.stringify({
+        schemaVersion: "hpi-portable-active.v1",
+        releaseId: pilotReleaseId,
+        artifactFingerprint: pilotArtifactFingerprint,
+        productVersion: "0.1.0-dev.1",
+        activatedAt: "2026-08-06T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    ),
+    writeFile(
+      join(versionDirectory, ".hpi-candidate.json"),
+      `${JSON.stringify(candidate)}\n`,
+      "utf8",
+    ),
+    writeFile(join(versionDirectory, ".hpi-artifact"), pilotArtifact),
+    writeFile(join(versionCliDirectory, "hpi.js"), productShellSource, "utf8"),
+    writeFile(join(versionCliDirectory, "core-extension.js"), coreSource, "utf8"),
+    writeFile(join(versionPiDirectory, "index.js"), piEngineSource, "utf8"),
+    writeFile(join(versionDirectory, "node.exe"), nodeRuntimeSource, "utf8"),
   ]);
   await saveHpiConfiguration(
     resolveHpiPaths({ env: dependencies.environment, homeDirectory: dependencies.homeDirectory }),
@@ -386,6 +479,116 @@ describe("hpi change command", { timeout: 30_000 }, () => {
     ).toBe(2);
     expect(processRequests).toBe(0);
     expect(io.stderr.join("\n")).toContain("PILOT_TASK_BINDING_MISMATCH");
+  });
+
+  it("rejects a Pilot capture when the active artifact bytes drift", async () => {
+    const { dependencies, io, root, repository } = await createCliFixture();
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse(plan(target));
+    const pilotPlan = managedPilotPlanForFixture({
+      target,
+      request,
+      taskId: "pilot-task-01",
+    });
+    const requestPath = join(root, "artifact-drift-change-plan.json");
+    const pilotPlanPath = join(root, "artifact-drift-pilot-plan.json");
+    await Promise.all([
+      writeFile(requestPath, JSON.stringify(request), "utf8"),
+      writeFile(pilotPlanPath, JSON.stringify(pilotPlan), "utf8"),
+      writeFile(join(root, "versions", pilotReleaseId, ".hpi-artifact"), "drifted\n", "utf8"),
+    ]);
+    let processRequests = 0;
+
+    expect(
+      await runHpiCli(
+        [
+          "change",
+          "--repo",
+          repository,
+          "--plan",
+          requestPath,
+          "--run-archive-id",
+          "archive_cli-artifact-drift",
+          "--pilot-plan",
+          pilotPlanPath,
+          "--pilot-task-id",
+          "pilot-task-01",
+          "--pilot-session-id",
+          "pilot-artifact-drift-session",
+          "--pilot-operation-id",
+          "capture-artifact-drift-task-01",
+          "--json",
+          "--allow-provider-request",
+        ],
+        {
+          ...dependencies,
+          platform: "win32",
+          runTask6Process: () => {
+            processRequests += 1;
+            throw new Error("drifted artifact must not reach the process runner");
+          },
+        },
+      ),
+    ).toBe(2);
+    expect(processRequests).toBe(0);
+    expect(io.stderr.join("\n")).toContain("RUNTIME_BINDING_MISMATCH");
+  });
+
+  it("rejects a Pilot capture when the extracted active runtime tree drifts", async () => {
+    const { dependencies, io, root, repository } = await createCliFixture();
+    const target = await targetFor(repository);
+    const request = realManagedChangeRequestSchema.parse(plan(target));
+    const pilotPlan = managedPilotPlanForFixture({
+      target,
+      request,
+      taskId: "pilot-task-01",
+    });
+    const requestPath = join(root, "runtime-drift-change-plan.json");
+    const pilotPlanPath = join(root, "runtime-drift-pilot-plan.json");
+    await Promise.all([
+      writeFile(requestPath, JSON.stringify(request), "utf8"),
+      writeFile(pilotPlanPath, JSON.stringify(pilotPlan), "utf8"),
+      writeFile(
+        join(root, "versions", pilotReleaseId, "node.exe"),
+        "tampered runtime bytes\n",
+        "utf8",
+      ),
+    ]);
+    let processRequests = 0;
+
+    expect(
+      await runHpiCli(
+        [
+          "change",
+          "--repo",
+          repository,
+          "--plan",
+          requestPath,
+          "--run-archive-id",
+          "archive_cli-runtime-drift",
+          "--pilot-plan",
+          pilotPlanPath,
+          "--pilot-task-id",
+          "pilot-task-01",
+          "--pilot-session-id",
+          "pilot-runtime-drift-session",
+          "--pilot-operation-id",
+          "capture-runtime-drift-task-01",
+          "--json",
+          "--allow-provider-request",
+        ],
+        {
+          ...dependencies,
+          platform: "win32",
+          runTask6Process: () => {
+            processRequests += 1;
+            throw new Error("drifted runtime must not reach the process runner");
+          },
+        },
+      ),
+    ).toBe(2);
+    expect(processRequests).toBe(0);
+    expect(io.stderr.join("\n")).toContain("RUNTIME_BINDING_MISMATCH");
   });
 
   it("runs an explicitly scoped real-project change and emits portable Evidence", async () => {

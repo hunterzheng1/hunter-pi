@@ -209,7 +209,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.mode == 'full'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository

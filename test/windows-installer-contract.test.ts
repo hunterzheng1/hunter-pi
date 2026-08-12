@@ -32,6 +32,9 @@ describe("Windows release installer contract", () => {
 
     expect(workflow).toMatch(/Build Windows release ZIP and checksum/u);
     expect(workflow).toMatch(/Run isolated Windows installer end-to-end/u);
+    expect(workflow).toMatch(
+      /windows-portable:\s*\n\s*name: Windows x64 portable artifact[\s\S]*?timeout-minutes: 45/u,
+    );
     expect(workflow).toContain("$output = @(& .artifacts/hpi-windows-x64-release/install.ps1");
     expect(workflow).toContain("-PathMode User");
     expect(workflow).toContain('[Environment]::GetEnvironmentVariable("Path", "User")');

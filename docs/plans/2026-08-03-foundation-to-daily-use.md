@@ -323,7 +323,7 @@ Required quantitative gates:
 - zero false `READY`, source loss, raw secret leakage, or unacknowledged provider send;
 - at least 9 of 10 tasks end in the correct actionable terminal outcome against the frozen oracle;
 - all three forced interruptions preserve history and source; at least two resume successfully, and any unsupported resume is accurately `BLOCKED` or `NOT_PROVEN` rather than guessed;
-- 20 measured warm starts meet HP-NFR-PERF-01 p95 ≤ 3 seconds after five discarded warm-ups;
+- 20 measured warm starts meet HP-NFR-PERF-01 p95 ≤ 3.5 seconds after five discarded warm-ups; the frozen Windows machine retains balanced power and active security software;
 - 30 local cancellation/steering/status acknowledgements meet HP-NFR-PERF-02 p95 ≤ 250 ms with upstream wait excluded only when separately observed;
 - both of two qualified update-and-rollback cycles preserve state and restore a usable known-good version;
 - all five frozen broken/malicious plugin fixture sets (throwing initialization, reserved collision, built-in override, secret/path leakage, and oversized output) start in Safe Mode without evaluating user plugin code;

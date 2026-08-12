@@ -1,6 +1,6 @@
 # Task 12 — trusted runtime capture coordination
 
-- Status: **IN PROGRESS / ALL PRODUCT TASK PATHS COMPLETE LOCAL VERIFY PASS / REAL PILOT ATTEMPT 01 BLOCKED FOR PROVIDER USAGE RECONCILIATION / DAILY-USE NOT_PROVEN**
+- Status: **REAL WINDOWS PILOT ARCHIVED / LOCAL EVALUATOR GO / FINAL ACCEPTANCE PR AND EXACT MAIN CI PENDING**
 - Source baseline: merged main `81f7a956bfe24687671340946c1e2d593277aa6a`
 - Product outcome: the real Windows pilot must be assembled from product-observed, plan-bound facts and written through the existing opaque capture/final Archive authority; caller-authored complete Evidence JSON must remain unable to promote itself to a live pilot.
 

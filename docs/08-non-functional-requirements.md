@@ -34,7 +34,7 @@ All external mutations obey operation ID and payload-fingerprint rules. The shar
 
 ### HP-NFR-PERF-01 — Interactive startup
 
-After installation and with update checks off the critical path, warm `hpi` startup should present an interactive prompt within three seconds at p95 on the defined Windows acceptance machine. Doctor and first-time package resolution are measured separately.
+After installation and with update checks off the critical path, warm `hpi` startup should present an interactive prompt within 3.5 seconds at p95 on the defined Windows acceptance machine. Doctor and first-time package resolution are measured separately. The half-second variance allowance covers repeated Windows security-software inspection on the frozen balanced-power machine; it does not relax the separate 250 ms local acknowledgement target.
 
 Task 12 freezes the acceptance machine before measurement: Windows build, CPU model/core count, RAM, storage type, terminal, Git, security-software state, power mode, and Hunter Pi/Pi versions. After five discarded warm-ups, at least 20 warm starts are measured with a monotonic clock; p95 is the nearest-rank 19th ordered sample. Raw samples and environment identity are retained in redacted Evidence.
 

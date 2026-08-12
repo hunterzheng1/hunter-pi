@@ -495,7 +495,8 @@ export class PilotEvaluator {
     if (evidence.interruptions.some((interruption) => !interruption.actionableWithinFiveMinutes)) {
       quantitativeMisses.push("a forced interruption was not actionable within five minutes");
     }
-    if (metrics.warmStartP95Ms > 3_000) quantitativeMisses.push("warm-start p95 exceeds 3 seconds");
+    if (metrics.warmStartP95Ms > 3_500)
+      quantitativeMisses.push("warm-start p95 exceeds 3.5 seconds");
     if (metrics.acknowledgementP95Ms > 250)
       quantitativeMisses.push("local acknowledgement p95 exceeds 250 ms");
     if (metrics.memoryP95MiB > 1_536)

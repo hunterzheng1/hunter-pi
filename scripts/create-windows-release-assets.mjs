@@ -82,12 +82,11 @@ try {
   const installerSource = join(repositoryRoot, "scripts", "install.ps1");
   await cp(installerSource, join(stage, "install.ps1"));
 
-  const entries = await Promise.all(
-    (await releaseFiles(stage)).map(async ({ path, relativePath }) => {
-      const content = await readFile(path);
-      return { path: relativePath, sha256: sha256(content), byteLength: content.byteLength };
-    }),
-  );
+  const entries = [];
+  for (const { path, relativePath } of await releaseFiles(stage)) {
+    const content = await readFile(path);
+    entries.push({ path: relativePath, sha256: sha256(content), byteLength: content.byteLength });
+  }
   await writeFile(
     join(stage, "release-files.json"),
     `${JSON.stringify(

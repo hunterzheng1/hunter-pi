@@ -410,4 +410,38 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/checksum|SHA-256/iu);
     await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
+
+  it("builds a release manifest for a portable tree larger than the Windows handle limit", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const portableRoot = join(repositoryRoot, ".artifacts", `installer-large-${suffix}`);
+    const outputRoot = join(repositoryRoot, ".artifacts", `installer-large-output-${suffix}`);
+    cleanupRoots.push(portableRoot, outputRoot);
+    await createReleaseFixture(portableRoot, "release_fixture-large", "0.1.0-dev.1");
+    const bulkRoot = join(portableRoot, "bulk");
+    await mkdir(bulkRoot, { recursive: true });
+    for (let start = 0; start < 8_300; start += 100) {
+      await Promise.all(
+        Array.from({ length: Math.min(100, 8_300 - start) }, (_, offset) =>
+          writeFile(
+            join(bulkRoot, `entry-${String(start + offset)}.txt`),
+            "bounded\n",
+            "utf8",
+          ),
+        ),
+      );
+    }
+
+    const build = spawnSync(
+      process.execPath,
+      [
+        join(repositoryRoot, "scripts", "create-windows-release-assets.mjs"),
+        "--portable-root",
+        portableRoot,
+        "--output",
+        outputRoot,
+      ],
+      { cwd: repositoryRoot, encoding: "utf8", windowsHide: true },
+    );
+    expect(build.status, build.stderr).toBe(0);
+  }, 120_000);
 });

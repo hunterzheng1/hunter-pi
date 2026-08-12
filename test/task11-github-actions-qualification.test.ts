@@ -15,6 +15,7 @@ import {
   createTemporaryTestDirectory,
   removeTemporaryTestDirectory,
 } from "./support/temporary-test-directory.js";
+import { vitestResourcePolicy } from "./support/vitest-resource-runtime.js";
 
 const sourceCommit = "a".repeat(40);
 const runId = 31_451_189_405;
@@ -1251,19 +1252,23 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     if (process.platform === "win32") expect(createDriver).not.toHaveBeenCalled();
   }, 10_000);
 
-  it("settles one short-lived bare executable through the real platform driver", async () => {
-    const executable = await qualificationCliProcess.resolveQualificationCliExecutable(
-      process.platform === "win32" ? "node.exe" : "node",
-      10_000,
-    );
-    const result = await qualificationCliProcess.runQualificationCliProcess(
-      executable,
-      ["--version"],
-      10_000,
-    );
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-    expect(result.stdout.trim()).toBe(process.version);
-  }, 20_000);
+  it(
+    "settles one short-lived bare executable through the real platform driver",
+    { timeout: vitestResourcePolicy.managedProcessIntegrationTimeoutMs * 2 },
+    async () => {
+      const executable = await qualificationCliProcess.resolveQualificationCliExecutable(
+        process.platform === "win32" ? "node.exe" : "node",
+        vitestResourcePolicy.managedProcessIntegrationTimeoutMs,
+      );
+      const result = await qualificationCliProcess.runQualificationCliProcess(
+        executable,
+        ["--version"],
+        vitestResourcePolicy.managedProcessIntegrationTimeoutMs,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(result.stdout.trim()).toBe(process.version);
+    },
+  );
 
   it("does not expose the internal qualification process runner from the updater package", () => {
     expect(Reflect.has(updater, "runBoundedProcess")).toBe(false);

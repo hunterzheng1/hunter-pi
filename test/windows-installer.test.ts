@@ -207,12 +207,13 @@ async function createReleaseFixture(
   await writeReleaseFileManifest(root);
 }
 
-function runInstaller(
+function runInstallerWith(
+  executable: string,
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv,
 ): { readonly status: number | null; readonly stdout: string; readonly stderr: string } {
   const result = spawnSync(
-    "powershell.exe",
+    executable,
     [
       "-NoLogo",
       "-NoProfile",
@@ -233,6 +234,13 @@ function runInstaller(
     },
   );
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function runInstaller(
+  arguments_: readonly string[],
+  environment: NodeJS.ProcessEnv,
+): { readonly status: number | null; readonly stdout: string; readonly stderr: string } {
+  return runInstallerWith("powershell.exe", arguments_, environment);
 }
 
 function receiptFrom(stdout: string): InstallerReceipt {
@@ -538,6 +546,35 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
       source: "LOCAL_ARCHIVE",
       checksum: "VERIFIED",
       stableCommandReady: true,
+    });
+  }, 60_000);
+
+  it("preserves ISO timestamp strings when invoked by PowerShell 7", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-pwsh7-"));
+    cleanupRoots.push(root);
+    const source = join(root, "source");
+    const installRoot = join(root, "install");
+    await createReleaseFixture(source, "release_fixture-pwsh7", "0.1.0-dev.1");
+
+    const result = runInstallerWith(
+      "pwsh.exe",
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        source,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(receiptFrom(result.stdout)).toMatchObject({
+      status: "INSTALLED",
+      releaseId: "release_fixture-pwsh7",
     });
   }, 60_000);
 

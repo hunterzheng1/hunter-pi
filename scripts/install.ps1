@@ -123,13 +123,21 @@ function Assert-PortableReference([object]$Value, [string]$Label) {
 }
 
 function Assert-Timestamp([object]$Value, [string]$Label) {
-  if (-not ($Value -is [string]) -or
-      $Value -cnotmatch "^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$") {
+  $timestampText = if ($Value -is [string]) {
+    $Value
+  } elseif ($Value -is [DateTime]) {
+    $Value.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+  } elseif ($Value -is [DateTimeOffset]) {
+    $Value.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+  } else {
+    ""
+  }
+  if ($timestampText -cnotmatch "^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$") {
     throw "$Label must be one ISO-8601 timestamp."
   }
   $parsedTimestamp = [DateTimeOffset]::MinValue
   if (-not [DateTimeOffset]::TryParse(
-      $Value,
+      $timestampText,
       [Globalization.CultureInfo]::InvariantCulture,
       [Globalization.DateTimeStyles]::RoundtripKind,
       [ref]$parsedTimestamp
@@ -142,6 +150,14 @@ function ConvertTo-CanonicalJson([object]$Value) {
   return ConvertTo-Json -InputObject $Value -Compress -Depth 100
 }
 
+function ConvertFrom-HpiJson([string]$Json) {
+  $command = Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json -CommandType Cmdlet
+  if ($command.Parameters.ContainsKey("DateKind")) {
+    return Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+  }
+  return Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+}
+
 function Read-JsonObject([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "$Label is missing."
@@ -152,7 +168,7 @@ function Read-JsonObject([string]$Path, [string]$Label) {
     throw "$Label must be one bounded physical file."
   }
   try {
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return ConvertFrom-HpiJson (Get-Content -LiteralPath $Path -Raw)
   }
   catch {
     throw "$Label is not valid JSON."
@@ -274,7 +290,7 @@ function Assert-ReleaseFiles([string]$Root) {
   }
   $manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
   try {
-    $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
+    $manifest = ConvertFrom-HpiJson ([Text.Encoding]::UTF8.GetString($manifestBytes))
   }
   catch {
     throw "Release file manifest is not valid JSON."
@@ -334,8 +350,9 @@ function Assert-InstalledPayloadMatches([string]$SourceRoot, [string]$InstalledR
       (Get-Sha256Hex (Join-Path $InstalledRoot "release-files.json"))) {
     throw "Existing installation has release-manifest drift."
   }
-  $manifest = Get-Content -LiteralPath (Join-Path $SourceRoot "release-files.json") -Raw |
-    ConvertFrom-Json
+  $manifest = ConvertFrom-HpiJson (
+    Get-Content -LiteralPath (Join-Path $SourceRoot "release-files.json") -Raw
+  )
   foreach ($entry in @($manifest.files)) {
     if ([StringComparer]::Ordinal.Equals([string]$entry.path, ".hpi-update/active.json")) {
       continue
@@ -870,7 +887,7 @@ function Test-StableCommand([string]$InstallPath, [object]$ExpectedRelease) {
   $output = @(& $shim version --json 2>$null)
   if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) { return $false }
   try {
-    $version = $output[-1] | ConvertFrom-Json
+    $version = ConvertFrom-HpiJson ([string]$output[-1])
     return $version.product -eq "Hunter Pi" -and
       $version.productVersion -eq $ExpectedRelease.ProductVersion -and
       $version.engine.packageName -eq "@earendil-works/pi-coding-agent" -and

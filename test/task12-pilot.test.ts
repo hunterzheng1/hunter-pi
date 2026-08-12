@@ -290,6 +290,27 @@ describe("Task 12 Windows daily-use pilot evaluator", () => {
     });
   });
 
+  it("allows the Windows security-software variance budget but rejects more than 3.5 seconds", () => {
+    const plan = completePilotExecutionPlan();
+    const evidence = completeEvidence(plan, "LIVE_WINDOWS_PILOT");
+    const evaluateAt = (warmStartP95Ms: number) => {
+      const samples = evidence.warmStartSamplesMs.map((_, index) =>
+        index >= evidence.warmStartSamplesMs.length - 2 ? warmStartP95Ms : 1_000,
+      );
+      const measured = pilotEvidenceSchema.parse({ ...evidence, warmStartSamplesMs: samples });
+      return new PilotEvaluator().evaluate(
+        measured,
+        plan,
+        trustedArchiveFor(measured, plan, `pilot-archive-warm-start-${String(warmStartP95Ms)}`),
+      );
+    };
+
+    expect(evaluateAt(3_500).outcome).toBe("GO");
+    const overBudget = evaluateAt(3_501);
+    expect(overBudget.outcome).toBe("REVISE");
+    expect(overBudget.reasons).toContain("warm-start p95 exceeds 3.5 seconds");
+  });
+
   it("fails closed as NOT_PROVEN when the real-use or remote evidence is incomplete", () => {
     const evidence = completeEvidence(completePilotExecutionPlan(), "LIVE_WINDOWS_PILOT");
     const decision = new PilotEvaluator().evaluate(

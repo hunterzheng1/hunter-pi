@@ -815,7 +815,9 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
         { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
       );
       expect(licenseResult.status).not.toBe(0);
-      expect(`${licenseResult.stdout}\n${licenseResult.stderr}`).toMatch(/license|version/iu);
+      expect(`${licenseResult.stdout}\n${licenseResult.stderr}`.replaceAll(/\s+/gu, "")).toMatch(
+        /license|version/iu,
+      );
     }
   }, 120_000);
 
@@ -904,7 +906,9 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
       { ...process.env, LOCALAPPDATA: join(root, "local-app-data") },
     );
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/version probe|health/iu);
+    expect(`${result.stdout}\n${result.stderr}`.replaceAll(/\s+/gu, "")).toMatch(
+      /versionprobe|health/iu,
+    );
     await expect(readdir(installRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
 

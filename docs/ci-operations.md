@@ -29,6 +29,10 @@ inspection into a high-frequency API poller.
   variance does not serialize the complete path. The Windows portable artifact
   is built once in its own parallel job. The measured critical-path target is
   approximately 10 minutes; hosted-runner queueing and load can exceed it.
+  Exact main run `31604073708` on 2026-08-12 completed the full path and stable
+  gate in 11 minutes 37 seconds; its longest job was the Windows external
+  package smoke at 11 minutes 17 seconds. The comparable pre-optimization run
+  `31596603784` took about 30 minutes.
 - Task 9 and Task 10 contract matrices are excluded from the generic unit-test
   invocation and run exactly once inside their source-bound platform probes.
   Task 10 reuses the existing Windows/Ubuntu `quality` jobs and the existing

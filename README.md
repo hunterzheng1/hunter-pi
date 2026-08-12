@@ -150,7 +150,7 @@ CI 始终提供名称固定的 `CI gate` 结果，但会按改动范围选择执
 - 修改源码、测试、依赖、脚本或 `.github/` 时，运行完整通道。完整通道保留 Windows/Ubuntu 单元测试、静态检查、平台 Evidence、Task 7 containment 和 Windows x64 portable 构建。
 - 手动触发 `workflow_dispatch` 时，无论文件范围如何，都运行完整通道。
 
-完整通道把单元测试、质量检查、Task 7 探针、Windows portable 构建、Windows 外部包检查和 Windows 干净安装检查并行执行。Ubuntu 仍执行外部包和干净安装检查，Windows 覆盖不降级。根据 2026-08-12 优化前一次主线运行的步骤耗时，新的关键路径目标约为 10 分钟。GitHub 托管 Runner 的排队和负载仍可能造成波动。
+完整通道把单元测试、质量检查、Task 7 探针、Windows portable 构建、Windows 外部包检查和 Windows 干净安装检查并行执行。Ubuntu 仍执行外部包和干净安装检查，Windows 覆盖不降级。2026-08-12 的首个优化后完整主线运行 `31604073708` 用时 11 分 37 秒，接近约 10 分钟的目标；优化前同类运行约 30 分钟。GitHub 托管 Runner 的排队和负载仍可能造成波动。
 
 ## 架构概览
 

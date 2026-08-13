@@ -5,6 +5,7 @@ coverage/
 .temp/
 .tmp/
 .artifacts/
+.worktrees/
 *.tsbuildinfo
 
 # Local Hunter Pi state and credentials must never be committed.

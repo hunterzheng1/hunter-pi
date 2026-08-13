@@ -975,7 +975,7 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
     );
     expect(missingJournal.status).not.toBe(0);
     expect(`${missingJournal.stdout}\n${missingJournal.stderr}`).toMatch(
-      /qualification journal receipt is missing/iu,
+      /qualification journal receipt is\s+missing/iu,
     );
   }, 120_000);
 

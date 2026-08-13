@@ -46,6 +46,7 @@ import {
 } from "./contracts.js";
 import {
   windowsPortableQualificationEvidenceSchema,
+  verifyWindowsPortableQualificationEvidence,
   type WindowsPortableQualificationEvidence,
 } from "./github-actions-qualification.js";
 import {
@@ -557,6 +558,20 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
       ) as unknown,
     );
     assertQualificationBinding(candidate, candidate, evidence, artifact);
+  }
+
+  public async retainQualificationEvidence(
+    candidate: ReleaseCandidate,
+    evidenceInput: unknown,
+    artifact: Uint8Array,
+  ): Promise<void> {
+    const evidence = verifyWindowsPortableQualificationEvidence(candidate, evidenceInput, artifact);
+    await this.#ensureRoots();
+    await writeQualificationEvidenceImmutably(
+      this.#qualificationEvidenceRoot,
+      evidence,
+      this.#qualificationEvidenceFaultInjector,
+    );
   }
 
   async current(): Promise<DistributionReleaseId | undefined> {

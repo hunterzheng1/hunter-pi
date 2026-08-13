@@ -12,6 +12,7 @@ The owner selected MIT in ADR-0006. The root `LICENSE`, `NOTICE.md`, and `docs/p
 
 The current implementation and next evidence gates are defined in:
 
+- [2026-08-13 — Real-machine usability release](2026-08-13-real-machine-usability-release.md)
 - [2026-08-03 — Foundation to daily use](2026-08-03-foundation-to-daily-use.md)
 - [2026-08-04 — Task 7 worktree, leases, and process host](2026-08-04-task7-worktree-leases-process-host.md)
 - [2026-08-05 — Task 8 verification adequacy and review/fixback](2026-08-05-task8-verification-adequacy.md)

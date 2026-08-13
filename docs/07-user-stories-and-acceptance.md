@@ -72,7 +72,9 @@ Acceptance:
 
 - first run identifies the provider/endpoint category, exact offline-resolved origin, and the prompt, repository-context, tool-result, and metadata categories that may be sent;
 - provider retention/training controls and Hunter-controlled telemetry/network settings are visible without claiming Hunter can enforce external policy; unknown account facts are explicitly `NOT_PROVEN` rather than inferred from a policy URL;
-- an explicit versioned acknowledgement is required before the first send and again after a material provider/endpoint/disclosure change;
+- the documented defaults are initialized without a separate blocking setup step; first run shows a non-blocking privacy notice and full details remain available through `hpi privacy`;
+- login, cancellation, or opening the TUI sends no model prompt; the first interactive request occurs only when the user submits it;
+- custom provider/endpoint/destination changes require explicit review, while Managed Change, Pilot, automation, plugins, remote writes, publication, and destructive actions retain their own scoped authorization;
 - cancellation prevents the request and records `BLOCKED` without storing the prompt or credential in Evidence.
 
 ## Interactive use

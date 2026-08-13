@@ -5,7 +5,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runHpiCli, type HpiCliDependencies, type HpiCliIo } from "@hunter-pi/cli";
+import {
+  HpiUpdateDiscoveryError,
+  runHpiCli,
+  type HpiCliDependencies,
+  type HpiCliIo,
+} from "@hunter-pi/cli";
 import {
   releaseCandidateSchema,
   updateReceiptSchema,
@@ -88,15 +93,21 @@ afterEach(async () => {
 interface CapturedIo extends HpiCliIo {
   readonly stdout: string[];
   readonly stderr: string[];
+  readonly questions: string[];
 }
 
 function createIo(confirmed: boolean): CapturedIo {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const questions: string[] = [];
   return {
     stdout,
     stderr,
-    confirm: () => Promise.resolve(confirmed),
+    questions,
+    confirm: (question) => {
+      questions.push(question);
+      return Promise.resolve(confirmed);
+    },
     writeStdout: (text) => stdout.push(text),
     writeStderr: (text) => stderr.push(text),
   };
@@ -172,7 +183,7 @@ async function createDependencies(
       (() =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.1",
+          productVersion: "0.1.0-dev.2",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
             version: "0.84.1",
@@ -807,7 +818,8 @@ describe("hpi command", () => {
       expect(await runHpiCli(arguments_, dependencies), arguments_.join(" ")).toBe(2);
       expect(launched).toBe(false);
       expect(io.stderr.join("\n")).toContain("InvalidArguments=BLOCKED");
-      expect(io.stdout.join("\n")).toContain("Usage: hpi");
+      expect(io.stderr.join("\n")).toContain("Run `hpi --help`");
+      expect(io.stdout.join("\n")).not.toContain("Usage: hpi");
       const paths = resolveHpiPaths({
         env: dependencies.environment,
         homeDirectory: dependencies.homeDirectory,
@@ -837,7 +849,7 @@ describe("hpi command", () => {
     const version = JSON.parse(io.stdout.join("")) as Record<string, unknown>;
     expect(version).toMatchObject({
       product: "Hunter Pi",
-      productVersion: "0.1.0-dev.1",
+      productVersion: "0.1.0-dev.2",
       engine: {
         packageName: "@earendil-works/pi-coding-agent",
         version: "0.84.1",
@@ -850,6 +862,28 @@ describe("hpi command", () => {
     expect(version).toHaveProperty("productShellIntegrity");
   });
 
+  it("prints a readable version summary by default while preserving exact JSON on request", async () => {
+    const readable = await createDependencies();
+    expect(await runHpiCli(["version"], readable.dependencies)).toBe(0);
+    expect(readable.io.stdout.join("")).toBe(
+      [
+        "Hunter Pi 0.1.0-dev.2",
+        "Engine: Pi 0.84.1",
+        "Channel: developer-preview",
+        "Source: NOT_STAMPED (NOT_STAMPED)",
+        "",
+      ].join("\n"),
+    );
+
+    const machine = await createDependencies();
+    expect(await runHpiCli(["version", "--json"], machine.dependencies)).toBe(0);
+    expect(JSON.parse(machine.io.stdout.join(""))).toMatchObject({
+      product: "Hunter Pi",
+      productVersion: "0.1.0-dev.2",
+      engine: { version: "0.84.1" },
+    });
+  });
+
   it("emits one path-free local runtime sample without loading setup or Provider state", async () => {
     const { dependencies, io } = await createDependencies();
 
@@ -858,7 +892,7 @@ describe("hpi command", () => {
     expect(sample).toMatchObject({
       schemaVersion: "hpi-pilot-runtime-sample.v1",
       product: "Hunter Pi",
-      productVersion: "0.1.0-dev.1",
+      productVersion: "0.1.0-dev.2",
       engineVersion: "0.84.1",
       sourceState: "NOT_STAMPED",
     });
@@ -952,6 +986,161 @@ describe("hpi command", () => {
     expect(output).not.toContain(artifactPath);
   });
 
+  it("prints readable update status without requiring JSON", async () => {
+    const { dependencies, io } = await createDependencies({
+      createUpdateManager: () =>
+        Promise.resolve({
+          check: () => Promise.reject(new Error("not used")),
+          apply: () => Promise.reject(new Error("not used")),
+          qualify: () => Promise.reject(new Error("not used")),
+          rollback: () => Promise.reject(new Error("not used")),
+          reconcile: () => Promise.resolve([]),
+          current: () => Promise.resolve({ releaseId: updateCandidateFixture.releaseId }),
+          history: () => Promise.resolve([updateCandidateFixture]),
+        }),
+    });
+
+    expect(await runHpiCli(["update", "status"], dependencies)).toBe(0);
+    expect(io.stdout.join("")).toBe(
+      `Hunter Pi Update: READY\nCurrent: ${updateCandidateFixture.releaseId}\nHistory: 1\n`,
+    );
+  });
+
+  it("discovers, downloads, verifies, and applies the latest qualified release with hpi update", async () => {
+    const calls: string[] = [];
+    const manager: UpdateManager = {
+      check: (candidate) => Promise.resolve({ status: "AVAILABLE", candidate }),
+      apply: (request) => {
+        calls.push(`apply:${request.candidate.releaseId}`);
+        return Promise.resolve(
+          updateReceiptSchema.parse({
+            schemaVersion: "hpi-update-receipt.v1",
+            operationId: request.operationId,
+            operationFingerprint: request.operationFingerprint,
+            action: "APPLY",
+            outcome: "APPLIED",
+            candidateReleaseId: request.candidate.releaseId,
+            activeReleaseId: request.candidate.releaseId,
+            observedAt: request.observedAt,
+          }),
+        );
+      },
+      qualify: () => Promise.reject(new Error("not used")),
+      rollback: () => Promise.reject(new Error("not used")),
+      reconcile: () => Promise.resolve([]),
+      current: () => Promise.resolve({ releaseId: updateCandidateFixture.releaseId }),
+      history: () => Promise.resolve([]),
+    };
+    const created = await createDependencies();
+    const dependencies = {
+      ...created.dependencies,
+      discoverUpdate: () =>
+        Promise.resolve({
+          status: "AVAILABLE",
+          candidate: updateCandidateFixture,
+          artifact: updateArtifactFixture,
+          releasePage: "https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.2.0",
+        }),
+      createUpdateManager: (options: { readonly artifact?: Uint8Array }) => {
+        expect(Buffer.from(options.artifact ?? [])).toEqual(updateArtifactFixture);
+        return Promise.resolve(manager);
+      },
+    } as unknown as HpiCliDependencies;
+
+    expect(await runHpiCli(["update"], dependencies)).toBe(0);
+    expect(calls).toEqual([`apply:${updateCandidateFixture.releaseId}`]);
+    expect(created.io.stdout.join("\n")).toContain(
+      "Source: https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.2.0",
+    );
+    expect(created.io.stdout.join("\n")).toContain(
+      "Verification: qualified candidate and artifact digest passed",
+    );
+    expect(created.io.stdout.join("\n")).toContain("Update complete: 0.1.0-dev.2 → 0.2.0");
+  });
+
+  it("reports an already-current release without mutating update state", async () => {
+    let managerCreated = false;
+    const created = await createDependencies();
+    const dependencies = {
+      ...created.dependencies,
+      discoverUpdate: () => Promise.resolve({ status: "CURRENT", currentVersion: "0.1.0-dev.2" }),
+      createUpdateManager: () => {
+        managerCreated = true;
+        return Promise.resolve(undefined);
+      },
+    } as unknown as HpiCliDependencies;
+
+    expect(await runHpiCli(["update"], dependencies)).toBe(0);
+    expect(managerCreated).toBe(false);
+    expect(created.io.stdout.join("")).toBe(
+      "Hunter Pi 0.1.0-dev.2 is already the latest developer-preview release.\n",
+    );
+  });
+
+  it("does not claim the previous release is active when a failed update receipt cannot prove it", async () => {
+    const manager: UpdateManager = {
+      check: (candidate) => Promise.resolve({ status: "AVAILABLE", candidate }),
+      apply: (request) =>
+        Promise.resolve(
+          updateReceiptSchema.parse({
+            schemaVersion: "hpi-update-receipt.v1",
+            operationId: request.operationId,
+            operationFingerprint: request.operationFingerprint,
+            action: "APPLY",
+            outcome: "FAILED",
+            candidateReleaseId: request.candidate.releaseId,
+            previousReleaseId: "release_hunter-pi-0.1.0-dev.2-fixture",
+            reason: "activation result could not be reconciled",
+            observedAt: request.observedAt,
+          }),
+        ),
+      qualify: () => Promise.reject(new Error("not used")),
+      rollback: () => Promise.reject(new Error("not used")),
+      reconcile: () => Promise.resolve([]),
+      current: () => Promise.resolve({ releaseId: updateCandidateFixture.releaseId }),
+      history: () => Promise.resolve([]),
+    };
+    const created = await createDependencies();
+    const dependencies = {
+      ...created.dependencies,
+      discoverUpdate: () =>
+        Promise.resolve({
+          status: "AVAILABLE",
+          candidate: updateCandidateFixture,
+          artifact: updateArtifactFixture,
+          qualificationEvidence: {},
+          releasePage: "https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.2.0",
+        }),
+      createUpdateManager: () => Promise.resolve(manager),
+    } as unknown as HpiCliDependencies;
+
+    expect(await runHpiCli(["update"], dependencies)).toBe(2);
+    const output = created.io.stdout.join("\n");
+    expect(output).toContain("Recovery: active release is not proven");
+    expect(output).not.toContain("previous release is active");
+  });
+
+  it("reports an actionable automatic-update network failure without exposing a stack", async () => {
+    const created = await createDependencies();
+    const dependencies = {
+      ...created.dependencies,
+      discoverUpdate: () =>
+        Promise.reject(
+          new HpiUpdateDiscoveryError(
+            "DISCOVERY",
+            "release index download failed for api.github.com; verify TLS trust, HTTPS proxy policy, and network access",
+            "api.github.com",
+          ),
+        ),
+    } as unknown as HpiCliDependencies;
+
+    expect(await runHpiCli(["update"], dependencies)).toBe(2);
+    expect(created.io.stderr.join("")).toContain(
+      "UpdateStatus=BLOCKED Stage=DISCOVERY Host=api.github.com",
+    );
+    expect(created.io.stderr.join("")).not.toContain(" at ");
+  });
+
   it("reports a missing portable installation instead of guessing an update target", async () => {
     const { dependencies, io } = await createDependencies();
     expect(await runHpiCli(["update", "status", "--json"], dependencies)).toBe(2);
@@ -979,27 +1168,71 @@ describe("hpi command", () => {
     expect(`${io.stdout.join("")} ${io.stderr.join("")}`).not.toContain(root);
   });
 
-  it("orchestrates the bounded first-run environment, setup, login, defaults, plugins, and verification steps", async () => {
-    let capturedPlan: PiLaunchPlan | undefined;
+  it("creates safe defaults, shows a non-blocking privacy notice, logs in, and enters Quick Session", async () => {
+    const capturedPlans: PiLaunchPlan[] = [];
     const { dependencies, io } = await createDependencies({
       confirmed: true,
       authConfigured: true,
       launch: (plan) => {
-        capturedPlan = plan;
+        capturedPlans.push(plan);
         return Promise.resolve(0);
       },
     });
 
     expect(await runHpiCli([], dependencies)).toBe(0);
     const output = io.stdout.join("\n");
-    for (const step of ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]) {
-      expect(output).toContain(`Step ${step}`);
-    }
-    expect(output).toContain("FirstRunStatus=CONFIGURED");
-    expect(output).toContain("InteractiveTui=NOT_PROVEN");
-    expect(capturedPlan?.environment["HUNTER_PI_MODE"]).toBe("LOGIN");
-    expect(capturedPlan?.environment["HUNTER_PI_BLOCK_PROMPT_INPUT"]).toBe("1");
+    expect(output).toContain("Hunter Pi — First Run");
+    expect(output).toContain("Provider: openai-codex");
+    expect(output).toContain("Model: gpt-5.6-sol");
+    expect(output).toContain("Destination: https://provider-managed.example");
+    expect(output).toContain("Permission: BALANCED");
+    expect(output).not.toContain("Acknowledge disclosure");
+    expect(io.questions).toEqual(["Did you complete the selected Provider login flow in Pi?"]);
+    expect(capturedPlans.map((plan) => plan.environment["HUNTER_PI_MODE"])).toEqual([
+      "LOGIN",
+      "QUICK",
+    ]);
+    expect(capturedPlans[0]?.environment["HUNTER_PI_BLOCK_PROMPT_INPUT"]).toBe("1");
+    const paths = resolveHpiPaths({
+      env: dependencies.environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    expect((await loadHpiConfiguration(paths))?.setupCompletedAt).toBe("2026-08-03T13:00:00.000Z");
   }, 15_000);
+
+  it("lets a fresh user open login directly with the documented defaults", async () => {
+    const capturedPlans: PiLaunchPlan[] = [];
+    const { dependencies, io } = await createDependencies({
+      confirmed: true,
+      authConfigured: true,
+      launch: (plan) => {
+        capturedPlans.push(plan);
+        return Promise.resolve(0);
+      },
+    });
+
+    expect(await runHpiCli(["login"], dependencies)).toBe(0);
+    expect(io.stdout.join("\n")).toContain("Hunter Pi — First Run");
+    expect(io.stdout.join("\n")).toContain("Model: gpt-5.6-sol");
+    expect(io.questions).toEqual(["Did you complete the selected Provider login flow in Pi?"]);
+    expect(capturedPlans).toHaveLength(1);
+    expect(capturedPlans[0]?.environment["HUNTER_PI_MODE"]).toBe("LOGIN");
+  });
+
+  it("shows the current privacy boundary without creating configuration or requiring confirmation", async () => {
+    const { dependencies, io } = await createDependencies({ confirmed: false });
+
+    expect(await runHpiCli(["privacy"], dependencies)).toBe(0);
+    expect(io.stdout.join("\n")).toContain("Hunter Pi — Provider data and privacy");
+    expect(io.stdout.join("\n")).toContain("Model: gpt-5.6-sol");
+    expect(io.stdout.join("\n")).toContain("Permission: BALANCED");
+    expect(io.questions).toEqual([]);
+    const paths = resolveHpiPaths({
+      env: dependencies.environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    await expect(access(paths.configurationFile)).rejects.toThrow();
+  });
 
   it("rejects invalid setup values before printing or persisting them", async () => {
     const { dependencies, io } = await createDependencies({ confirmed: false });
@@ -1038,10 +1271,10 @@ describe("hpi command", () => {
     );
   });
 
-  it("persists only versioned consent and then reports missing login honestly", async () => {
+  it("saves reviewed custom configuration and then reports missing login honestly", async () => {
     const { dependencies, io } = await createDependencies({ confirmed: true });
 
-    expect(await runHpiCli(["setup"], dependencies)).toBe(0);
+    expect(await runHpiCli(["config"], dependencies)).toBe(0);
     expect(io.stdout.join("\n")).toContain("Destination=https://provider-managed.example");
     expect(io.stdout.join("\n")).toContain("ExternalRetention=NOT_PROVEN");
     expect(io.stdout.join("\n")).toContain("TrainingUse=NOT_PROVEN");
@@ -1068,6 +1301,19 @@ describe("hpi command", () => {
     expect(report.checks).toContainEqual(
       expect.objectContaining({ id: "provider_auth", status: "BLOCKED" }),
     );
+  });
+
+  it("groups human Doctor output by actionability while JSON stays opt-in", async () => {
+    const { dependencies, io } = await createDependencies();
+
+    expect(await runHpiCli(["doctor"], dependencies)).toBe(2);
+    const output = io.stdout.join("\n");
+    expect(output).toContain("Hunter Pi Doctor: BLOCKED");
+    expect(output).toContain("Needs attention:");
+    expect(output).toContain("Not yet proven:");
+    expect(output).toContain("Detected:");
+    expect(output.indexOf("Needs attention:")).toBeLessThan(output.indexOf("Detected:"));
+    expect(output).not.toContain('"schemaVersion":"hpi-doctor.v1"');
   });
 
   it("launches a normal Quick Session and reports process exit without a verified Change", async () => {
@@ -1333,7 +1579,7 @@ describe("hpi command", () => {
       getVersionInfo: () =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.1",
+          productVersion: "0.1.0-dev.2",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
             version: "0.84.1",
@@ -1571,7 +1817,7 @@ describe("hpi command", () => {
     };
     const compatibilityReceipt = listed.records?.[0]?.assurance?.compatibilityReceipt;
     expect(compatibilityReceipt?.distributionReleaseId).toBe(
-      "release_hunter-pi-0.1.0-dev.1-workspace",
+      "release_hunter-pi-0.1.0-dev.2-workspace",
     );
     expect(compatibilityReceipt?.engineReleaseId).toBe("engine-release_pi-0.84.1");
     expect(compatibilityReceipt?.platformFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
@@ -1706,7 +1952,7 @@ describe("hpi command", () => {
       status: "DETECTED",
       checkedAt: "2026-08-03T13:00:00.000Z",
       engineVersion: "0.84.1",
-      productVersion: "0.1.0-dev.1",
+      productVersion: "0.1.0-dev.2",
       sourceCommit: "NOT_STAMPED",
       sourceState: "NOT_STAMPED",
       platform: process.platform,
@@ -1744,7 +1990,7 @@ describe("hpi command", () => {
       getVersionInfo: () =>
         Promise.resolve({
           product: "Hunter Pi",
-          productVersion: "0.1.0-dev.1",
+          productVersion: "0.1.0-dev.2",
           engine: {
             packageName: "@earendil-works/pi-coding-agent",
             version: "0.84.1",

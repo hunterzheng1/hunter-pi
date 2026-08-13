@@ -57,10 +57,11 @@ Before the first model request, Hunter Pi must:
 - enumerate the data categories that may be sent and whether complete files can enter context;
 - reference the provider/account retention and training controls while stating that Hunter Pi cannot enforce an external provider's policy; show retention/training as `NOT_PROVEN` and account controls as `PROVIDER_OWNED` unless exact account-bound proof exists;
 - show Hunter-controlled network and telemetry settings, including any update, crash-report, or usage-analytics endpoints;
-- obtain an explicit, versioned acknowledgement and allow cancellation as `BLOCKED`;
+- show a non-blocking first-run privacy notice for the documented default Provider, exact model, destination, permission profile, and data categories; an interactive Provider request occurs only after the user submits a prompt;
+- require explicit review for custom Provider/endpoint/destination changes, and retain scoped authorization for Managed Change, Pilot, other automation, plugins, remote writes, publication, and destructive actions;
 - keep credentials, complete private prompts, and raw transmitted content out of normal Evidence.
 
-Changing provider, endpoint category, exact resolved origin, retention/training status, or material disclosure version requires acknowledgement again. Doctor and every launch freshly resolve the current Provider destination offline; drift blocks disclosure readiness instead of relying only on stored configuration. Network integration tests use a recording fake endpoint and prove destination allowlisting, cancellation before send, payload-category accounting, and zero credential leakage. Any real provider test is separately authorized and records metadata only.
+Hunter Pi may retain a versioned local activation record for audit and migration, but the internal record is not exposed as a mandatory `setup` ceremony for the documented defaults. Changing provider, endpoint category, or exact resolved origin requires explicit configuration review. Doctor and every launch freshly resolve the current Provider destination offline; drift blocks readiness instead of relying only on stored configuration. Network integration tests use a recording fake endpoint and prove destination allowlisting, cancellation before send, payload-category accounting, and zero credential leakage. Any real provider test is separately authorized and records metadata only.
 
 ## Permission profiles
 

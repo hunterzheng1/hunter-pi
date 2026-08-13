@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import { z } from "zod";
+
 import { createCanonicalTemporaryDirectory } from "./temporary-directory.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
@@ -136,8 +138,36 @@ try {
   }
   const zipBytes = await readFile(zipPath);
   if (zipBytes.byteLength === 0) throw new Error("Windows release ZIP is empty");
+  const candidate = z
+    .looseObject({
+      qualification: z.looseObject({
+        status: z.enum(["PASS", "NOT_PROVEN", "BLOCKED", "FAIL"]),
+        checks: z.array(z.looseObject({ evidenceIds: z.array(z.string()) })).min(1),
+      }),
+    })
+    .parse(JSON.parse(await readFile(join(stage, "portable-release-candidate.json"), "utf8")));
+  const updateAssets = [];
+  if (candidate.qualification.status === "PASS") {
+    const evidenceId = candidate.qualification.checks[0]?.evidenceIds[0];
+    const evidenceMatch = /^evidence_main-ci-(\d+)-portable$/u.exec(evidenceId ?? "");
+    if (evidenceMatch?.[1] === undefined) {
+      throw new Error("qualified release candidate does not bind one hosted Evidence receipt");
+    }
+    updateAssets.push(
+      cp(
+        join(stage, "portable-release-candidate.json"),
+        join(outputRoot, "portable-release-candidate.json"),
+      ),
+      cp(join(stage, "update.bundle.tgz"), join(outputRoot, "update.bundle.tgz")),
+      cp(
+        join(stage, ".hpi-update", "qualification-evidence", `${evidenceMatch[1]}.json`),
+        join(outputRoot, "windows-portable-qualification-evidence.json"),
+      ),
+    );
+  }
   await Promise.all([
     cp(installerSource, join(outputRoot, "install.ps1")),
+    ...updateAssets,
     writeFile(
       join(outputRoot, "hpi-windows-x64.zip.sha256"),
       `${sha256(zipBytes)}  hpi-windows-x64.zip\n`,

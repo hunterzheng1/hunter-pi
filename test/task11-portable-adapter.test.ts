@@ -168,6 +168,37 @@ afterEach(async () => {
 });
 
 describe("Task 11 Windows portable release adapter", () => {
+  it("retains only Evidence that binds the exact qualified candidate and artifact", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-update-evidence-",
+    );
+    roots.push(root);
+    const fixture = portableCandidate("release_task11-portable-evidence");
+    const portableRoot = join(root, "portable");
+    await Promise.all([
+      mkdir(join(portableRoot, "versions"), { recursive: true }),
+      mkdir(join(portableRoot, ".hpi-update", "migrations"), { recursive: true }),
+      mkdir(join(portableRoot, ".hpi-update", "qualification-evidence"), { recursive: true }),
+    ]);
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+
+    await expect(
+      adapter.retainQualificationEvidence(fixture.candidate, fixture.evidence, fixture.artifact),
+    ).resolves.toBeUndefined();
+    await expect(
+      adapter.retainQualificationEvidence(
+        fixture.candidate,
+        { ...fixture.evidence, sourceCommit: "b".repeat(40) },
+        fixture.artifact,
+      ),
+    ).rejects.toThrow(/bind the exact release Evidence/iu);
+  });
+
   it("atomically activates version directories, persists migration state, and rolls back", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task11-portable-");
     roots.push(root);

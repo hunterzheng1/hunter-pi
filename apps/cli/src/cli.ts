@@ -123,9 +123,11 @@ import {
   type ReleaseCheckResult,
   type UpdateManager,
   type UpdateReceipt,
+  type WindowsPortableQualificationEvidence,
 } from "@hunter-pi/updater";
 
 import { getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
+import { discoverGithubUpdate, HpiUpdateDiscoveryError } from "./update-source.js";
 
 export interface HpiCliIo {
   writeStdout(text: string): void;
@@ -173,8 +175,25 @@ export interface HpiCliDependencies {
   readonly createUpdateManager?: (options: {
     readonly paths: HpiPaths;
     readonly artifactPath?: string;
+    readonly artifact?: Uint8Array;
+    readonly candidate?: ReleaseCandidate;
+    readonly qualificationEvidence?: WindowsPortableQualificationEvidence;
   }) => Promise<UpdateManager | undefined>;
+  readonly discoverUpdate?: (options: {
+    readonly currentVersion: string;
+    readonly channel: HpiVersionInfo["updateChannel"];
+  }) => Promise<AutomaticUpdateDiscovery>;
 }
+
+export type AutomaticUpdateDiscovery =
+  | { readonly status: "CURRENT"; readonly currentVersion: string }
+  | {
+      readonly status: "AVAILABLE";
+      readonly candidate: ReleaseCandidate;
+      readonly artifact: Uint8Array;
+      readonly qualificationEvidence: WindowsPortableQualificationEvidence;
+      readonly releasePage: string;
+    };
 
 const pilotActivePointerSchema = z.strictObject({
   schemaVersion: z.literal("hpi-portable-active.v1"),
@@ -687,13 +706,20 @@ function defaultDependencies(): HpiCliDependencies {
     readTextFile: (path) => readFile(path, "utf8"),
     readBinaryFile: (path) => readFile(path),
     createUpdateManager: (options) => createDefaultUpdateManager(dependencies, options),
+    discoverUpdate: (options) => discoverGithubUpdate(options),
   };
   return dependencies;
 }
 
-export function createDefaultUpdateManager(
+export async function createDefaultUpdateManager(
   dependencies: Pick<HpiCliDependencies, "environment" | "platform" | "now" | "readBinaryFile">,
-  options: { readonly paths: HpiPaths; readonly artifactPath?: string },
+  options: {
+    readonly paths: HpiPaths;
+    readonly artifactPath?: string;
+    readonly artifact?: Uint8Array;
+    readonly candidate?: ReleaseCandidate;
+    readonly qualificationEvidence?: WindowsPortableQualificationEvidence;
+  },
 ): Promise<UpdateManager | undefined> {
   const portableRoot = dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
   if (
@@ -702,7 +728,7 @@ export function createDefaultUpdateManager(
     portableRoot === undefined ||
     !isAbsolute(portableRoot)
   ) {
-    return Promise.resolve(undefined);
+    return undefined;
   }
   const adapter = new FileWindowsPortableReleaseAdapter({
     installationRoot: resolve(portableRoot),
@@ -710,25 +736,35 @@ export function createDefaultUpdateManager(
     targetPlatform: "win32-x64",
     now: dependencies.now,
   });
-  return Promise.resolve(
-    new FileUpdateManager({
-      stateRoot: windowsPortableUpdateManagerStateRoot(portableRoot),
-      channel: "PREVIEW",
-      adapter,
-      artifacts: {
-        read: async () => {
-          if (options.artifactPath === undefined) {
-            throw new Error("an update artifact file is required for this operation");
-          }
-          return dependencies.readBinaryFile === undefined
-            ? await readFile(options.artifactPath)
-            : await dependencies.readBinaryFile(options.artifactPath);
-        },
+  if (
+    options.artifact !== undefined &&
+    options.candidate !== undefined &&
+    options.qualificationEvidence !== undefined
+  ) {
+    await adapter.retainQualificationEvidence(
+      options.candidate,
+      options.qualificationEvidence,
+      options.artifact,
+    );
+  }
+  return new FileUpdateManager({
+    stateRoot: windowsPortableUpdateManagerStateRoot(portableRoot),
+    channel: "PREVIEW",
+    adapter,
+    artifacts: {
+      read: async () => {
+        if (options.artifact !== undefined) return options.artifact;
+        if (options.artifactPath === undefined) {
+          throw new Error("an update artifact file is required for this operation");
+        }
+        return dependencies.readBinaryFile === undefined
+          ? await readFile(options.artifactPath)
+          : await dependencies.readBinaryFile(options.artifactPath);
       },
-      qualificationVerifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
-      now: dependencies.now,
-    }),
-  );
+    },
+    qualificationVerifierFingerprint: HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
+    now: dependencies.now,
+  });
 }
 
 function line(io: HpiCliIo, text: string): void {
@@ -768,7 +804,11 @@ function updateCandidatePresentation(candidate: ReleaseCandidate): Record<string
 function updateStatusResult(
   status: "NOT_CONFIGURED" | "EMPTY" | "READY",
   reason?: string,
-): Record<string, unknown> {
+): {
+  readonly schemaVersion: "hpi-update-status.v1";
+  readonly status: "NOT_CONFIGURED" | "EMPTY" | "READY";
+  readonly reason?: string;
+} {
   return {
     schemaVersion: "hpi-update-status.v1",
     status,
@@ -800,6 +840,89 @@ async function updateCommand(
   paths: HpiPaths,
 ): Promise<number> {
   const subcommand = arguments_[0];
+  if (subcommand === undefined) {
+    if (dependencies.discoverUpdate === undefined) {
+      line(dependencies.io, "Update blocked: the configured release channel cannot be queried.");
+      return 2;
+    }
+    const version = await (dependencies.getVersionInfo ?? getHpiVersionInfo)();
+    let discovery: AutomaticUpdateDiscovery;
+    try {
+      discovery = await dependencies.discoverUpdate({
+        currentVersion: version.productVersion,
+        channel: version.updateChannel,
+      });
+    } catch (error) {
+      if (error instanceof HpiUpdateDiscoveryError) {
+        errorLine(
+          dependencies.io,
+          `UpdateStatus=BLOCKED Stage=${error.stage}${error.host === undefined ? "" : ` Host=${error.host}`} NextAction=${error.message}`,
+        );
+      } else {
+        errorLine(
+          dependencies.io,
+          "UpdateStatus=BLOCKED Stage=DISCOVERY NextAction=Check network access and rerun `hpi update`.",
+        );
+      }
+      return 2;
+    }
+    if (discovery.status === "CURRENT") {
+      line(
+        dependencies.io,
+        `Hunter Pi ${discovery.currentVersion} is already the latest ${version.updateChannel} release.`,
+      );
+      return 0;
+    }
+    const manager = await dependencies.createUpdateManager?.({
+      paths,
+      artifact: discovery.artifact,
+      candidate: discovery.candidate,
+      qualificationEvidence: discovery.qualificationEvidence,
+    });
+    if (manager === undefined) {
+      line(
+        dependencies.io,
+        "Update blocked: a Windows x64 portable installation is required for automatic updates.",
+      );
+      return 2;
+    }
+    const check = await manager.check(discovery.candidate);
+    if (check.status !== "AVAILABLE") {
+      line(dependencies.io, `Update blocked: ${check.reason ?? "candidate rejected"}`);
+      return 2;
+    }
+    line(
+      dependencies.io,
+      `Updating Hunter Pi ${version.productVersion} → ${discovery.candidate.productVersion} (${version.updateChannel})`,
+    );
+    line(dependencies.io, `Source: ${discovery.releasePage}`);
+    line(dependencies.io, "Verification: qualified candidate and artifact digest passed");
+    const receipt = await manager.apply({
+      schemaVersion: "hpi-update-apply.v1",
+      operationId: operationIdSchema.parse(`op_update-apply-${randomUUID()}`),
+      operationFingerprint: updateOperationFingerprint("APPLY", discovery.candidate),
+      candidate: discovery.candidate,
+      observedAt: dependencies.now(),
+    });
+    if (updateOutcomeExitCode(receipt.outcome) !== 0) {
+      const previousRestored =
+        receipt.previousReleaseId !== undefined &&
+        receipt.activeReleaseId === receipt.previousReleaseId;
+      line(dependencies.io, `Update failed: ${receipt.outcome}.`);
+      line(
+        dependencies.io,
+        previousRestored
+          ? "Recovery: the previous release is active."
+          : "Recovery: active release is not proven; rerun `hpi update status` to reconcile.",
+      );
+      return 2;
+    }
+    line(
+      dependencies.io,
+      `Update complete: ${version.productVersion} → ${discovery.candidate.productVersion}`,
+    );
+    return 0;
+  }
   const artifactPath =
     subcommand === "check" || subcommand === "apply"
       ? optionValue(arguments_.slice(1), "--artifact")
@@ -826,15 +949,19 @@ async function updateCommand(
       const reconciled = await manager.reconcile();
       const current = await manager.current();
       const history = await manager.history();
-      line(
-        dependencies.io,
-        JSON.stringify({
-          ...updateStatusResult(current.releaseId === undefined ? "EMPTY" : "READY"),
-          currentReleaseId: current.releaseId ?? null,
-          history: history.map(updateCandidatePresentation),
-          reconciled,
-        }),
-      );
+      const report = {
+        ...updateStatusResult(current.releaseId === undefined ? "EMPTY" : "READY"),
+        currentReleaseId: current.releaseId ?? null,
+        history: history.map(updateCandidatePresentation),
+        reconciled,
+      };
+      if (arguments_.includes("--json")) {
+        line(dependencies.io, JSON.stringify(report));
+      } else {
+        line(dependencies.io, `Hunter Pi Update: ${report.status}`);
+        line(dependencies.io, `Current: ${report.currentReleaseId ?? "NONE"}`);
+        line(dependencies.io, `History: ${String(report.history.length)}`);
+      }
       return 0;
     }
 
@@ -1198,9 +1325,9 @@ function assertChangeOptions(arguments_: readonly string[]): void {
 
 function assertUpdateOptions(arguments_: readonly string[]): void {
   const subcommand = arguments_[0];
+  if (subcommand === undefined) return;
   if (subcommand === "status") {
     assertUniqueFlags(arguments_.slice(1), new Set(["--json"]));
-    if (arguments_.length !== 2 || arguments_[1] !== "--json") throw new HpiCliUsageError();
     return;
   }
   if (subcommand === "check" || subcommand === "apply") {
@@ -1256,7 +1383,7 @@ function validateCliArguments(arguments_: readonly string[]): void {
     }
     return;
   }
-  if (command === "setup") {
+  if (command === "setup" || command === "config") {
     assertValueOptions(
       arguments_.slice(1),
       new Set([
@@ -1347,7 +1474,7 @@ function validateCliArguments(arguments_: readonly string[]): void {
     assertUniqueFlags(arguments_.slice(1), new Set(["--json"]));
     return;
   }
-  if (command === "login" || command === "help") {
+  if (command === "login" || command === "help" || command === "privacy") {
     if (arguments_.length !== 1) throw new HpiCliUsageError();
     return;
   }
@@ -1456,6 +1583,7 @@ function printDisclosure(
 ): void {
   line(io, "Hunter Pi — Provider data disclosure");
   line(io, `Provider=${configuration.provider.id}`);
+  line(io, `Model=${configuration.provider.selectedModel ?? "NOT_SELECTED"}`);
   line(io, `EndpointCategory=${configuration.provider.endpointCategory}`);
   line(io, `Destination=${resolvedDestinationOrigin}`);
   line(io, `PolicyReference=${configuration.provider.policyReference}`);
@@ -1463,6 +1591,7 @@ function printDisclosure(
   line(io, `ExternalRetention=${configuration.disclosure.externalRetention}`);
   line(io, `TrainingUse=${configuration.disclosure.trainingUse}`);
   line(io, `AccountControls=${configuration.disclosure.accountControls}`);
+  line(io, `Permission=${configuration.permissionProfile}`);
   line(io, "Complete repository files may enter model context when selected by the Agent.");
   line(
     io,
@@ -1474,6 +1603,67 @@ function printDisclosure(
   );
 }
 
+function printPrivacyNotice(
+  io: HpiCliIo,
+  configuration: HpiConfiguration,
+  resolvedDestinationOrigin: string,
+): void {
+  line(io, "Hunter Pi — Provider data and privacy");
+  line(io, `Provider: ${configuration.provider.id}`);
+  line(io, `Model: ${configuration.provider.selectedModel ?? "NOT_SELECTED"}`);
+  line(io, `Destination: ${resolvedDestinationOrigin}`);
+  line(io, `Permission: ${configuration.permissionProfile}`);
+  line(io, `May send: ${configuration.disclosure.categories.join(", ")}`);
+  line(io, "Selected repository files and tool results may enter model context.");
+  line(io, "Hunter telemetry: disabled. Provider policy and account controls still apply.");
+  line(io, "Details: run `hpi privacy` at any time.");
+}
+
+async function validateConfigurationDestination(
+  configuration: HpiConfiguration,
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+): Promise<PiProviderDestination> {
+  const resolvedDestination = await resolveLaunchDestination(configuration, dependencies, paths);
+  const matches =
+    configuration.provider.endpointCategory === "PROVIDER_MANAGED"
+      ? resolvedDestination.pristineOrigin !== null &&
+        resolvedDestination.configuredOrigin === resolvedDestination.pristineOrigin
+      : resolvedDestination.configuredOrigin === configuration.provider.destinationOrigin;
+  if (!matches) {
+    throw new HpiLaunchBlockedError(
+      "PROVIDER_DESTINATION_NOT_ALLOWED",
+      "The resolved Provider origin does not match the declared endpoint category/destination.",
+    );
+  }
+  return resolvedDestination;
+}
+
+async function initializeDefaultConfiguration(
+  dependencies: HpiCliDependencies,
+  paths: HpiPaths,
+): Promise<HpiConfiguration> {
+  const defaults = createDefaultHpiConfiguration();
+  await prepareRuntimeDirectories(paths);
+  const destination = await validateConfigurationDestination(defaults, dependencies, paths);
+  printPrivacyNotice(dependencies.io, defaults, destination.configuredOrigin);
+  const acknowledged = acknowledgeProviderDisclosure(defaults, {
+    acceptedAt: dependencies.now(),
+    resolvedDestinationOrigin: destination.configuredOrigin,
+  });
+  const initialized = { ...acknowledged, setupCompletedAt: dependencies.now() };
+  await saveHpiConfiguration(paths, initialized);
+  return initialized;
+}
+
+async function privacyCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
+  const configuration = (await loadHpiConfiguration(paths)) ?? createDefaultHpiConfiguration();
+  const destination = await validateConfigurationDestination(configuration, dependencies, paths);
+  printPrivacyNotice(dependencies.io, configuration, destination.configuredOrigin);
+  printDisclosure(dependencies.io, configuration, destination.configuredOrigin);
+  return 0;
+}
+
 async function setupCommand(
   arguments_: readonly string[],
   dependencies: HpiCliDependencies,
@@ -1482,18 +1672,7 @@ async function setupCommand(
   const current = await loadHpiConfiguration(paths);
   const proposed = configuredForSetup(arguments_, current);
   await prepareRuntimeDirectories(paths);
-  const resolvedDestination = await resolveLaunchDestination(proposed, dependencies, paths);
-  const destinationClassMatches =
-    proposed.provider.endpointCategory === "PROVIDER_MANAGED"
-      ? resolvedDestination.pristineOrigin !== null &&
-        resolvedDestination.configuredOrigin === resolvedDestination.pristineOrigin
-      : resolvedDestination.configuredOrigin === proposed.provider.destinationOrigin;
-  if (!destinationClassMatches) {
-    throw new HpiLaunchBlockedError(
-      "PROVIDER_DESTINATION_NOT_ALLOWED",
-      "The resolved Provider origin does not match the declared endpoint category/destination.",
-    );
-  }
+  const resolvedDestination = await validateConfigurationDestination(proposed, dependencies, paths);
   printDisclosure(dependencies.io, proposed, resolvedDestination.configuredOrigin);
   const accepted = await dependencies.io.confirm(
     `Acknowledge disclosure ${proposed.disclosure.version} for ${proposed.provider.id}?`,
@@ -1501,7 +1680,7 @@ async function setupCommand(
   if (!accepted) {
     errorLine(
       dependencies.io,
-      "SetupStatus=BLOCKED NextAction=Run `hpi setup` when you are ready to review and accept the disclosure.",
+      "SetupStatus=BLOCKED NextAction=Run `hpi config` when you are ready to save custom privacy settings.",
     );
     return 2;
   }
@@ -1527,10 +1706,30 @@ function printDoctor(report: HpiDoctorReport, io: HpiCliIo, json: boolean): void
     return;
   }
   line(io, `Hunter Pi Doctor: ${report.overallStatus}`);
-  for (const check of report.checks) {
-    line(io, `${check.id}: ${check.status} — ${check.summary}`);
-    if (check.nextAction !== null) {
-      line(io, `  Next: ${check.nextAction}`);
+  const groups = [
+    {
+      title: "Needs attention",
+      checks: report.checks.filter((check) => ["BLOCKED", "INCOMPATIBLE"].includes(check.status)),
+    },
+    {
+      title: "Not yet proven",
+      checks: report.checks.filter((check) => check.status === "NOT_PROVEN"),
+    },
+    {
+      title: "Detected",
+      checks: report.checks.filter((check) => check.status === "DETECTED"),
+    },
+  ];
+  const printedActions = new Set<string>();
+  for (const group of groups) {
+    if (group.checks.length === 0) continue;
+    line(io, `${group.title}:`);
+    for (const check of group.checks) {
+      line(io, `  ${check.id}: ${check.status} — ${check.summary}`);
+      if (check.nextAction !== null && !printedActions.has(check.nextAction)) {
+        line(io, `    Next: ${check.nextAction}`);
+        printedActions.add(check.nextAction);
+      }
     }
   }
 }
@@ -1618,15 +1817,21 @@ async function resolveLaunchDestination(
 }
 
 async function loginCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
-  const configuration = await loadHpiConfiguration(paths);
-  if (configuration?.setupCompletedAt == null) {
-    errorLine(dependencies.io, "LoginStatus=BLOCKED NextAction=Run `hpi setup` first.");
+  let configuration = await loadHpiConfiguration(paths);
+  if (configuration === null) {
+    line(dependencies.io, "Hunter Pi — First Run");
+    configuration = await initializeDefaultConfiguration(dependencies, paths);
+  } else if (configuration.setupCompletedAt == null) {
+    errorLine(
+      dependencies.io,
+      "LoginStatus=BLOCKED NextAction=Run `hpi config` to repair configuration.",
+    );
     return 2;
   }
   if (providerDisclosureRequired(configuration)) {
     errorLine(
       dependencies.io,
-      "LoginStatus=BLOCKED NextAction=Run `hpi setup` and acknowledge the current disclosure.",
+      "LoginStatus=BLOCKED NextAction=Run `hpi config` and review the current privacy settings.",
     );
     return 2;
   }
@@ -1719,7 +1924,7 @@ async function managedFixtureCommand(
   if (configuration?.setupCompletedAt == null) {
     errorLine(
       dependencies.io,
-      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi setup` first.",
+      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi` first.",
     );
     return 2;
   }
@@ -1834,7 +2039,7 @@ async function realChangeCommand(
   if (configuration?.setupCompletedAt == null) {
     errorLine(
       dependencies.io,
-      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi setup` first.",
+      "ManagedChangeStatus=BLOCKED Reason=SETUP_REQUIRED NextAction=Run `hpi` first.",
     );
     return 2;
   }
@@ -1848,7 +2053,7 @@ async function realChangeCommand(
   if (providerDisclosureRequired(configuration)) {
     errorLine(
       dependencies.io,
-      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_DISCLOSURE_REQUIRED NextAction=Run `hpi setup` and acknowledge the current Provider disclosure.",
+      "ManagedChangeStatus=BLOCKED Reason=PROVIDER_DISCLOSURE_REQUIRED NextAction=Run `hpi config` and review the current privacy settings.",
     );
     return 2;
   }
@@ -2203,12 +2408,7 @@ async function realChangeCommand(
 
 async function firstRunCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
   line(dependencies.io, "Hunter Pi — First Run");
-  line(
-    dependencies.io,
-    "Step 1/7 Environment — checking Node, fixed Pi Engine, Git fixture, and Core.",
-  );
   const initialDoctor = await createDoctorReport(dependencies, paths);
-  printDoctor(initialDoctor, dependencies.io, false);
   const requiredEnvironmentChecks = new Set([
     "node",
     "git_fixture",
@@ -2223,55 +2423,18 @@ async function firstRunCommand(dependencies: HpiCliDependencies, paths: HpiPaths
         !(check.id === "core_extension" && check.status === "NOT_PROVEN"),
     )
   ) {
+    printDoctor(initialDoctor, dependencies.io, false);
     errorLine(
       dependencies.io,
-      "FirstRunStatus=BLOCKED NextAction=Repair the environment check above and rerun `hpi`.",
+      "FirstRunStatus=BLOCKED NextAction=Repair the reported environment check and rerun `hpi`.",
     );
     return 2;
   }
-
-  const defaults = createDefaultHpiConfiguration();
-  line(
-    dependencies.io,
-    `Step 2/7 Provider — default ${defaults.provider.id}/${defaults.provider.selectedModel ?? "NOT_SELECTED"}; use explicit \`hpi setup\` options to choose another supported target.`,
-  );
-  line(dependencies.io, "Step 3/7 Data disclosure — explicit acknowledgement is required.");
-  const setupExit = await setupCommand([], dependencies, paths);
-  if (setupExit !== 0) return setupExit;
-  line(dependencies.io, "Step 4/7 Authentication — Pi Engine owns the selected Provider flow.");
-  const openLogin = await dependencies.io.confirm(
-    "Open the selected Provider login TUI now? No model request will be sent by the wizard.",
-  );
-  if (!openLogin) {
-    errorLine(
-      dependencies.io,
-      "FirstRunStatus=BLOCKED Stage=AUTHENTICATION NextAction=Run `hpi login` when ready.",
-    );
-    return 2;
-  }
+  await initializeDefaultConfiguration(dependencies, paths);
   const loginExit = await loginCommand(dependencies, paths);
   if (loginExit !== 0) return loginExit;
-
-  line(
-    dependencies.io,
-    `Step 5/7 Defaults — Model=${defaults.provider.selectedModel ?? "NOT_SELECTED"} Permission=${defaults.permissionProfile} Thinking=PI_DEFAULT_NOT_CLAIMED`,
-  );
-  line(
-    dependencies.io,
-    "Step 6/7 Plugins — exact Pi Packages are metadata-qualified; executable extensions remain quarantined unless separately verified.",
-  );
-
-  line(
-    dependencies.io,
-    "Step 7/7 Verification — rerunning Doctor after setup and Provider readiness metadata.",
-  );
-  const finalDoctor = await createDoctorReport(dependencies, paths);
-  printDoctor(finalDoctor, dependencies.io, false);
-  line(
-    dependencies.io,
-    "FirstRunStatus=CONFIGURED InteractiveTui=NOT_PROVEN NextAction=Run `hpi smoke tui`, then run `hpi` again.",
-  );
-  return 0;
+  line(dependencies.io, "First-run configuration and Provider login are ready.");
+  return quickSessionCommand([], dependencies, paths);
 }
 
 async function pluginCommand(
@@ -2282,7 +2445,7 @@ async function pluginCommand(
 ): Promise<number> {
   const configuration = await loadHpiConfiguration(paths);
   if (configuration === null) {
-    errorLine(dependencies.io, "PluginStatus=BLOCKED NextAction=Run `hpi setup` first.");
+    errorLine(dependencies.io, "PluginStatus=BLOCKED NextAction=Run `hpi` first.");
     return 2;
   }
   await prepareHpiRuntimeDirectories(paths);
@@ -2675,7 +2838,7 @@ async function quickSessionCommand(
 async function tuiSmokeCommand(dependencies: HpiCliDependencies, paths: HpiPaths): Promise<number> {
   const configuration = await loadHpiConfiguration(paths);
   if (configuration?.setupCompletedAt == null) {
-    errorLine(dependencies.io, "TuiSmoke=BLOCKED NextAction=Run `hpi setup` first.");
+    errorLine(dependencies.io, "TuiSmoke=BLOCKED NextAction=Run `hpi` first.");
     return 2;
   }
   const repository = await dependencies.inspectRepository(dependencies.cwd);
@@ -2762,13 +2925,15 @@ function printHelp(io: HpiCliIo): void {
   line(io, "Usage: hpi [--safe-mode] [--continue|--resume]");
   line(
     io,
-    "       hpi setup [--provider id --model exact-id --policy-reference URL --endpoint-category CATEGORY --destination-origin ORIGIN --permission safe|balanced|full-access]",
+    "       hpi config [--provider id --model exact-id --policy-reference URL --endpoint-category CATEGORY --destination-origin ORIGIN --permission safe|balanced|full-access]",
   );
-  line(io, "       hpi login | doctor [--json] | version --json");
-  line(io, "       hpi update status --json");
+  line(io, "       hpi privacy | login");
+  line(io, "       hpi doctor [--json] | version [--json]");
+  line(io, "       hpi update | update status [--json]");
   line(io, "       hpi update check --candidate <file> --artifact <file> --json");
   line(io, "       hpi update apply --candidate <file> --artifact <file> --json");
   line(io, "       hpi update rollback <release-id> --json");
+  line(io, "       --json selects machine output where listed; it does not grant authority");
   line(io, "       hpi smoke tui");
   line(
     io,
@@ -3118,7 +3283,7 @@ async function pilotCaptureCommand(
         return pilotCaptureBlocked(
           dependencies,
           "SETUP_REQUIRED",
-          "Run `hpi setup` before executing a pilot Quick task.",
+          "Run `hpi config` before executing a pilot Quick task.",
         );
       }
       if (providerDisclosureRequired(configuration)) {
@@ -3281,7 +3446,7 @@ async function pilotCaptureCommand(
         return pilotCaptureBlocked(
           dependencies,
           "SETUP_REQUIRED",
-          "Run `hpi setup` with one exact Provider model before the raw comparator.",
+          "Run `hpi config` with one exact Provider model before the raw comparator.",
         );
       }
       if (providerDisclosureRequired(configuration)) {
@@ -3457,10 +3622,15 @@ export async function runHpiCli(
     validateCliArguments(arguments_);
     const command = arguments_[0];
     if (command === "version") {
-      line(
-        dependencies.io,
-        JSON.stringify(await (dependencies.getVersionInfo ?? getHpiVersionInfo)()),
-      );
+      const version = await (dependencies.getVersionInfo ?? getHpiVersionInfo)();
+      if (arguments_.includes("--json")) {
+        line(dependencies.io, JSON.stringify(version));
+      } else {
+        line(dependencies.io, `${version.product} ${version.productVersion}`);
+        line(dependencies.io, `Engine: Pi ${version.engine.version}`);
+        line(dependencies.io, `Channel: ${version.updateChannel}`);
+        line(dependencies.io, `Source: ${version.sourceCommit} (${version.sourceState})`);
+      }
       return 0;
     }
     if (command === "pilot" && arguments_[1] === "runtime-sample") {
@@ -3503,8 +3673,11 @@ export async function runHpiCli(
       env: dependencies.environment,
       homeDirectory: dependencies.homeDirectory,
     });
-    if (command === "setup") {
+    if (command === "setup" || command === "config") {
       return await setupCommand(arguments_.slice(1), dependencies, paths);
+    }
+    if (command === "privacy") {
+      return await privacyCommand(dependencies, paths);
     }
     if (command === "doctor") {
       return await doctorCommand(arguments_.slice(1), dependencies, paths);
@@ -3537,9 +3710,8 @@ export async function runHpiCli(
     if (error instanceof HpiCliUsageError) {
       errorLine(
         dependencies.io,
-        "InvalidArguments=BLOCKED NextAction=Use only documented hpi commands and options.",
+        "InvalidArguments=BLOCKED NextAction=Run `hpi --help` and use only documented commands and options.",
       );
-      printHelp(dependencies.io);
       return 2;
     }
     if (error instanceof HpiLaunchBlockedError) {

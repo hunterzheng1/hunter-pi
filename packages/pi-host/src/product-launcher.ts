@@ -177,13 +177,13 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
   if (configuration.setupCompletedAt === null) {
     throw new HpiLaunchBlockedError(
       "CONFIGURATION_REQUIRED",
-      "Run `hpi setup` before starting Pi.",
+      "Run `hpi` to initialize the documented defaults before starting Pi.",
     );
   }
   if (providerDisclosureRequired(configuration)) {
     throw new HpiLaunchBlockedError(
       "DISCLOSURE_REQUIRED",
-      "Run `hpi setup` and acknowledge the current Provider data disclosure.",
+      "Run `hpi config` and review the current privacy settings.",
     );
   }
   const resolvedDestination = options.resolvedProviderDestination;
@@ -191,7 +191,7 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
   if (destinationDisposition === "DISCLOSURE_REQUIRED") {
     throw new HpiLaunchBlockedError(
       "DISCLOSURE_REQUIRED",
-      "The resolved Provider origin changed after acknowledgement; rerun `hpi setup`.",
+      "The resolved Provider origin changed; rerun `hpi config` and review the destination.",
     );
   }
   if (destinationDisposition === "DESTINATION_NOT_ALLOWED" || resolvedDestination === undefined) {
@@ -227,7 +227,7 @@ export function createPiLaunchPlan(options: CreatePiLaunchPlanOptions): PiLaunch
   if (configuration.provider.selectedModel === null) {
     throw new HpiLaunchBlockedError(
       "MODEL_SELECTION_REQUIRED",
-      "Run `hpi setup --model <exact-model-id>` before starting Pi.",
+      "Run `hpi config --model <exact-model-id>` before starting Pi.",
     );
   }
 
@@ -326,13 +326,13 @@ export function createRawPiLaunchPlan(options: CreateRawPiLaunchPlanOptions): Pi
   if (configuration.setupCompletedAt === null) {
     throw new HpiLaunchBlockedError(
       "CONFIGURATION_REQUIRED",
-      "Run `hpi setup` before starting the raw Pi comparator.",
+      "Run `hpi config` before starting the raw Pi comparator.",
     );
   }
   if (providerDisclosureRequired(configuration)) {
     throw new HpiLaunchBlockedError(
       "DISCLOSURE_REQUIRED",
-      "Run `hpi setup` and acknowledge the current Provider data disclosure.",
+      "Run `hpi config` and review the current privacy settings.",
     );
   }
   const destinationDisposition = classifyPiProviderDestination(
@@ -342,7 +342,7 @@ export function createRawPiLaunchPlan(options: CreateRawPiLaunchPlanOptions): Pi
   if (destinationDisposition === "DISCLOSURE_REQUIRED") {
     throw new HpiLaunchBlockedError(
       "DISCLOSURE_REQUIRED",
-      "The resolved Provider origin changed after acknowledgement; rerun `hpi setup`.",
+      "The resolved Provider origin changed; rerun `hpi config` and review the destination.",
     );
   }
   if (
@@ -371,7 +371,7 @@ export function createRawPiLaunchPlan(options: CreateRawPiLaunchPlanOptions): Pi
   if (configuration.provider.selectedModel === null) {
     throw new HpiLaunchBlockedError(
       "MODEL_SELECTION_REQUIRED",
-      "Run `hpi setup --model <exact-model-id>` before starting Pi.",
+      "Run `hpi config --model <exact-model-id>` before starting Pi.",
     );
   }
   const piCliPath = options.piCliPath ?? resolveBundledPiCliPath();

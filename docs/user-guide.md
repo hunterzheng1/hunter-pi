@@ -2,7 +2,7 @@
 
 本手册面向在 Windows x64 上使用 Hunter Pi unsigned developer-preview 的个人开发者。内容覆盖安装、首次配置、Quick Session、Managed Change、插件、更新、故障排查和安全边界。
 
-Pi 0.83 / Hunter Pi `0.1.0-dev.0` 已在预注册的真实 Windows pilot 中得到历史 `GO`。当前 `0.1.0-dev.1` 已升级到 Pi 0.84.1，并完成 ZIP、PowerShell 安装器、公开 prerelease 和发布后隔离安装验证。Provider-neutral 安装、更新、回滚和 TUI 启动可用；Pi 0.84.1 的真实 Provider 与日用 Evidence 仍为 `NOT_PROVEN`。两个版本都不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 已在预注册的真实 Windows pilot 中得到历史 `GO`。`0.1.0-dev.1` 已升级到 Pi 0.84.1，并完成 ZIP、PowerShell 安装器、公开 prerelease 和发布后隔离安装验证。当前源码版本 `0.1.0-dev.2` 改进首次运行、人工输出、安装诊断和自动更新；发布后的新实机验收仍为 `NOT_PROVEN`。所有版本都不是签名 Stable 版本。重要项目必须有可恢复的 Git 远端备份，并由开发者最终审查和提交变更。
 
 ## 1. 使用前确认
 
@@ -21,13 +21,13 @@ Ubuntu 是必需 CI 平台，但当前没有通过同等级日用 pilot。其他
 1. 将重要提交推送到远端备份。
 2. 确认当前分支正确。
 3. 确认工作树干净。
-4. 确认 `hpi doctor --json` 没有阻断状态。
+4. 确认 `hpi doctor` 没有阻断状态。
 5. 检查当前启用插件；不确定时使用 Safe Mode。
 
 ```powershell
 git branch --show-current
 git status --short
-hpi doctor --json
+hpi doctor
 hpi plugin doctor
 ```
 
@@ -37,19 +37,15 @@ hpi plugin doctor
 
 ### 2.1 从固定 GitHub 入口安装
 
-Windows x64 用户不需要预装 Node.js、npm 或 Pi。先下载并检查仓库维护的唯一安装脚本，再安装精确预览版本：
+Windows x64 用户不需要预装 Node.js、npm 或 Pi。发布 `v0.1.0-dev.2` 后，普通安装只需复制这一行：
 
 ```powershell
-Invoke-WebRequest `
-  https://raw.githubusercontent.com/hunterzheng1/hunter-pi/main/scripts/install.ps1 `
-  -OutFile .\install.ps1
-
-powershell -ExecutionPolicy Bypass -File .\install.ps1 `
-  -Source Remote `
-  -ReleaseTag v0.1.0-dev.1
+$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "aac477a17d6525704be0e69151403dd3152cf584975d91031cd418005fa69103") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
 ```
 
 脚本从该精确 GitHub Release 下载 `hpi-windows-x64.zip` 和 `hpi-windows-x64.zip.sha256`，先验证 SHA-256，再安装。默认根目录为 `%LOCALAPPDATA%\HunterPi`；稳定命令位于 `%LOCALAPPDATA%\HunterPi\bin\hpi.cmd`，该 `bin` 目录会幂等加入用户 `PATH`。
+
+希望执行前检查脚本时，把上述命令拆成下载、阅读和执行三步即可。远程下载若报告 TLS 或证书信任失败，不要关闭证书校验；先检查系统根证书、企业 HTTPS 检查代理，以及对 `github.com` 和 GitHub Release 资产域名的访问。安装器会输出失败域名和安全的下一步。
 
 如果系统中已有 npm 或其他来源的 `hpi`，脚本会告警并把 Hunter Pi 的稳定目录放到用户 PATH 前部，但不会覆盖、删除或卸载原命令。保留告警，安装后在新终端用 `Get-Command hpi -All` 检查解析顺序。
 
@@ -82,8 +78,8 @@ Expand-Archive .\hpi-windows-x64.zip .\hpi-windows-x64
 关闭当前终端并打开新的 PowerShell：
 
 ```powershell
-hpi version --json
-hpi update status --json
+hpi version
+hpi update status
 ```
 
 检查结果：
@@ -109,17 +105,17 @@ $env:HUNTER_PI_HOME = "D:\HunterPiState"
 
 `HUNTER_PI_HOME` 必须是绝对路径，且不能是磁盘根目录。不要把配置目录提交到项目仓库。
 
-## 3. 首次配置
+## 3. 首次运行、隐私与登录
 
-### 3.1 配置 Provider 和权限
+### 3.1 使用默认配置启动
 
-默认配置使用项目当前固定的 Provider、模型和 `balanced` 权限。运行：
+默认配置使用项目当前固定的 Provider、精确模型、Provider-managed endpoint 和 `BALANCED` 权限。新用户直接运行：
 
 ```powershell
-hpi setup
+hpi
 ```
 
-`setup` 会显示：
+Hunter Pi 自动保存这些默认值，并在登录前显示一段非阻塞摘要，包括：
 
 - Provider 和精确模型；
 - endpoint 类别和解析后的 origin；
@@ -128,15 +124,23 @@ hpi setup
 - Hunter Pi 控制的 telemetry 和启动网络设置；
 - 外部 retention、training 和账户控制中仍为 `NOT_PROVEN` 或 `PROVIDER_OWNED` 的事实。
 
-确认内容前不要继续。切换 Provider、模型、endpoint、origin 或政策引用后，Hunter Pi 可能要求重新确认。
+登录前不会发送模型请求；取消登录也不会发送。只有进入交互界面后主动提交 prompt，才会产生 Provider 请求。
+
+随时查看完整隐私边界：
+
+```powershell
+hpi privacy
+```
+
+修改 Provider、模型、endpoint 或权限时使用 `hpi config`。目的地变化不会静默继承旧配置：
 
 自定义 Provider 示例：
 
 ```powershell
-hpi setup --provider <provider-id> --model <exact-model-id> --policy-reference <https-url> --endpoint-category PROVIDER_MANAGED --permission balanced
+hpi config --provider <provider-id> --model <exact-model-id> --policy-reference <https-url> --endpoint-category PROVIDER_MANAGED --permission balanced
 ```
 
-LOCAL endpoint 必须使用精确 loopback origin；CUSTOM endpoint 只接受 HTTPS origin。
+`hpi setup` 暂时作为 `hpi config` 的兼容别名保留。LOCAL endpoint 必须使用精确 loopback origin；CUSTOM endpoint 只接受 HTTPS origin。Managed Change、Pilot 和其他自动化 Provider 请求仍要求各自的 `--allow-provider-request`，默认 Quick Session 配置不会替代这些作用域授权。
 
 ### 3.2 登录
 
@@ -167,10 +171,10 @@ hpi smoke tui
 ### 3.4 运行 Doctor
 
 ```powershell
-hpi doctor --json
+hpi doctor
 ```
 
-只有在 Doctor 没有阻断状态时才开始真实项目工作。Doctor 检查安装、固定 Engine、隔离配置、Provider origin、披露确认、认证元数据、产品完整性和 TUI acknowledgement。
+只有在 Doctor 没有阻断状态时才开始真实项目工作。Doctor 默认按「需要处理」「尚未证明」「已检测」分组；`hpi doctor --json` 仅用于脚本、CI 或附加机器诊断。Doctor 检查安装、固定 Engine、隔离配置、Provider origin、隐私配置、认证元数据、产品完整性和 TUI acknowledgement。
 
 ## 4. 使用 Quick Session
 
@@ -357,13 +361,21 @@ hpi --safe-mode
 
 ## 7. 更新和回滚
 
-查看状态：
+普通更新只需运行：
 
 ```powershell
-hpi update status --json
+hpi update
 ```
 
-普通使用者只需在没有已资格化候选时运行状态命令。`check` 和 `apply` 要求匹配的 candidate metadata 与 artifact，通常来自精确通过的 Hunter Pi CI 或受控本地构建：
+该命令从当前 `developer-preview` 官方 GitHub Release 渠道发现新版本，下载严格候选清单和更新包，复用资格、摘要、包清单、原子切换和回滚验证。没有新版本时会明确显示当前已是最新版本。网络、TLS、资格或完整性检查失败时，当前版本保持可用。
+
+查看安装和历史状态：
+
+```powershell
+hpi update status
+```
+
+以下带文件路径的命令保留给离线恢复、开发和 Evidence 流程，普通用户不需要执行：
 
 ```powershell
 hpi update check --candidate <candidate-file> --artifact <artifact-file> --json
@@ -382,10 +394,10 @@ hpi update rollback <release-id> --json
 
 ### Doctor 返回非零
 
-1. 保存完整 JSON 输出。
+1. 阅读「需要处理」分组；提交故障报告时再保存完整 JSON 输出。
 2. 找到第一个 `BLOCKED`、`INCOMPATIBLE` 或 `NOT_PROVEN` 项。
 3. 按该项的 `NextAction` 处理。
-4. 再次运行 `hpi doctor --json`。
+4. 再次运行 `hpi doctor`。
 
 不要把 `NOT_PROVEN` 当成 `PASS`。
 
@@ -394,7 +406,7 @@ hpi update rollback <release-id> --json
 ```powershell
 hpi --safe-mode
 hpi plugin doctor
-hpi version --json
+hpi version
 ```
 
 Safe Mode 能启动时，优先检查插件 quarantine、绑定漂移和 Core 冲突。Safe Mode 仍不是操作系统沙箱。
@@ -414,9 +426,9 @@ git status --short
 ### Provider 登录或请求阻断
 
 ```powershell
-hpi setup
+hpi config
 hpi login
-hpi doctor --json
+hpi doctor
 ```
 
 重新检查 Provider、模型、origin 和披露内容。不要把 token 粘贴到终端日志、Issue、Evidence 或计划 JSON。
@@ -424,7 +436,7 @@ hpi doctor --json
 ### 更新状态异常
 
 ```powershell
-hpi update status --json
+hpi update status
 ```
 
 保留输出和 `.hpi-update` 管理状态，不要手工编辑 journal、active pointer 或 candidate metadata。只有已有已知 release 时才执行 rollback。
@@ -439,7 +451,7 @@ hpi update status --json
 
 1. `git pull --ff-only` 并确认目标分支。
 2. `git status --short`。
-3. 运行 `hpi doctor --json` 或至少确认最近一次 Doctor 仍适用于当前配置。
+3. 运行 `hpi doctor` 或至少确认最近一次 Doctor 仍适用于当前配置。
 4. 小范围探索使用 Quick Session。
 5. 有精确范围和验收命令的修改使用 Managed Change。
 6. 结束后检查 `git diff --check`、完整 diff 和项目测试。

@@ -28,7 +28,7 @@ The following decisions form the initial owner-approved Hunter Pi baseline.
 22. A downloadable Windows artifact follows, rather than precedes, a passing npm/CLI vertical slice.
 23. The initial repository is `hunterzheng1/hunter-pi`; the archived Hunter Platform and active Hunter-Harness repositories remain unchanged.
 24. Run outcome and Archive status are separate. Any ready, failed, blocked, cancelled, or incomplete Run may be archived without rewriting its outcome.
-25. Local-first means local canonical state, not zero network egress. Model-provider data categories, destination, external retention limits, and Hunter-controlled telemetry/network settings are disclosed and acknowledged before first send.
+25. Local-first means local canonical state, not zero network egress. First run shows a non-blocking summary of the default model-provider destination and data categories, with full privacy details available on demand. Interactive requests begin only when the user submits a prompt; custom destinations, Managed Change, Pilot, automation and other higher-risk capabilities keep explicit scoped authorization.
 26. Hunter Pi original source and documentation use the MIT License. Third-party material retains its own terms and requires an immutable NOTICE/provenance record before incorporation or publication.
 27. The standard Pi Package path may metadata-qualify and activate exact non-executable resources,
     but executable extensions remain quarantined until an independent exact compatibility verifier

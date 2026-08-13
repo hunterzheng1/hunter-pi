@@ -1,6 +1,6 @@
 # User experience
 
-The current Windows developer preview implements `hpi`, `setup`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, an explicitly scoped JSON-plan Managed Change entry point, resource-oriented Plugin management, and qualified portable update/rollback commands. Task 12's real Windows pilot evaluates the historical Pi 0.83 Distribution Release as `GO` within its unsigned developer-preview boundary. Hunter Pi `0.1.0-dev.1` uses Pi 0.84.1 and must retain its separate `NOT_PROVEN` daily-use disposition until new acceptance exists. A signed installer, Stable publication, broad executable-Plugin qualification, physical power-loss proof, and non-Windows daily-use acceptance remain unproven. For executable instructions, use the [Windows user guide](user-guide.md); this document retains the product interaction model and detailed behavior.
+The current Windows developer preview implements `hpi`, `config` (`setup` compatibility alias), `privacy`, `doctor`, `login`, `smoke tui`, Safe Mode, Quick Session start/continue/resume, an explicitly scoped JSON-plan Managed Change entry point, resource-oriented Plugin management, and qualified portable update/rollback commands. Task 12's real Windows pilot evaluates the historical Pi 0.83 Distribution Release as `GO` within its unsigned developer-preview boundary. Hunter Pi `0.1.0-dev.2` uses Pi 0.84.1 and must retain its separate `NOT_PROVEN` daily-use disposition until new acceptance exists. A signed installer, Stable publication, broad executable-Plugin qualification, physical power-loss proof, and non-Windows daily-use acceptance remain unproven. For executable instructions, use the [Windows user guide](user-guide.md); this document retains the product interaction model and detailed behavior.
 
 ## Installation experience
 
@@ -13,23 +13,21 @@ The user should not separately install, update, or configure raw Pi. Hunter Pi o
 
 ## First run
 
-Running `hpi` for the first time opens a bounded setup wizard:
+Running `hpi` for the first time performs a bounded environment check, initializes the documented defaults, displays a non-blocking privacy notice, and opens the Provider-owned login flow:
 
 ```text
 Hunter Pi — First Run
 
-1. Environment      Node/runtime, Git, terminal, writable config path
-2. Provider         Select a supported model provider
-3. Data disclosure  Review what context may be sent, endpoint, and provider policy
-4. Authentication   Open the provider's official login flow
-5. Defaults         Model, thinking level, permission profile
-6. Plugins          Core-only initially; import is optional
-7. Verification     Confirm a temporary Git fixture can be created and cleaned
+1. Environment  Check runtime, Git, terminal, and writable isolated state
+2. Defaults     Save the documented Provider, exact model, endpoint, and Balanced profile
+3. Privacy      Show destination and data categories; link `hpi privacy` for full details
+4. Login        Open Pi's Provider-owned login flow; cancellation sends no model request
+5. Session      Enter Quick Session only after login readiness is confirmed
 ```
 
-Task 5 uses the qualified default Provider/model and `Balanced` permission when `hpi` starts from an empty profile; an alternative target is selected first with explicit `hpi setup` flags. Steps 1 and 7 execute the product Doctor, including an automatically created temporary Git fixture and a fresh offline resolution of the current Provider destination. Step 4 asks before opening the Provider-owned Pi login TUI. Cancellation leaves setup recoverable and returns `BLOCKED`; the wizard never logs in or sends a model request automatically. A configured result still reports interactive TUI readiness `NOT_PROVEN` until the separate `hpi smoke tui` acknowledgement succeeds from an exact packaged artifact. That acknowledgement binds both `hpi.js` and Core SHA-256 values and becomes `NOT_PROVEN` after either executable surface drifts.
+The default selection is the qualified Provider/model and `Balanced` permission. An alternative target is selected with explicit `hpi config` flags; `hpi setup` remains only as a temporary compatibility alias. The privacy notice is not an authorization for automation, custom destinations, plugins, remote writes, publication, or destructive actions. Managed Change and Pilot Provider requests retain their explicit scoped flags. A configured result still reports interactive TUI readiness `NOT_PROVEN` until the separate `hpi smoke tui` acknowledgement succeeds from an exact packaged artifact. That acknowledgement binds both `hpi.js` and Core SHA-256 values and becomes `NOT_PROVEN` after either executable surface drifts.
 
-Before any model request, the wizard requires an explicit acknowledgement that selected prompts, repository content, tool results, and conversation context may be transmitted to the configured provider. It resolves the exact origin offline from the fixed Pi catalog/configuration, shows the endpoint category and configured telemetry/network controls, and links or references the provider policy without claiming it matches the user's account. Unless separately proven, it displays `ExternalRetention=NOT_PROVEN`, `TrainingUse=NOT_PROVEN`, and `AccountControls=PROVIDER_OWNED` instead of guessing account facts. The acknowledgement binds the exact resolved origin and these statuses; launch recomputes the origin and requires acknowledgement again after drift.
+Before login, the first-run notice states that selected prompts, repository content, tool results, and conversation context may be transmitted to the displayed Provider origin. Full details remain available through `hpi privacy`. The interactive request is still user-initiated: login or merely opening the TUI does not send a prompt. The product resolves the exact origin offline, rejects unexpected destination drift, and never infers account retention or training facts from a policy URL. Custom provider, endpoint, origin, or permission changes use `hpi config` and explicit review.
 
 The wizard records capability, disclosure, consent, and configuration receipts, never tokens, cookies, complete environment variables, or private prompt content. A missing or cancelled provider login is `BLOCKED`, not a failed product installation.
 
@@ -254,12 +252,15 @@ Hunter Pi does not automatically reuse raw Pi's configuration directory. `hpi pl
 Implemented portable commands:
 
 ```powershell
-hpi update status --json
+hpi update
+hpi update status
 hpi update check --candidate <file> --artifact <file> --json
 hpi update apply --candidate <file> --artifact <file> --json
 hpi update rollback <release-id> --json
-hpi version --json
+hpi version
 ```
+
+The plain `hpi update` command discovers the newest qualified release in the configured official channel, downloads its strict candidate and artifact, verifies them, and applies them through the existing rollback-safe transaction. The path-bearing `check` and `apply` forms remain advanced offline/Evidence interfaces. `--json` selects a stable machine representation where supported; it is not an authority flag.
 
 An update summary must identify:
 

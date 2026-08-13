@@ -344,6 +344,37 @@ export interface WindowsPortableQualificationAuthority {
   ): Promise<WindowsPortableQualificationResult>;
 }
 
+export function verifyWindowsPortableQualificationEvidence(
+  candidateInput: ReleaseCandidate,
+  evidenceInput: unknown,
+  artifact: Uint8Array,
+): WindowsPortableQualificationEvidence {
+  const candidate = releaseCandidateSchema.parse(candidateInput);
+  const evidence = windowsPortableQualificationEvidenceSchema.parse(evidenceInput);
+  const candidateIdentity = windowsPortableQualificationCandidateIdentity(candidate);
+  const expectedEvidenceId = `evidence_main-ci-${String(evidence.run.id)}-portable`;
+  const bundle = decodePortableBundle(artifact);
+  const qualificationCheck = candidate.qualification.checks[0];
+  if (
+    evidence.candidateIdentityFingerprint !== sha256Fingerprint(canonicalJson(candidateIdentity)) ||
+    evidence.artifact.fingerprint !== candidate.artifact.fingerprint ||
+    evidence.artifact.byteLength !== candidate.artifact.byteLength ||
+    evidence.sourceCommit !== evidence.run.headSha ||
+    evidence.sourceCommit !== bundle.manifest.sourceCommit ||
+    evidence.evidenceId !== expectedEvidenceId ||
+    candidate.qualification.status !== "PASS" ||
+    candidate.qualification.verifierFingerprint !== HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT ||
+    candidate.qualification.qualifiedAt !== evidence.run.updatedAt ||
+    candidate.qualification.checks.length !== 1 ||
+    qualificationCheck?.name !== "windows-portable-ci" ||
+    qualificationCheck.outcome !== "PASS" ||
+    canonicalJson(qualificationCheck.evidenceIds) !== canonicalJson([evidence.evidenceId])
+  ) {
+    throw new Error("portable qualification result does not bind the exact release Evidence");
+  }
+  return evidence;
+}
+
 export function windowsPortableQualificationTargetReference(
   candidate: ReleaseCandidate,
 ): ExternalReference {

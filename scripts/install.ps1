@@ -2,7 +2,7 @@
 param(
   [ValidateSet("Auto", "Remote", "LocalDirectory", "LocalArchive")]
   [string]$Source = "Auto",
-  [string]$ReleaseTag = "v0.1.0-dev.1",
+  [string]$ReleaseTag = "v0.1.0-dev.2",
   [ValidatePattern("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
   [string]$Repository = "hunterzheng1/hunter-pi",
   [string]$LocalSource = "",
@@ -19,6 +19,42 @@ $ErrorActionPreference = "Stop"
 
 function Get-FullPath([string]$Path) {
   return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Invoke-HpiDownload([string]$Uri, [string]$Destination) {
+  $parsedUri = $null
+  if (-not [Uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsedUri) -or
+      -not [StringComparer]::OrdinalIgnoreCase.Equals($parsedUri.Scheme, "https") -or
+      -not [string]::IsNullOrEmpty($parsedUri.UserInfo)) {
+    throw "Download URL must be one credential-free HTTPS URL."
+  }
+
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri $Uri -OutFile $Destination
+  }
+  catch {
+    $failedUri = $null
+    $response = $_.Exception.Response
+    if ($null -ne $response) {
+      $responseUriProperty = $response.PSObject.Properties["ResponseUri"]
+      $requestMessageProperty = $response.PSObject.Properties["RequestMessage"]
+      if ($null -ne $responseUriProperty -and $null -ne $responseUriProperty.Value) {
+        $failedUri = $responseUriProperty.Value
+      } elseif ($null -ne $requestMessageProperty -and
+                $null -ne $requestMessageProperty.Value -and
+                $null -ne $requestMessageProperty.Value.RequestUri) {
+        $failedUri = $requestMessageProperty.Value.RequestUri
+      }
+    }
+    $detail = $_.Exception
+    while ($null -ne $detail.InnerException) {
+      $detail = $detail.InnerException
+    }
+    $errorType = $detail.GetType().FullName
+    $failedHost = if ($null -ne $failedUri) { $failedUri.Host } else { "NOT_REPORTED" }
+    throw "Download failed. InitialHost=$($parsedUri.Host) FailedHost=$failedHost ErrorType=$errorType. NextAction=Verify TLS trust, HTTPS inspection proxy, and access to the reported hosts. Do not disable certificate validation."
+  }
 }
 
 function Get-Sha256Hex([string]$Path) {
@@ -938,9 +974,8 @@ try {
       $ChecksumPath = Join-Path $temporaryRoot "hpi-windows-x64.zip.sha256"
       $archiveUrl = "https://github.com/$Repository/releases/download/$ReleaseTag/hpi-windows-x64.zip"
       $checksumUrl = "https://github.com/$Repository/releases/download/$ReleaseTag/hpi-windows-x64.zip.sha256"
-      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-      Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri $archiveUrl -OutFile $ArchivePath
-      Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri $checksumUrl -OutFile $ChecksumPath
+      Invoke-HpiDownload $archiveUrl $ArchivePath
+      Invoke-HpiDownload $checksumUrl $ChecksumPath
     } else {
       if ([string]::IsNullOrWhiteSpace($ArchivePath)) { throw "ArchivePath is required." }
       if ([string]::IsNullOrWhiteSpace($ChecksumPath)) { throw "ChecksumPath is required." }
@@ -1079,7 +1114,7 @@ try {
     $receipt | ConvertTo-Json -Compress
   } else {
     Write-Output "Hunter Pi $($release.ProductVersion) is installed."
-    Write-Output "Open a new terminal and run: hpi version --json"
+    Write-Output "Open a new terminal and run: hpi version"
   }
 }
 catch {

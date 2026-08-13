@@ -2,7 +2,7 @@ import { lstat, realpath } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 
 export const HPI_CORE_EXTENSION_ID = "hunter-pi/core" as const;
-export const HPI_CORE_EXTENSION_VERSION = "0.1.0-dev.1" as const;
+export const HPI_CORE_EXTENSION_VERSION = "0.1.0-dev.2" as const;
 
 export type HunterPermissionProfile = "SAFE" | "BALANCED" | "FULL_ACCESS";
 

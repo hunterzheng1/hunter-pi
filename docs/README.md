@@ -12,7 +12,8 @@ This directory is the canonical product and delivery baseline for Hunter Pi.
 
 - Baseline date: 2026-08-13
 - Product status: **0.83 TASKS_0_TO_12_COMPLETE_WITHIN_RECORDED_BOUNDS / 0.84.1 WINDOWS UNSIGNED PREVIEW RELEASED / NEW DAILY USE NOT PROVEN**
-- Current release: Hunter Pi `0.1.0-dev.1` pins Pi `0.84.1`. Exact source `d9f2d931b9fc42d23ceae60fada2aee811caf2ec` passed [main CI `31643808274`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274); the Windows ZIP, checksum, and single-source PowerShell installer are published in [prerelease `v0.1.0-dev.1`](https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.1.0-dev.1). An isolated install from the actual GitHub URLs and a real offline TUI smoke passed without a Provider request. See the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md).
+- Published release: Hunter Pi `0.1.0-dev.1` pins Pi `0.84.1`. Exact source `d9f2d931b9fc42d23ceae60fada2aee811caf2ec` passed [main CI `31643808274`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274); the Windows ZIP, checksum, and single-source PowerShell installer are published in [prerelease `v0.1.0-dev.1`](https://github.com/hunterzheng1/hunter-pi/releases/tag/v0.1.0-dev.1). An isolated install from the actual GitHub URLs and a real offline TUI smoke passed without a Provider request. See the [current validation](validation/2026-08-13-pi-0.84.1-windows-release.md).
+- Current source version: `0.1.0-dev.2` retains Pi `0.84.1` and addresses the [real-machine usability findings](13-real-machine-test-findings.md). Its publication and original-machine revalidation remain pending until exact-source gates and release steps complete.
 - Last qualified product baseline (2026-08-12): `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7`; exact merge-head main CI [`31573580277`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31573580277) passed all six required Windows/Ubuntu quality, portable artifact, containment, and Evidence jobs without a rerun.
 - Current implementation: Tasks 1–11 and the Task 12 capture/evaluation path are implemented. Qualified portable artifact `sha256:d2fda8a443a294f8ed9f1c4484eb41bbcf74be6515aeca3f68df718f8a32c082` on source `b174ac7e9b9c7c8e67cdf3e5f50bf8d8286005a7` completed the real disposable-repository Windows pilot. The immutable Archive first retained a 3-second performance `REVISE`; after the documented Windows security-software variance criterion changed to 3.5 seconds, the same Evidence replayed as `GO` without changing observations.
 - Completion audit: **REAL WINDOWS DAILY-USE GO WITHIN RECORDED BOUNDS** — see the [2026-08-12 final pilot record](validation/2026-08-12-task12-daily-use-go.md). PR #83 run [`31582820744`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31582820744) and exact merged-head main run [`31584966554`](https://github.com/hunterzheng1/hunter-pi/actions/runs/31584966554) passed all six required jobs. The earlier [2026-08-08 audit](validation/2026-08-08-daily-use-completion-audit.md) remains historical.
@@ -76,6 +77,7 @@ The entries below preserve the status and failures observed at each delivery sta
 | [10 — Risk register](10-risk-register.md) | Product, upstream, plugin, security, and maintenance risks |
 | [11 — Decision summary](11-decision-summary.md) | Compact list of approved baseline decisions and open owner choices |
 | [12 — Requirements traceability](12-requirements-traceability.md) | User-story and NFR ownership across delivery tasks and evidence gates |
+| [13 — Real-machine test findings](13-real-machine-test-findings.md) | Append-only triage of installation and CLI feedback observed on real user machines |
 | [Windows user guide](user-guide.md) | Installation, daily operation, Managed Change plans, plugins, updates, and troubleshooting |
 
 ## Migration, research, and planning
@@ -87,12 +89,14 @@ The entries below preserve the status and failures observed at each delivery sta
 - [Task 5 hpi product-shell validation](validation/2026-08-03-task5-hpi-product-shell.md)
 - [Task 7 worktree, lease, and managed-process validation](validation/2026-08-04-task7-worktree-process.md)
 - [Task 8 verification adequacy validation](validation/2026-08-05-task8-verification-adequacy.md)
+- [0.1.0-dev.2 real-machine usability repair validation](validation/2026-08-13-real-machine-usability-dev2.md)
 - [Testing strategy](testing-strategy.md)
 - [CI operations and GitHub control-plane budget](ci-operations.md)
 - [Plan index](plans/README.md)
 - [Foundation-to-daily-use execution plan](plans/2026-08-03-foundation-to-daily-use.md)
 - [Task 7 worktree, leases, and process-host execution](plans/2026-08-04-task7-worktree-leases-process-host.md)
 - [Task 8 verification adequacy and review/fixback execution](plans/2026-08-05-task8-verification-adequacy.md)
+- [0.1.0-dev.2 real-machine usability release](plans/2026-08-13-real-machine-usability-release.md)
 
 ## Architecture decisions
 

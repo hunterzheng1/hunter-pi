@@ -206,7 +206,7 @@ async function configurationChecks(
           id: "configuration",
           status: "INCOMPATIBLE",
           summary: "Hunter Pi configuration is invalid or unreadable.",
-          nextAction: "Repair the isolated configuration or move it aside, then run `hpi setup`.",
+          nextAction: "Repair the isolated configuration or move it aside, then run `hpi`.",
         },
         {
           id: "provider_disclosure",
@@ -226,13 +226,13 @@ async function configurationChecks(
           id: "configuration",
           status: "BLOCKED",
           summary: "Hunter Pi first-run configuration is missing.",
-          nextAction: "Run `hpi setup`.",
+          nextAction: "Run `hpi` to initialize the documented defaults.",
         },
         {
           id: "provider_disclosure",
           status: "BLOCKED",
-          summary: "Provider data disclosure has not been acknowledged.",
-          nextAction: "Run `hpi setup` and review the Provider data disclosure.",
+          summary: "Provider privacy settings have not been initialized.",
+          nextAction: "Run `hpi`; use `hpi privacy` to review details first.",
         },
       ],
     };
@@ -245,14 +245,14 @@ async function configurationChecks(
       id: "provider_disclosure",
       status: "BLOCKED",
       summary: "Provider data disclosure has not been acknowledged for the current selection.",
-      nextAction: "Run `hpi setup` and review the Provider data disclosure.",
+      nextAction: "Run `hpi config` and review the current privacy settings.",
     };
   } else if (configuration.provider.selectedModel === null) {
     disclosureCheck = {
       id: "provider_disclosure",
       status: "BLOCKED",
       summary: "Provider disclosure cannot be validated without an exact selected model.",
-      nextAction: "Run `hpi setup` and select an exact Provider model.",
+      nextAction: "Run `hpi config` and select an exact Provider model.",
     };
   } else {
     try {
@@ -276,8 +276,7 @@ async function configurationChecks(
                 id: "provider_disclosure",
                 status: "BLOCKED",
                 summary: "The currently resolved Provider origin changed after acknowledgement.",
-                nextAction:
-                  "Run `hpi setup` and review the current Provider data disclosure again.",
+                nextAction: "Run `hpi config` and review the current Provider destination again.",
               }
             : {
                 id: "provider_disclosure",
@@ -285,7 +284,7 @@ async function configurationChecks(
                 summary:
                   "The currently resolved Provider destination violates its endpoint policy.",
                 nextAction:
-                  "Repair the isolated Provider model configuration and rerun `hpi setup`.",
+                  "Repair the isolated Provider model configuration and rerun `hpi config`.",
               };
     } catch {
       disclosureCheck = {
@@ -312,7 +311,7 @@ async function configurationChecks(
             id: "configuration",
             status: "BLOCKED",
             summary: "Hunter Pi first-run setup is incomplete.",
-            nextAction: "Run `hpi setup`.",
+            nextAction: "Run `hpi config`.",
           },
       disclosureCheck,
     ],
@@ -537,7 +536,7 @@ export async function runHpiDoctor(options: RunHpiDoctorOptions): Promise<HpiDoc
       id: "provider_auth",
       status: "BLOCKED",
       summary: "Provider authentication cannot be checked before valid setup.",
-      nextAction: "Run `hpi setup` first.",
+      nextAction: "Run `hpi` first.",
     });
   } else {
     try {

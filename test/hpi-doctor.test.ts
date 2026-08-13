@@ -23,11 +23,11 @@ const changedProductShellIntegrity = `sha256:${"d".repeat(64)}`;
 const detectedCoreExtension = () =>
   Promise.resolve({
     detected: true,
-    version: "0.1.0-dev.1",
+    version: "0.1.0-dev.2",
     integrity: coreIntegrity,
   });
 const testProductIdentity = {
-  productVersion: "0.1.0-dev.1",
+  productVersion: "0.1.0-dev.2",
   sourceCommit: "NOT_STAMPED",
   sourceState: "NOT_STAMPED" as const,
   coreExtensionIntegrity: coreIntegrity,
@@ -354,7 +354,7 @@ describe("Hunter Pi Doctor", () => {
       id: "provider_disclosure",
       status: "BLOCKED",
       summary: "The currently resolved Provider origin changed after acknowledgement.",
-      nextAction: "Run `hpi setup` and review the current Provider data disclosure again.",
+      nextAction: "Run `hpi config` and review the current Provider destination again.",
     });
   });
 });

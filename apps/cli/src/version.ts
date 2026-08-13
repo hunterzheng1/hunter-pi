@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { PI_CANDIDATE } from "@hunter-pi/pi-host";
 
-export const HPI_PRODUCT_VERSION = "0.1.0-dev.1" as const;
+export const HPI_PRODUCT_VERSION = "0.1.0-dev.2" as const;
 
 declare const HPI_BUNDLED_ARTIFACT: boolean | undefined;
 

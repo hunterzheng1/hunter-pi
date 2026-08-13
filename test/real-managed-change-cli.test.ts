@@ -55,12 +55,12 @@ const piEngineSource = "fixture Pi Engine package\n";
 const productShellIntegrity = `sha256:${createHash("sha256")
   .update(productShellSource)
   .digest("hex")}`;
-const pilotReleaseId = "release_hunter-pi-fixture-dev1";
+const pilotReleaseId = "release_hunter-pi-fixture-dev2";
 const pilotEngineReleaseFingerprint =
   "sha256:a41dddea11dee5fce40f7f100d99f76fcac88281efc8f067c0f6b57b86fdb27e";
 const pilotArtifact = createPortableBundle({
   releaseId: pilotReleaseId,
-  productVersion: "0.1.0-dev.1",
+  productVersion: "0.1.0-dev.2",
   engineReleaseId: "engine-release_pi-0.84.1",
   engineReleaseFingerprint: pilotEngineReleaseFingerprint,
   sourceCommit: pilotSourceCommit,
@@ -250,7 +250,7 @@ async function createCliFixture(): Promise<{
     getVersionInfo: () =>
       Promise.resolve({
         product: "Hunter Pi",
-        productVersion: "0.1.0-dev.1",
+        productVersion: "0.1.0-dev.2",
         engine: { packageName: "@earendil-works/pi-coding-agent", version: "0.84.1" },
         sourceCommit,
         sourceState: "CLEAN" as const,
@@ -276,7 +276,7 @@ async function createCliFixture(): Promise<{
   const candidate = {
     schemaVersion: "hpi-release-candidate.v1",
     releaseId: pilotReleaseId,
-    productVersion: "0.1.0-dev.1",
+    productVersion: "0.1.0-dev.2",
     channel: "PREVIEW",
     artifact: {
       reference: "update.bundle.tgz",
@@ -306,7 +306,7 @@ async function createCliFixture(): Promise<{
     licenses: [
       {
         name: "Hunter Pi",
-        version: "0.1.0-dev.1",
+        version: "0.1.0-dev.2",
         license: "MIT",
         sourceReference: "NOTICE.md",
       },
@@ -334,7 +334,7 @@ async function createCliFixture(): Promise<{
         schemaVersion: "hpi-portable-active.v1",
         releaseId: pilotReleaseId,
         artifactFingerprint: pilotArtifactFingerprint,
-        productVersion: "0.1.0-dev.1",
+        productVersion: "0.1.0-dev.2",
         activatedAt: "2026-08-06T00:00:00.000Z",
       })}\n`,
       "utf8",

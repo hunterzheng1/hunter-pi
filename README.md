@@ -2,7 +2,7 @@
 
 Hunter Pi 是一个面向个人开发者的终端编码 Agent。它将固定版本的 Pi Engine、Hunter Pi 自有的 Workflow Kernel、独立验证、恢复、插件策略和更新回滚组合为一个可独立运行的产品，不依赖 Hunter-Harness 或 Hunter Platform。
 
-Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **Windows x64 unsigned developer-preview 日常使用 GO**。当前 `0.1.0-dev.1` 已更新到 Pi `0.84.1`，并完成 Windows ZIP、PowerShell 安装器、精确 Windows/Ubuntu CI、公开 prerelease 和发布后隔离安装验证。它可以用于 Windows x64 的 Provider-neutral 评估，但不能继承旧版本的日常使用结论。两个版本都不是已签名的 Stable 版本。
+Pi 0.83 / Hunter Pi `0.1.0-dev.0` 的历史版本已达到记录范围内的 **Windows x64 unsigned developer-preview 日常使用 GO**。`0.1.0-dev.1` 已更新到 Pi `0.84.1`，并完成 Windows ZIP、PowerShell 安装器、精确 Windows/Ubuntu CI、公开 prerelease 和发布后隔离安装验证。当前源码版本 `0.1.0-dev.2` 改进首次运行、人工输出、安装诊断和自动更新；发布后的新实机验收仍需单独记录。所有版本都不是已签名的 Stable 版本。
 
 ## 从这里开始
 
@@ -30,17 +30,13 @@ Pi 0.84.1 的发布身份、资产哈希、CI、失败历史和适用边界见[�
 
 ### 1. 安装 Windows x64 预览版
 
-不需要预装 Node.js、npm 或 Pi。下载唯一维护的脚本，并固定到精确预览 tag：
+不需要预装 Node.js、npm 或 Pi。发布 `v0.1.0-dev.2` 后，普通用户只需复制这一行；它从固定 Release 下载脚本，脚本仍会校验 ZIP SHA-256 和包内清单：
 
 ```powershell
-Invoke-WebRequest `
-  https://raw.githubusercontent.com/hunterzheng1/hunter-pi/main/scripts/install.ps1 `
-  -OutFile .\install.ps1
-
-powershell -ExecutionPolicy Bypass -File .\install.ps1 `
-  -Source Remote `
-  -ReleaseTag v0.1.0-dev.1
+$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "aac477a17d6525704be0e69151403dd3152cf584975d91031cd418005fa69103") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
 ```
+
+希望执行前检查脚本时，可以先单独下载上述 `install.ps1`，阅读后再运行。TLS 证书信任失败时不要关闭证书校验；安装器会显示失败域名，并提示检查系统证书、HTTPS 检查代理和 GitHub 访问。离线 ZIP 流程见操作手册。
 
 脚本下载精确 Release 的 ZIP 和 SHA-256 文件，校验后安装到：
 
@@ -51,25 +47,24 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 关闭当前终端并打开新的 PowerShell，然后确认版本和更新状态：
 
 ```powershell
-hpi version --json
-hpi update status --json
+hpi version
+hpi update status
 ```
 
 预期更新状态为 `READY`。如果系统已有其他来源的 `hpi`，安装脚本只告警，不会删除或覆盖旧命令；用 `Get-Command hpi -All` 检查解析顺序。本地 ZIP 和人工校验步骤见[操作手册](docs/user-guide.md#22-从本地-zip-安装)。
 
-### 2. 完成首次配置
+### 2. 首次运行并登录
 
 安装脚本会幂等维护用户 `PATH`，因此新终端可以直接运行 `hpi`：
 
 ```powershell
-hpi setup
-hpi login
+hpi
 hpi smoke tui
-hpi doctor --json
+hpi doctor
 ```
 
-- `setup` 显示 Provider、模型、目标 origin、可能外发的数据类别和权限设置，并要求明确确认。
-- `login` 打开 Pi 管理的登录界面。Hunter Pi 不读取或复制 token。
+- `hpi` 自动保存文档化的默认 Provider、精确模型和 `BALANCED` 权限，先显示非阻塞的隐私摘要，再打开 Pi 管理的登录界面并进入 Quick Session。Hunter Pi 不读取或复制 token。
+- `hpi privacy` 随时显示 Provider、模型、目标 origin、可能外发的数据类别和外部政策边界；`hpi config` 用于修改默认配置。`hpi setup` 仅作为一个迁移周期的兼容别名保留。
 - `smoke tui` 只用于首次完整性检查。按提示运行 `/hunter-status` 后退出，不要在 smoke 中发送模型请求。
 - `doctor` 返回非零时，不要开始真实项目修改。先按输出中的状态和 `NextAction` 处理。
 
@@ -102,17 +97,19 @@ hpi change --repo C:\src\your-project --plan .\hpi-change.json --json --allow-pr
 ```text
 hpi                              启动 Quick Session
 hpi --safe-mode                  仅加载 Core Extension
-hpi setup                        配置 Provider、模型和权限
+hpi config                       查看或修改 Provider、模型和权限
+hpi privacy                      查看 Provider 数据与隐私边界
 hpi login                        打开 Provider 登录流程
-hpi doctor --json                检查安装、配置、认证和完整性
-hpi version --json               查看产品、源码和 Engine 身份
+hpi doctor                       检查安装、配置、认证和完整性
+hpi version                      查看产品、源码和 Engine 身份
 hpi change ...                   执行有边界的 Managed Change
 hpi plugin list                  查看已管理插件
 hpi plugin doctor                检查插件状态和启动条件
-hpi update status --json         查看 portable 更新状态
+hpi update                       检查并安装当前渠道的最新合格版本
+hpi update status                查看 portable 更新状态
 ```
 
-运行 `hpi --help` 查看完整参数。`hpi pilot ...` 是验收与证据捕获接口，不是普通日常入口。
+运行 `hpi --help` 查看完整参数。人工使用默认阅读文本；脚本和 CI 在需要稳定机器格式时添加 `--json`。`hpi pilot ...` 是验收与证据捕获接口，不是普通日常入口。
 
 ## 两种工作模式
 
@@ -140,7 +137,7 @@ npm run probe:pi
 npm run verify
 ```
 
-根目录的 `npm run doctor` 检查开发仓库前置条件；安装后的 `hpi doctor --json` 检查产品安装、Provider 配置、认证元数据、TUI acknowledgement 和制品完整性。两者用途不同。
+根目录的 `npm run doctor` 检查开发仓库前置条件；安装后的 `hpi doctor` 检查产品安装、Provider 配置、认证元数据、TUI acknowledgement 和制品完整性。需要机器格式时使用 `hpi doctor --json`。两者用途不同。
 
 ### 提交方式
 

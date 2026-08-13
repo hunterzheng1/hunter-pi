@@ -1,6 +1,6 @@
 {
   "name": "@hunter-pi/cli",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "private": true,
   "description": "Hunter Pi developer-preview product shell",
   "license": "MIT",

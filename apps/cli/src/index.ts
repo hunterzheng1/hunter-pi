@@ -9,3 +9,4 @@ export {
   type PluginRegistryPresentation,
 } from "./cli.js";
 export { HPI_PRODUCT_VERSION, getHpiVersionInfo, type HpiVersionInfo } from "./version.js";
+export { discoverGithubUpdate, HpiUpdateDiscoveryError } from "./update-source.js";

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 
@@ -18,7 +18,7 @@ const cleanupRoots: string[] = [];
 
 interface InstallerReceipt {
   readonly schemaVersion: "hunter-pi-install-receipt.v1";
-  readonly status: "INSTALLED" | "ALREADY_INSTALLED";
+  readonly status: "INSTALLED" | "ALREADY_INSTALLED" | "UPDATED";
   readonly releaseId: string;
   readonly productVersion: string;
   readonly source: "LOCAL_DIRECTORY" | "LOCAL_ARCHIVE" | "REMOTE";
@@ -28,7 +28,262 @@ interface InstallerReceipt {
   readonly conflictDetected: boolean;
   readonly signed: false;
   readonly providerRequestPerformed: false;
-  readonly existingHunterPiStateTouched: false;
+  readonly existingHunterPiStateTouched: boolean;
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, sortJsonValue(item)]),
+    );
+  }
+  throw new TypeError("fixture canonical JSON accepts JSON values");
+}
+
+async function makeQualifiedBootstrapFixture(root: string, runId: number): Promise<void> {
+  const candidatePath = join(root, "portable-release-candidate.json");
+  const candidate = JSON.parse(await readFile(candidatePath, "utf8")) as {
+    releaseId: string;
+    productVersion: string;
+    artifact: { fingerprint: string; byteLength: number };
+    qualification: {
+      status: string;
+      verifierFingerprint: string;
+      checks: { name: string; outcome: string; evidenceIds: string[]; reason?: string }[];
+      qualifiedAt: string;
+    };
+  };
+  const evidenceId = `evidence_main-ci-${String(runId)}-portable`;
+  candidate.qualification = {
+    status: "PASS",
+    verifierFingerprint: candidate.qualification.verifierFingerprint,
+    checks: [{ name: "windows-portable-ci", outcome: "PASS", evidenceIds: [evidenceId] }],
+    qualifiedAt: "2026-08-13T04:00:00.000Z",
+  };
+  await Promise.all([
+    writeFile(candidatePath, `${JSON.stringify(candidate)}\n`, "utf8"),
+    writeFile(
+      join(root, "versions", candidate.releaseId, ".hpi-candidate.json"),
+      `${JSON.stringify(candidate)}\n`,
+      "utf8",
+    ),
+    mkdir(join(root, ".hpi-update", "qualification-evidence"), { recursive: true }),
+  ]);
+  await writeFile(
+    join(root, ".hpi-update", "qualification-evidence", `${String(runId)}.json`),
+    `${JSON.stringify({ schemaVersion: "fixture-evidence.v1", evidenceId })}\n`,
+    "utf8",
+  );
+
+  const sourceVersionRoot = join(root, "versions", candidate.releaseId);
+  const cliPath = join(sourceVersionRoot, "node_modules", "@hunter-pi", "cli", "dist", "hpi.js");
+  await Promise.all([
+    rm(join(sourceVersionRoot, "node.exe"), { force: true }),
+    mkdir(join(sourceVersionRoot, "node_modules", "@hunter-pi", "cli", "dist"), {
+      recursive: true,
+    }),
+  ]);
+  await link(process.execPath, join(sourceVersionRoot, "node.exe"));
+  await writeFile(
+    cliPath,
+    `
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+const args = process.argv.slice(2);
+const value = (name) => {
+  const index = args.indexOf(name);
+  return index < 0 ? undefined : args[index + 1];
+};
+const candidatePath = value("--candidate");
+const artifactPath = value("--artifact");
+const evidencePath = value("--installer-bootstrap-evidence");
+const root = process.env.HUNTER_PI_PORTABLE_ROOT;
+if (args[0] === "update" && args[1] === "rollback" && args[2] && root) {
+  const candidate = JSON.parse(readFileSync(join(root, "versions", args[2], ".hpi-candidate.json"), "utf8"));
+  writeFileSync(join(root, ".hpi-update", "active.json"), JSON.stringify({
+    schemaVersion: "hpi-portable-active.v1",
+    releaseId: candidate.releaseId,
+    productVersion: candidate.productVersion,
+    artifactFingerprint: candidate.artifact.fingerprint,
+    activatedAt: "2026-08-13T04:02:00.000Z",
+  }) + "\\n");
+  process.stdout.write(JSON.stringify({ schemaVersion: "hpi-update-receipt.v1", action: "ROLLBACK", outcome: "APPLIED", activeReleaseId: candidate.releaseId }) + "\\n");
+  process.exit(0);
+}
+if (args[0] !== "update" || args[1] !== "apply" || !candidatePath || !artifactPath || !evidencePath || !root || !existsSync(evidencePath) || process.env.HUNTER_PI_INSTALLER_BOOTSTRAP !== "dev1-to-dev2") {
+  process.stderr.write("bootstrap invocation is incomplete\\n");
+  process.exit(2);
+}
+const source = dirname(candidatePath);
+const candidate = JSON.parse(readFileSync(candidatePath, "utf8"));
+const versionRoot = join(root, "versions", candidate.releaseId);
+mkdirSync(versionRoot, { recursive: true });
+copyFileSync(candidatePath, join(versionRoot, ".hpi-candidate.json"));
+copyFileSync(artifactPath, join(versionRoot, ".hpi-artifact"));
+copyFileSync(join(source, "hpi.cmd"), join(root, "hpi.cmd"));
+writeFileSync(join(root, ".hpi-update", "active.json"), JSON.stringify({
+  schemaVersion: "hpi-portable-active.v1",
+  releaseId: candidate.releaseId,
+  productVersion: candidate.productVersion,
+  artifactFingerprint: candidate.artifact.fingerprint,
+  activatedAt: "2026-08-13T04:01:00.000Z",
+}) + "\\n");
+writeFileSync(join(root, "bootstrap-invocation.json"), JSON.stringify({ candidatePath, artifactPath, evidencePath }) + "\\n");
+process.stdout.write(JSON.stringify({ schemaVersion: "hpi-update-receipt.v1", action: "APPLY", outcome: "APPLIED", activeReleaseId: candidate.releaseId }) + "\\n");
+`,
+    "utf8",
+  );
+  await writeReleaseFileManifest(root);
+}
+
+interface PublishedDev1FixtureIdentity {
+  readonly artifactFingerprint: string;
+  readonly artifactByteLength: number;
+  readonly candidateIdentityFingerprint: string;
+  readonly qualificationJournalSha256: string;
+}
+
+async function markAsPublishedDev1Fixture(root: string): Promise<PublishedDev1FixtureIdentity> {
+  const candidatePath = join(root, "portable-release-candidate.json");
+  const candidate = JSON.parse(await readFile(candidatePath, "utf8")) as {
+    qualification: {
+      status: string;
+      verifierFingerprint: string;
+      checks: { name: string; outcome: string; evidenceIds: string[] }[];
+      qualifiedAt: string;
+    };
+  };
+  candidate.qualification = {
+    status: "PASS",
+    verifierFingerprint: candidate.qualification.verifierFingerprint,
+    checks: [
+      {
+        name: "windows-portable-ci",
+        outcome: "PASS",
+        evidenceIds: ["evidence_main-ci-31643808274-portable"],
+      },
+    ],
+    qualifiedAt: "2026-08-12T21:52:32Z",
+  };
+  await Promise.all([
+    writeFile(candidatePath, `${JSON.stringify(candidate)}\n`, "utf8"),
+    writeFile(
+      join(root, "versions", "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc", ".hpi-candidate.json"),
+      `${JSON.stringify(candidate)}\n`,
+      "utf8",
+    ),
+  ]);
+  const publishedCandidate = JSON.parse(await readFile(candidatePath, "utf8")) as {
+    artifact: { fingerprint: string; byteLength: number };
+    qualification?: unknown;
+  };
+  const { qualification: ignoredQualification, ...candidateIdentity } = publishedCandidate;
+  void ignoredQualification;
+  const qualificationRoot = join(root, ".hpi-update", "qualification-evidence");
+  await mkdir(qualificationRoot, { recursive: true });
+  const candidateIdentityFingerprint = `sha256:${createHash("sha256")
+    .update(JSON.stringify(sortJsonValue(candidateIdentity)))
+    .digest("hex")}`;
+  await writeFile(
+    join(qualificationRoot, "31643808274.json"),
+    `${JSON.stringify({
+      schemaVersion: "hpi-windows-portable-qualification-evidence.v2",
+      evidenceId: "evidence_main-ci-31643808274-portable",
+      repository: "hunterzheng1/hunter-pi",
+      sourceCommit: "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+      candidateIdentityFingerprint,
+      artifact: {
+        name: "hpi-windows-x64-portable",
+        fingerprint: publishedCandidate.artifact.fingerprint,
+        byteLength: publishedCandidate.artifact.byteLength,
+      },
+      run: {
+        id: 31643808274,
+        attempt: 1,
+        event: "push",
+        headBranch: "main",
+        headSha: "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+        workflowName: "CI",
+        status: "completed",
+        conclusion: "success",
+        updatedAt: "2026-08-12T21:52:32Z",
+        url: "https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274",
+        jobs: [
+          "Tests / ubuntu-latest",
+          "Tests / windows-latest",
+          "Quality + platform Evidence / ubuntu-latest",
+          "Quality + platform Evidence / windows-latest",
+          "Windows x64 portable artifact",
+          "Windows external package smoke",
+          "Windows clean locked install",
+          "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+          "Task 7 containment / ubuntu-latest",
+          "Task 7 containment / windows-latest",
+          "Task 7 Evidence / Windows + Ubuntu identity",
+          "CI gate",
+        ].map((name) => ({ name, status: "completed", conclusion: "success" })),
+      },
+      observedAt: "2026-08-12T21:52:32Z",
+    })}\n`,
+    "utf8",
+  );
+  const qualificationJournal = `${JSON.stringify({
+    schemaVersion: "fixture-dev1-qualification-journal.v1",
+    releaseId: "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+  })}\n`;
+  const journalRoot = join(root, ".hpi-update", "manager", "journal");
+  await mkdir(journalRoot, { recursive: true });
+  await writeFile(
+    join(
+      journalRoot,
+      "000000000001-96afeefd86dabe24bb3880ff3c3a7236bfe2efae2058576f22b312072409d5e0.json",
+    ),
+    qualificationJournal,
+    "utf8",
+  );
+  await writeReleaseFileManifest(root);
+  return {
+    artifactFingerprint: publishedCandidate.artifact.fingerprint,
+    artifactByteLength: publishedCandidate.artifact.byteLength,
+    candidateIdentityFingerprint,
+    qualificationJournalSha256: createHash("sha256").update(qualificationJournal).digest("hex"),
+  };
+}
+
+async function createFixtureBoundInstaller(
+  root: string,
+  identity: PublishedDev1FixtureIdentity,
+): Promise<string> {
+  const path = join(root, "fixture-bound-install.ps1");
+  const source = (await readFile(installerPath, "utf8"))
+    .replaceAll(
+      "sha256:5091110764aa5e7499f4b00e9e9b800cab6d739a17303d8b547dd8827186b983",
+      identity.artifactFingerprint,
+    )
+    .replaceAll("64936745", String(identity.artifactByteLength))
+    .replaceAll(
+      "sha256:a4c95e75ac5396aa1e5f3ee453143defa45e38fc50e14833febf0f9d535bc52d",
+      identity.candidateIdentityFingerprint,
+    )
+    .replaceAll(
+      "f08a51c8b6cb2b5b8bfc9c95f23226c7bca66f71354e22588193a6c0508c5c18",
+      identity.qualificationJournalSha256,
+    );
+  await writeFile(path, source, "utf8");
+  return path;
 }
 
 async function regularFiles(root: string): Promise<string[]> {
@@ -74,9 +329,9 @@ async function createReleaseFixture(
   root: string,
   releaseId: string,
   productVersion: string,
+  sourceCommit = "a".repeat(40),
 ): Promise<void> {
   const versionDirectory = join(root, "versions", releaseId);
-  const sourceCommit = "a".repeat(40);
   const engineFingerprint =
     "sha256:a41dddea11dee5fce40f7f100d99f76fcac88281efc8f067c0f6b57b86fdb27e";
   const productShellIntegrity = `sha256:${"d".repeat(64)}`;
@@ -211,6 +466,7 @@ function runInstallerWith(
   executable: string,
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv,
+  scriptPath = installerPath,
 ): { readonly status: number | null; readonly stdout: string; readonly stderr: string } {
   const result = spawnSync(
     executable,
@@ -221,7 +477,7 @@ function runInstallerWith(
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      installerPath,
+      scriptPath,
       ...arguments_,
     ],
     {
@@ -239,8 +495,9 @@ function runInstallerWith(
 function runInstaller(
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv,
+  scriptPath = installerPath,
 ): { readonly status: number | null; readonly stdout: string; readonly stderr: string } {
-  return runInstallerWith("powershell.exe", arguments_, environment);
+  return runInstallerWith("powershell.exe", arguments_, environment, scriptPath);
 }
 
 function receiptFrom(stdout: string): InstallerReceipt {
@@ -353,7 +610,7 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
       PATH: `${stableBin};${baseEnvironment.PATH}`,
     });
     expect(unsafeOverwrite.status).not.toBe(0);
-    expect(`${unsafeOverwrite.stdout}\n${unsafeOverwrite.stderr}`).toMatch(/hpi update apply/iu);
+    expect(`${unsafeOverwrite.stdout}\n${unsafeOverwrite.stderr}`).toMatch(/hpi update/iu);
     await expect(
       readFile(join(installRoot, "versions", "release_fixture-a", ".hpi-candidate.json")),
     ).resolves.toBeDefined();
@@ -461,7 +718,7 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
 
     const afterApply = runInstaller(commonArguments, environment);
     expect(afterApply.status).not.toBe(0);
-    expect(`${afterApply.stdout}\n${afterApply.stderr}`).toMatch(/hpi update apply/iu);
+    expect(`${afterApply.stdout}\n${afterApply.stderr}`).toMatch(/hpi update/iu);
 
     await adapter.restore({ releaseId: initialCandidate.releaseId });
     const afterRollback = runInstaller(commonArguments, environment);
@@ -470,6 +727,256 @@ describe.skipIf(process.platform !== "win32")("Windows install.ps1", () => {
       status: "ALREADY_INSTALLED",
       releaseId: "release_fixture-replay-initial",
     });
+  }, 120_000);
+
+  it("bootstraps an installed dev.1 release to a qualified dev.2 through the update manager", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-bootstrap-"));
+    cleanupRoots.push(root);
+    const sourceInitial = join(root, "source-initial");
+    const sourceUpdate = join(root, "source-update");
+    const installRoot = join(root, "install");
+    await Promise.all([
+      createReleaseFixture(
+        sourceInitial,
+        "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+        "0.1.0-dev.1",
+        "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+      ),
+      createReleaseFixture(
+        sourceUpdate,
+        "release_fixture-bootstrap-dev2",
+        "0.1.0-dev.2",
+        "b".repeat(40),
+      ),
+    ]);
+    const dev1Identity = await markAsPublishedDev1Fixture(sourceInitial);
+    await makeQualifiedBootstrapFixture(sourceUpdate, 12345);
+    const fixtureInstaller = await createFixtureBoundInstaller(root, dev1Identity);
+    const environment = { ...process.env, LOCALAPPDATA: join(root, "local-app-data") };
+    const commonArguments = [
+      "-Source",
+      "LocalDirectory",
+      "-InstallRoot",
+      installRoot,
+      "-PathMode",
+      "Process",
+      "-Json",
+    ] as const;
+
+    const initial = runInstaller([...commonArguments, "-LocalSource", sourceInitial], environment);
+    expect(initial.status, initial.stderr).toBe(0);
+
+    const update = runInstaller(
+      [...commonArguments, "-LocalSource", sourceUpdate],
+      environment,
+      fixtureInstaller,
+    );
+    expect(update.status, update.stderr).toBe(0);
+    expect(receiptFrom(update.stdout)).toMatchObject({
+      status: "UPDATED",
+      releaseId: "release_fixture-bootstrap-dev2",
+      productVersion: "0.1.0-dev.2",
+      existingHunterPiStateTouched: true,
+    });
+    expect(
+      JSON.parse(await readFile(join(installRoot, ".hpi-update", "active.json"), "utf8")),
+    ).toMatchObject({
+      releaseId: "release_fixture-bootstrap-dev2",
+      productVersion: "0.1.0-dev.2",
+    });
+    await expect(
+      readFile(
+        join(
+          installRoot,
+          "versions",
+          "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+          ".hpi-candidate.json",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("0.1.0-dev.1");
+    const bootstrapInvocation = JSON.parse(
+      await readFile(join(installRoot, "bootstrap-invocation.json"), "utf8"),
+    ) as { evidencePath?: unknown };
+    expect(bootstrapInvocation.evidencePath).toEqual(
+      expect.stringMatching(/HunterPiBootstrap-.+12345\.json$/u),
+    );
+
+    const replay = runInstaller(
+      [...commonArguments, "-LocalSource", sourceUpdate],
+      environment,
+      fixtureInstaller,
+    );
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(receiptFrom(replay.stdout)).toMatchObject({
+      status: "ALREADY_INSTALLED",
+      releaseId: "release_fixture-bootstrap-dev2",
+    });
+  }, 120_000);
+
+  it("restores dev.1 when PATH persistence fails after a bootstrap update", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hunter-pi-installer-bootstrap-path-failure-"));
+    cleanupRoots.push(root);
+    const sourceInitial = join(root, "source-initial");
+    const sourceUpdate = join(root, "source-update");
+    const installRoot = join(root, "install");
+    await Promise.all([
+      createReleaseFixture(
+        sourceInitial,
+        "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+        "0.1.0-dev.1",
+        "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+      ),
+      createReleaseFixture(
+        sourceUpdate,
+        "release_fixture-bootstrap-path-dev2",
+        "0.1.0-dev.2",
+        "b".repeat(40),
+      ),
+    ]);
+    const dev1Identity = await markAsPublishedDev1Fixture(sourceInitial);
+    await makeQualifiedBootstrapFixture(sourceUpdate, 23456);
+    const fixtureInstaller = await createFixtureBoundInstaller(root, dev1Identity);
+    const environment = { ...process.env, LOCALAPPDATA: join(root, "local-app-data") };
+    const initial = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        sourceInitial,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      environment,
+      fixtureInstaller,
+    );
+    expect(initial.status, initial.stderr).toBe(0);
+
+    const update = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        sourceUpdate,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "User",
+        "-Json",
+      ],
+      { ...environment, HUNTER_PI_INSTALL_TEST_FAIL_USER_PATH_WRITE: "1" },
+      fixtureInstaller,
+    );
+    expect(update.status).not.toBe(0);
+    expect(`${update.stdout}\n${update.stderr}`).toMatch(/PATH write failure/iu);
+    expect(
+      JSON.parse(await readFile(join(installRoot, ".hpi-update", "active.json"), "utf8")),
+    ).toMatchObject({
+      releaseId: "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+      productVersion: "0.1.0-dev.1",
+    });
+  }, 120_000);
+
+  it("rejects bootstrap when published dev.1 qualification Evidence is missing", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "hunter-pi-installer-bootstrap-missing-dev1-evidence-"),
+    );
+    cleanupRoots.push(root);
+    const sourceInitial = join(root, "source-initial");
+    const sourceUpdate = join(root, "source-update");
+    const installRoot = join(root, "install");
+    await Promise.all([
+      createReleaseFixture(
+        sourceInitial,
+        "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+        "0.1.0-dev.1",
+        "d9f2d931b9fc42d23ceae60fada2aee811caf2ec",
+      ),
+      createReleaseFixture(
+        sourceUpdate,
+        "release_fixture-bootstrap-missing-dev1-evidence-dev2",
+        "0.1.0-dev.2",
+        "b".repeat(40),
+      ),
+    ]);
+    const [dev1Identity] = await Promise.all([
+      markAsPublishedDev1Fixture(sourceInitial),
+      makeQualifiedBootstrapFixture(sourceUpdate, 34567),
+    ]);
+    const fixtureInstaller = await createFixtureBoundInstaller(root, dev1Identity);
+    const environment = { ...process.env, LOCALAPPDATA: join(root, "local-app-data") };
+    const initial = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        sourceInitial,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      environment,
+      fixtureInstaller,
+    );
+    expect(initial.status, initial.stderr).toBe(0);
+    await rm(join(installRoot, ".hpi-update", "qualification-evidence"), {
+      recursive: true,
+      force: true,
+    });
+
+    const update = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        sourceUpdate,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      environment,
+      fixtureInstaller,
+    );
+    expect(update.status).not.toBe(0);
+    expect(`${update.stdout}\n${update.stderr}`).toMatch(/qualification Evidence is missing/iu);
+    expect(
+      JSON.parse(await readFile(join(installRoot, ".hpi-update", "active.json"), "utf8")),
+    ).toMatchObject({ releaseId: "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc" });
+    await cp(
+      join(sourceInitial, ".hpi-update", "qualification-evidence"),
+      join(installRoot, ".hpi-update", "qualification-evidence"),
+      { recursive: true },
+    );
+    await rm(join(installRoot, ".hpi-update", "manager", "journal"), {
+      recursive: true,
+      force: true,
+    });
+    const missingJournal = runInstaller(
+      [
+        "-Source",
+        "LocalDirectory",
+        "-LocalSource",
+        sourceUpdate,
+        "-InstallRoot",
+        installRoot,
+        "-PathMode",
+        "Process",
+        "-Json",
+      ],
+      environment,
+      fixtureInstaller,
+    );
+    expect(missingJournal.status).not.toBe(0);
+    expect(`${missingJournal.stdout}\n${missingJournal.stderr}`).toMatch(
+      /qualification journal receipt is missing/iu,
+    );
   }, 120_000);
 
   it("builds a ZIP whose embedded and standalone installers are identical and locally usable", async () => {

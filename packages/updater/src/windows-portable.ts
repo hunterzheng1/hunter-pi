@@ -574,6 +574,15 @@ export class FileWindowsPortableReleaseAdapter implements ReleaseAdapter {
     );
   }
 
+  public async assertQualificationEvidence(
+    candidateInput: ReleaseCandidate,
+    artifact: Uint8Array,
+  ): Promise<void> {
+    const candidate = releaseCandidateSchema.parse(candidateInput);
+    await this.#ensureRoots();
+    await this.#verifyQualificationEvidence(candidate, artifact);
+  }
+
   async current(): Promise<DistributionReleaseId | undefined> {
     await this.#ensureRoots();
     return (await this.#readActive({ verifyFiles: false }))?.releaseId;

@@ -12,8 +12,10 @@ import {
   type HpiCliIo,
 } from "@hunter-pi/cli";
 import {
+  HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES,
   releaseCandidateSchema,
   updateReceiptSchema,
+  windowsPortableQualificationEvidenceSchema,
   type UpdateManager,
 } from "@hunter-pi/updater";
 import { createPilotRepositoryTargetReceipt, FilePilotArchiveStore } from "@hunter-pi/pilot";
@@ -84,6 +86,36 @@ const updateCandidateFixture = releaseCandidateSchema.parse({
       sourceReference: "NOTICE",
     },
   ],
+});
+const updateQualificationEvidenceFixture = windowsPortableQualificationEvidenceSchema.parse({
+  schemaVersion: "hpi-windows-portable-qualification-evidence.v2",
+  evidenceId: "evidence_main-ci-12345-portable",
+  repository: "hunterzheng1/hunter-pi",
+  sourceCommit: "a".repeat(40),
+  candidateIdentityFingerprint: `sha256:${"b".repeat(64)}`,
+  artifact: {
+    name: "hpi-windows-x64-portable",
+    fingerprint: updateArtifactFixtureIntegrity,
+    byteLength: updateArtifactFixture.byteLength,
+  },
+  run: {
+    id: 12345,
+    attempt: 1,
+    event: "push",
+    headBranch: "main",
+    headSha: "a".repeat(40),
+    workflowName: "CI",
+    status: "completed",
+    conclusion: "success",
+    updatedAt: "2026-08-03T13:00:00.000Z",
+    url: "https://github.com/hunterzheng1/hunter-pi/actions/runs/12345",
+    jobs: HPI_WINDOWS_PORTABLE_QUALIFICATION_JOB_NAMES.map((name) => ({
+      name,
+      status: "completed",
+      conclusion: "success",
+    })),
+  },
+  observedAt: "2026-08-03T13:00:00.000Z",
 });
 
 afterEach(async () => {
@@ -908,8 +940,10 @@ describe("hpi command", () => {
     const { dependencies, io, root } = await createDependencies();
     const candidatePath = join(root, "update-candidate.json");
     const artifactPath = join(root, "update-artifact.bundle.tgz");
+    const evidencePath = join(root, "update-qualification-evidence.json");
     await writeFile(candidatePath, JSON.stringify(updateCandidateFixture), "utf8");
     await writeFile(artifactPath, updateArtifactFixture);
+    await writeFile(evidencePath, JSON.stringify(updateQualificationEvidenceFixture), "utf8");
     const calls: string[] = [];
     const manager: UpdateManager = {
       check: (candidate) => Promise.resolve({ status: "AVAILABLE", candidate }),
@@ -950,8 +984,14 @@ describe("hpi command", () => {
     };
     const updateDependencies: HpiCliDependencies = {
       ...dependencies,
-      createUpdateManager: ({ artifactPath: selectedArtifactPath }) => {
-        if (selectedArtifactPath !== undefined) expect(selectedArtifactPath).toBe(artifactPath);
+      createUpdateManager: (options) => {
+        if (options.trustedQualificationEvidence === undefined) {
+          if (options.artifactPath !== undefined) expect(options.artifactPath).toBe(artifactPath);
+        } else {
+          expect(options.candidate).toEqual(updateCandidateFixture);
+          expect(Buffer.from(options.artifact ?? [])).toEqual(updateArtifactFixture);
+          expect(options.trustedQualificationEvidence).toEqual(updateQualificationEvidenceFixture);
+        }
         return Promise.resolve(manager);
       },
     };
@@ -968,6 +1008,120 @@ describe("hpi command", () => {
         ["update", "apply", "--candidate", candidatePath, "--artifact", artifactPath, "--json"],
         updateDependencies,
       ),
+    ).toBe(2);
+    const bootstrapSourceCommit = "b".repeat(40);
+    const bootstrapCandidate = releaseCandidateSchema.parse({
+      ...updateCandidateFixture,
+      releaseId: `release_hunter-pi-0.1.0-dev.2-${bootstrapSourceCommit.slice(0, 12)}`,
+      productVersion: "0.1.0-dev.2",
+      licenses: updateCandidateFixture.licenses.map((license) =>
+        license.name === "Hunter Pi" ? { ...license, version: "0.1.0-dev.2" } : license,
+      ),
+    });
+    await Promise.all([
+      writeFile(candidatePath, JSON.stringify(bootstrapCandidate), "utf8"),
+      mkdir(join(root, ".hpi-update"), { recursive: true }),
+    ]);
+    await writeFile(
+      join(root, ".hpi-update", "active.json"),
+      JSON.stringify({
+        schemaVersion: "hpi-portable-active.v1",
+        releaseId: "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc",
+        productVersion: "0.1.0-dev.1",
+        artifactFingerprint:
+          "sha256:5091110764aa5e7499f4b00e9e9b800cab6d739a17303d8b547dd8827186b983",
+        activatedAt: "2026-08-13T04:00:00.000Z",
+      }),
+      "utf8",
+    );
+    const bootstrapUpdateDependencies: HpiCliDependencies = {
+      ...updateDependencies,
+      environment: {
+        ...updateDependencies.environment,
+        HUNTER_PI_INSTALLER_BOOTSTRAP: "dev1-to-dev2",
+        HUNTER_PI_PORTABLE_ROOT: root,
+      },
+      getVersionInfo: () =>
+        Promise.resolve({
+          product: "Hunter Pi",
+          productVersion: "0.1.0-dev.2",
+          engine: {
+            packageName: "@earendil-works/pi-coding-agent",
+            version: "0.84.1",
+          },
+          sourceCommit: bootstrapSourceCommit,
+          sourceState: "CLEAN",
+          coreExtensionIntegrity: coreFixtureIntegrity,
+          productShellIntegrity: productShellFixtureIntegrity,
+          updateChannel: "developer-preview",
+        }),
+      createUpdateManager: (options) => {
+        if (options.trustedQualificationEvidence !== undefined) {
+          expect(options.candidate).toEqual(bootstrapCandidate);
+        }
+        return Promise.resolve(manager);
+      },
+    };
+    await writeFile(candidatePath, JSON.stringify(updateCandidateFixture), "utf8");
+    expect(
+      await runHpiCli(
+        [
+          "update",
+          "apply",
+          "--candidate",
+          candidatePath,
+          "--artifact",
+          artifactPath,
+          "--installer-bootstrap-evidence",
+          evidencePath,
+          "--json",
+        ],
+        bootstrapUpdateDependencies,
+      ),
+    ).toBe(2);
+    await writeFile(candidatePath, JSON.stringify(bootstrapCandidate), "utf8");
+    expect(
+      await runHpiCli(
+        [
+          "update",
+          "apply",
+          "--candidate",
+          candidatePath,
+          "--artifact",
+          artifactPath,
+          "--installer-bootstrap-evidence",
+          evidencePath,
+          "--json",
+        ],
+        bootstrapUpdateDependencies,
+      ),
+    ).toBe(0);
+    await writeFile(
+      join(root, ".hpi-update", "active.json"),
+      JSON.stringify({
+        schemaVersion: "hpi-portable-active.v1",
+        releaseId: bootstrapCandidate.releaseId,
+        productVersion: bootstrapCandidate.productVersion,
+        artifactFingerprint: bootstrapCandidate.artifact.fingerprint,
+        activatedAt: "2026-08-13T04:01:00.000Z",
+      }),
+      "utf8",
+    );
+    expect(
+      await runHpiCli(
+        [
+          "update",
+          "apply",
+          "--candidate",
+          candidatePath,
+          "--artifact",
+          artifactPath,
+          "--installer-bootstrap-evidence",
+          evidencePath,
+          "--json",
+        ],
+        bootstrapUpdateDependencies,
+      ),
     ).toBe(0);
     expect(
       await runHpiCli(
@@ -980,7 +1134,11 @@ describe("hpi command", () => {
       schemaVersion: "hpi-update-status.v1",
       currentReleaseId: updateCandidateFixture.releaseId,
     });
-    expect(calls).toEqual(["apply:release_cli-update", "rollback:release_cli-update"]);
+    expect(calls).toEqual([
+      `apply:${bootstrapCandidate.releaseId}`,
+      `apply:${bootstrapCandidate.releaseId}`,
+      "rollback:release_cli-update",
+    ]);
     const output = `${io.stdout.join("\n")} ${io.stderr.join("\n")}`;
     expect(output).not.toContain(candidatePath);
     expect(output).not.toContain(artifactPath);

@@ -222,21 +222,25 @@ describe("Task 11 GitHub Actions portable qualification", () => {
     roots.push(root);
     const fixture = portableFixture();
     const updateFixture = portableFixture("release_task11-github-actions-update");
-    const qualifiedUpdate = updater.releaseCandidateSchema.parse({
-      ...updateFixture.candidate,
-      qualification: {
-        status: "PASS",
-        verifierFingerprint: updater.HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
-        checks: [
-          {
-            name: "windows-portable-ci",
-            outcome: "PASS",
-            evidenceIds: ["evidence_task11-qualified-update"],
-          },
-        ],
-        qualifiedAt: "2026-08-11T12:30:00.000Z",
-      },
+    const updateRunId = runId + 1;
+    const updateAuthority = new updater.GitHubActionsWindowsPortableQualificationAuthority({
+      observe: () =>
+        Promise.resolve(
+          exactObservation(updateFixture.artifact, updateFixture.candidate, updateRunId),
+        ),
     });
+    const qualifiedUpdateResult = await updateAuthority.qualify({
+      candidate: updateFixture.candidate,
+      artifact: updateFixture.artifact,
+      source: {
+        kind: "GITHUB_ACTIONS_RUN",
+        repository: "hunterzheng1/hunter-pi",
+        runId: updateRunId,
+      },
+      deadline: "2026-08-11T13:00:00.000Z",
+      cancellationPolicy: { mode: "FAIL_CLOSED", timeoutMs: 30_000 },
+    });
+    const qualifiedUpdate = qualifiedUpdateResult.candidate;
     const portableRoot = join(root, "portable");
     const adapter = new updater.FileWindowsPortableReleaseAdapter({
       installationRoot: portableRoot,
@@ -325,6 +329,11 @@ describe("Task 11 GitHub Actions portable qualification", () => {
       `${String(runId)}.json`,
     );
     const qualificationEvidence = await readFile(qualificationEvidencePath);
+    await adapter.retainQualificationEvidence(
+      qualifiedUpdate,
+      qualifiedUpdateResult.evidence,
+      updateFixture.artifact,
+    );
     await expect(
       manager.apply({
         schemaVersion: "hpi-update-apply.v1",
@@ -426,8 +435,21 @@ describe("Task 11 GitHub Actions portable qualification", () => {
         observedAt: "2026-08-11T12:33:30.000Z",
       }),
     ).resolves.toMatchObject({
-      outcome: "FAILED",
+      outcome: "APPLIED",
       previousReleaseId: fixture.candidate.releaseId,
+      activeReleaseId: qualifiedUpdate.releaseId,
+    });
+    await expect(
+      manager.rollback({
+        schemaVersion: "hpi-update-rollback.v1",
+        operationId: "op_task11-qualified-return-for-repair",
+        operationFingerprint: sha256Fingerprint("task11-qualified-return-for-repair"),
+        targetReleaseId: fixture.candidate.releaseId,
+        observedAt: "2026-08-11T12:33:45.000Z",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "APPLIED",
+      previousReleaseId: qualifiedUpdate.releaseId,
       activeReleaseId: fixture.candidate.releaseId,
     });
     await writeFile(

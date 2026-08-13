@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Prepare Hunter Pi `0.1.0-dev.2` to address the seven confirmed findings in `docs/13-real-machine-test-findings.md` without weakening update qualification, Provider-request scoping, credential handling, plugin authority boundaries, or the unsigned developer-preview label.
+Prepare Hunter Pi `0.1.0-dev.2` to address the eight confirmed findings in `docs/13-real-machine-test-findings.md` without weakening update qualification, Provider-request scoping, credential handling, plugin authority boundaries, or the unsigned developer-preview label.
 
 ## In scope
 
@@ -10,6 +10,7 @@ Prepare Hunter Pi `0.1.0-dev.2` to address the seven confirmed findings in `docs
 - readable default output for `version`, `doctor`, and `update status`, with stable JSON retained for automation;
 - default first-run configuration, a non-blocking privacy notice, direct Provider login, `hpi config`, and `hpi privacy`;
 - `hpi update` official-channel discovery, bounded download, strict candidate validation, existing transactional apply, and rollback preservation;
+- one qualified, transactional `0.1.0-dev.1` → `0.1.0-dev.2` installer bootstrap so existing users can acquire the new update client;
 - standalone candidate, bundle, and qualification Evidence assets from one promoted Windows release snapshot;
 - product, security, acceptance, release, user-guide, and findings documentation updated in the same change.
 
@@ -35,6 +36,7 @@ Prepare Hunter Pi `0.1.0-dev.2` to address the seven confirmed findings in `docs
 - a fresh `hpi` needs no separate `setup` confirmation, sends no prompt during login, and reaches Quick Session only after login readiness.
 - `hpi config` preserves strict destination validation; `hpi privacy` does not mutate an empty profile.
 - `hpi update` handles available/current/network-failure paths and cannot apply bytes that fail the existing candidate digest and qualification gates.
+- the dev.2 installer upgrades an exact dev.1 installation only through the qualified update manager, preserves dev.1 for rollback, restores it on failure, and remains idempotent.
 - promoted Windows release output includes ZIP, checksum, installer, strict candidate, update bundle, and qualification Evidence from one frozen snapshot.
 - `npm run verify` passes from the exact source intended for merge.
 

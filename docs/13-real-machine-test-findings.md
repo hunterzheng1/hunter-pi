@@ -32,6 +32,7 @@
 | `HP-RU-005` | `setup` 确认前没有显示将保存的模型和权限 | 安全边界合理，确认内容不完整 | 首次配置与披露 | 高 | 已修复待验证 |
 | `HP-RU-006` | `setup` 是否应作为首次使用的独立必经步骤 | 必要能力存在，但当前命令流程属于多余仪式 | 首次运行流程 | 高 | 已修复待验证 |
 | `HP-RU-007` | 后续版本能否直接运行 `hpi update` 完成更新 | 当前缺少面向普通用户的一键更新入口 | 更新体验 | 高 | 已修复待验证 |
+| `HP-RU-008` | 已安装 dev.1 后无法直接获得 dev.2 的新更新能力 | 真实的版本迁移缺口 | 安装与更新迁移 | 高 | 已修复待验证 |
 
 ## HP-RU-001：安装入口过于复杂
 
@@ -329,7 +330,6 @@ hpi update
 
 ```powershell
 hpi update check --candidate <candidate-file> --artifact <artifact-file> --json
-hpi update apply --candidate <candidate-file> --artifact <artifact-file> --json
 ```
 
 `hpi update status --json` 返回 `status=READY` 只表示更新管理器已就绪、当前安装可管理，不表示已经发现新版本。
@@ -399,7 +399,7 @@ hpi update rollback <release-id>
 - 更新完成后，当前终端和新终端中的 `hpi version` 都解析到目标版本。
 - 更新完成后，`hpi update status` 显示新的 active release，并保留可回滚的历史 release。
 - 下载、验证、安装或健康检查失败时，原版本仍可启动。
-- `hpi update check --candidate ... --artifact ... --json` 和 `hpi update apply --candidate ... --artifact ... --json` 继续作为高级离线接口兼容现有合同，除非通过版本化迁移明确替代。
+- `hpi update check --candidate ... --artifact ... --json` 继续作为高级离线检查接口；普通 apply 不接受调用者自行提供的 PASS Evidence，安装器迁移使用内部窄化通道。
 - Windows 实机测试覆盖无更新、正常更新、网络中断、摘要错误、candidate 不兼容、切换中断、健康检查失败和更新后 rollback。
 
 ## 建议处理顺序
@@ -424,8 +424,9 @@ hpi update rollback <release-id>
 - `HP-RU-005`：兼容配置界面和隐私详情同时显示 Provider、精确模型、目的地和权限。政策链接继续只作为参考，未知账户事实保持 `NOT_PROVEN`。
 - `HP-RU-006`：裸 `hpi` 自动保存文档化默认值、显示非阻塞隐私摘要、打开登录并进入 Quick Session；`hpi login` 也支持空配置。新增 `hpi config` 和 `hpi privacy`，`hpi setup` 仅作为迁移别名。Managed Change、Pilot 和其他高风险能力的作用域授权没有放宽。
 - `HP-RU-007`：`hpi update` 从固定官方 GitHub Release 渠道发现最新预览版本，下载严格候选清单、更新包和绑定的资格 Evidence，并复用现有摘要、原子切换及回滚事务。请求有总超时，最终来源限制在 GitHub 官方域名，且拒绝跨渠道候选。无更新时成功退出；发现、TLS、资格或完整性失败时不修改当前 active release。发布资产新增 `portable-release-candidate.json`、`update.bundle.tgz` 和 `windows-portable-qualification-evidence.json`。
+- `HP-RU-008`：dev.1 本身没有裸 `hpi update`，而旧安装器合同又拒绝用 dev.2 覆盖现有安装，因此只实现新命令仍无法让已安装用户获得它。dev.2 安装器现在识别精确的 dev.1 → dev.2 迁移，只接受同一 Pi Engine 且已绑定 hosted Windows qualification Evidence 的 dev.2 发布，并调用 dev.2 自带的更新管理器完成原子切换。旧版本目录和更新历史继续保留；健康检查或 PATH 持久化失败时恢复 dev.1；重复运行返回 `ALREADY_INSTALLED`。其他跨版本安装器覆盖仍然失败关闭并引导使用 `hpi update`。
 
-定向自动化覆盖 CLI 人工/JSON 输出、首次运行、直接登录、隐私查看、自动更新发现/无更新/网络失败/元数据漂移，以及安装器与 CI 资产合同。2026-08-13 的完整本地门禁通过 74 个测试文件、766 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、单产物 smoke、干净安装和 Pi `0.84.1` 公共接口探针。新 Release 的真实下载、安装、更新和回滚结果仍应在发布后追加，不能提前标为“已验证”。
+定向自动化覆盖 CLI 人工/JSON 输出、首次运行、直接登录、隐私查看、自动更新发现/无更新/网络失败/元数据漂移、dev.1 → dev.2 安装器迁移与失败恢复，以及安装器与 CI 资产合同。2026-08-13 的完整本地门禁通过 74 个测试文件、773 个测试，以及 lint、类型检查、严格编译、构建、格式、13 个外部包 smoke、单产物 smoke、干净安装和 Pi `0.84.1` 公共接口探针。新 Release 的真实下载、安装、更新和回滚结果仍应在发布后追加，不能提前标为“已验证”。
 
 ## 后续问题模板
 

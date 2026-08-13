@@ -40,10 +40,12 @@ hpi plugin doctor
 Windows x64 用户不需要预装 Node.js、npm 或 Pi。发布 `v0.1.0-dev.2` 后，普通安装只需复制这一行：
 
 ```powershell
-$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "2186508544178ad78c02dc9a669dcb332d5d15411469f479d1b00d46a6275c59") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
+$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "e89b3f3dc15db9fb98248584a882d1dcad24ef0b688b4c85413fc4b2e6dfd530") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
 ```
 
 脚本从该精确 GitHub Release 下载 `hpi-windows-x64.zip` 和 `hpi-windows-x64.zip.sha256`，先验证 SHA-256，再安装。默认根目录为 `%LOCALAPPDATA%\HunterPi`；稳定命令位于 `%LOCALAPPDATA%\HunterPi\bin\hpi.cmd`，该 `bin` 目录会幂等加入用户 `PATH`。
+
+已安装 `0.1.0-dev.1` 时也执行同一条 dev.2 命令一次。安装器只接受已通过 hosted Windows qualification 的 dev.2 制品，并通过更新事务切换 active release；dev.1 版本目录保留用于回滚，迁移失败会自动恢复。升级到 dev.2 后，未来版本直接运行 `hpi update`，无需再次执行安装器。
 
 希望执行前检查脚本时，把上述命令拆成下载、阅读和执行三步即可。远程下载若报告 TLS 或证书信任失败，不要关闭证书校验；先检查系统根证书、企业 HTTPS 检查代理，以及对 `github.com` 和 GitHub Release 资产域名的访问。安装器会输出失败域名和安全的下一步。
 
@@ -375,11 +377,10 @@ hpi update
 hpi update status
 ```
 
-以下带文件路径的命令保留给离线恢复、开发和 Evidence 流程，普通用户不需要执行：
+以下带文件路径的命令只做离线候选检查，不会安装文件：
 
 ```powershell
 hpi update check --candidate <candidate-file> --artifact <artifact-file> --json
-hpi update apply --candidate <candidate-file> --artifact <artifact-file> --json
 ```
 
 回滚到安装历史中的已知 release：
@@ -388,7 +389,7 @@ hpi update apply --candidate <candidate-file> --artifact <artifact-file> --json
 hpi update rollback <release-id> --json
 ```
 
-不要把任意 tarball 与 candidate 文件组合后强制应用。资格证据、artifact digest、源码身份或 journal 无法验证时，更新必须保持阻断。
+本地文件没有公开的强制应用入口。资格证据、artifact digest、源码身份或 journal 无法验证时，更新必须保持阻断。
 
 ## 8. 故障排查
 

@@ -118,6 +118,7 @@ import {
   HPI_UPDATE_QUALIFICATION_VERIFIER_FINGERPRINT,
   portableBundleFingerprint,
   releaseCandidateSchema,
+  windowsPortableQualificationEvidenceSchema,
   windowsPortableUpdateManagerStateRoot,
   type ReleaseCandidate,
   type ReleaseCheckResult,
@@ -177,7 +178,7 @@ export interface HpiCliDependencies {
     readonly artifactPath?: string;
     readonly artifact?: Uint8Array;
     readonly candidate?: ReleaseCandidate;
-    readonly qualificationEvidence?: WindowsPortableQualificationEvidence;
+    readonly trustedQualificationEvidence?: WindowsPortableQualificationEvidence;
   }) => Promise<UpdateManager | undefined>;
   readonly discoverUpdate?: (options: {
     readonly currentVersion: string;
@@ -718,7 +719,7 @@ export async function createDefaultUpdateManager(
     readonly artifactPath?: string;
     readonly artifact?: Uint8Array;
     readonly candidate?: ReleaseCandidate;
-    readonly qualificationEvidence?: WindowsPortableQualificationEvidence;
+    readonly trustedQualificationEvidence?: WindowsPortableQualificationEvidence;
   },
 ): Promise<UpdateManager | undefined> {
   const portableRoot = dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
@@ -739,11 +740,11 @@ export async function createDefaultUpdateManager(
   if (
     options.artifact !== undefined &&
     options.candidate !== undefined &&
-    options.qualificationEvidence !== undefined
+    options.trustedQualificationEvidence !== undefined
   ) {
     await adapter.retainQualificationEvidence(
       options.candidate,
-      options.qualificationEvidence,
+      options.trustedQualificationEvidence,
       options.artifact,
     );
   }
@@ -826,6 +827,16 @@ async function readUpdateCandidate(
   return releaseCandidateSchema.parse(JSON.parse(raw) as unknown);
 }
 
+async function readUpdateQualificationEvidence(
+  path: string,
+  dependencies: HpiCliDependencies,
+): Promise<WindowsPortableQualificationEvidence> {
+  const raw = await (
+    dependencies.readTextFile ?? ((filePath: string) => readFile(filePath, "utf8"))
+  )(path);
+  return windowsPortableQualificationEvidenceSchema.parse(JSON.parse(raw) as unknown);
+}
+
 function updateOperationFingerprint(action: "CHECK" | "APPLY" | "ROLLBACK", value: unknown) {
   return sha256(`hpi-update\0${action}\0${JSON.stringify(value)}`);
 }
@@ -877,7 +888,7 @@ async function updateCommand(
       paths,
       artifact: discovery.artifact,
       candidate: discovery.candidate,
-      qualificationEvidence: discovery.qualificationEvidence,
+      trustedQualificationEvidence: discovery.qualificationEvidence,
     });
     if (manager === undefined) {
       line(
@@ -927,9 +938,82 @@ async function updateCommand(
     subcommand === "check" || subcommand === "apply"
       ? optionValue(arguments_.slice(1), "--artifact")
       : undefined;
+  const candidatePath =
+    subcommand === "check" || subcommand === "apply"
+      ? optionValue(arguments_.slice(1), "--candidate")
+      : undefined;
+  const evidencePath =
+    subcommand === "apply"
+      ? optionValue(arguments_.slice(1), "--installer-bootstrap-evidence")
+      : undefined;
+  const preparedCandidate =
+    subcommand === "apply" && evidencePath !== undefined && candidatePath !== undefined
+      ? await readUpdateCandidate(candidatePath, dependencies)
+      : undefined;
+  const preparedArtifact =
+    subcommand === "apply" && evidencePath !== undefined && artifactPath !== undefined
+      ? dependencies.readBinaryFile === undefined
+        ? await readFile(artifactPath)
+        : await dependencies.readBinaryFile(artifactPath)
+      : undefined;
+  const preparedEvidence =
+    evidencePath === undefined
+      ? undefined
+      : await readUpdateQualificationEvidence(evidencePath, dependencies);
+  if (evidencePath !== undefined) {
+    const portableRoot = dependencies.environment["HUNTER_PI_PORTABLE_ROOT"];
+    const version = await (dependencies.getVersionInfo ?? getHpiVersionInfo)();
+    if (
+      dependencies.environment["HUNTER_PI_INSTALLER_BOOTSTRAP"] !== "dev1-to-dev2" ||
+      portableRoot === undefined ||
+      !isAbsolute(portableRoot) ||
+      preparedCandidate === undefined ||
+      version.sourceState !== "CLEAN" ||
+      !/^[a-f0-9]{40}$/u.test(version.sourceCommit) ||
+      preparedCandidate.productVersion !== version.productVersion ||
+      preparedCandidate.releaseId !==
+        `release_hunter-pi-0.1.0-dev.2-${version.sourceCommit.slice(0, 12)}` ||
+      preparedCandidate.engine.piVersion !== version.engine.version
+    ) {
+      throw new HpiCliUsageError();
+    }
+    try {
+      const readText = dependencies.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+      const active = pilotActivePointerSchema.parse(
+        JSON.parse(
+          await readText(join(resolve(portableRoot), ".hpi-update", "active.json")),
+        ) as unknown,
+      );
+      const publishedDev1IsActive =
+        active.releaseId === "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc" &&
+        active.productVersion === "0.1.0-dev.1" &&
+        active.artifactFingerprint ===
+          "sha256:5091110764aa5e7499f4b00e9e9b800cab6d739a17303d8b547dd8827186b983";
+      const requestedDev2IsAlreadyActive =
+        active.releaseId === preparedCandidate.releaseId &&
+        active.productVersion === preparedCandidate.productVersion &&
+        active.artifactFingerprint === preparedCandidate.artifact.fingerprint;
+      if (!publishedDev1IsActive && !requestedDev2IsAlreadyActive) {
+        throw new HpiCliUsageError();
+      }
+    } catch (error) {
+      if (error instanceof HpiCliUsageError) throw error;
+      throw new HpiCliUsageError();
+    }
+  }
   const manager = await dependencies.createUpdateManager?.({
     paths,
-    ...(artifactPath === undefined ? {} : { artifactPath }),
+    ...(preparedCandidate !== undefined &&
+    preparedArtifact !== undefined &&
+    preparedEvidence !== undefined
+      ? {
+          candidate: preparedCandidate,
+          artifact: preparedArtifact,
+          trustedQualificationEvidence: preparedEvidence,
+        }
+      : artifactPath === undefined
+        ? {}
+        : { artifactPath }),
   });
   if (manager === undefined) {
     line(
@@ -966,9 +1050,9 @@ async function updateCommand(
     }
 
     if (subcommand === "check" || subcommand === "apply") {
-      const candidatePath = optionValue(arguments_.slice(1), "--candidate");
       if (candidatePath === undefined || artifactPath === undefined) throw new HpiCliUsageError();
-      const candidate = await readUpdateCandidate(candidatePath, dependencies);
+      const candidate =
+        preparedCandidate ?? (await readUpdateCandidate(candidatePath, dependencies));
       if (subcommand === "check") {
         const result: ReleaseCheckResult = await manager.check(candidate);
         line(dependencies.io, JSON.stringify(result));
@@ -1331,7 +1415,21 @@ function assertUpdateOptions(arguments_: readonly string[]): void {
     return;
   }
   if (subcommand === "check" || subcommand === "apply") {
-    assertPilotJsonOptions(arguments_.slice(1), new Set(["--candidate", "--artifact"]));
+    const evidenceRequested = arguments_.includes("--installer-bootstrap-evidence");
+    if (
+      (subcommand === "check" && evidenceRequested) ||
+      (subcommand === "apply" && !evidenceRequested)
+    ) {
+      throw new HpiCliUsageError();
+    }
+    assertPilotJsonOptions(
+      arguments_.slice(1),
+      new Set([
+        "--candidate",
+        "--artifact",
+        ...(evidenceRequested ? (["--installer-bootstrap-evidence"] as const) : []),
+      ]),
+    );
     return;
   }
   if (subcommand === "rollback") {
@@ -2931,7 +3029,6 @@ function printHelp(io: HpiCliIo): void {
   line(io, "       hpi doctor [--json] | version [--json]");
   line(io, "       hpi update | update status [--json]");
   line(io, "       hpi update check --candidate <file> --artifact <file> --json");
-  line(io, "       hpi update apply --candidate <file> --artifact <file> --json");
   line(io, "       hpi update rollback <release-id> --json");
   line(io, "       --json selects machine output where listed; it does not grant authority");
   line(io, "       hpi smoke tui");

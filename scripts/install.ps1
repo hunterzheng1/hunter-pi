@@ -186,6 +186,31 @@ function ConvertTo-CanonicalJson([object]$Value) {
   return ConvertTo-Json -InputObject $Value -Compress -Depth 100
 }
 
+function ConvertTo-SortedCanonicalValue([object]$Value) {
+  if ($null -eq $Value -or $Value -is [string] -or $Value -is [bool] -or
+      $Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or
+      $Value -is [int64] -or $Value -is [uint16] -or $Value -is [uint32] -or
+      $Value -is [double] -or $Value -is [decimal]) {
+    return $Value
+  }
+  if ($Value -is [System.Array]) {
+    return @($Value | ForEach-Object { ConvertTo-SortedCanonicalValue $_ })
+  }
+  if ($Value -is [System.Management.Automation.PSCustomObject]) {
+    $ordered = [ordered]@{}
+    foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
+      $ordered[$property.Name] = ConvertTo-SortedCanonicalValue $property.Value
+    }
+    return [PSCustomObject]$ordered
+  }
+  throw "Canonical JSON accepts only JSON-compatible values."
+}
+
+function Get-CanonicalJsonFingerprint([object]$Value) {
+  $canonical = ConvertTo-Json -InputObject (ConvertTo-SortedCanonicalValue $Value) -Compress -Depth 100
+  return "sha256:" + (Get-Sha256Bytes ([Text.Encoding]::UTF8.GetBytes($canonical)))
+}
+
 function ConvertFrom-HpiJson([string]$Json) {
   $command = Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json -CommandType Cmdlet
   if ($command.Parameters.ContainsKey("DateKind")) {
@@ -615,6 +640,13 @@ function Read-PortableActiveRelease([string]$Root) {
     ReleaseId = [string]$candidate.releaseId
     ProductVersion = [string]$candidate.productVersion
     EngineVersion = [string]$candidate.engine.piVersion
+    ArtifactFingerprint = [string]$candidate.artifact.fingerprint
+    ArtifactByteLength = [long]$candidate.artifact.byteLength
+    QualificationStatus = [string]$candidate.qualification.status
+    QualificationEvidenceId = if (@($candidate.qualification.checks).Count -eq 1 -and
+      @($candidate.qualification.checks[0].evidenceIds).Count -eq 1) {
+      [string]$candidate.qualification.checks[0].evidenceIds[0]
+    } else { "" }
   }
 }
 
@@ -733,6 +765,13 @@ function Read-PortableRelease([string]$Root, [bool]$RequireBootstrapActive = $tr
     ProductVersion = $productVersion
     EngineVersion = [string]$portable.engineVersion
     SourceCommit = [string]$portable.sourceCommit
+    ArtifactFingerprint = [string]$portable.artifactFingerprint
+    ArtifactByteLength = [long]$portable.artifactByteLength
+    QualificationStatus = [string]$candidate.qualification.status
+    QualificationEvidenceId = if (@($candidate.qualification.checks).Count -eq 1 -and
+      @($candidate.qualification.checks[0].evidenceIds).Count -eq 1) {
+      [string]$candidate.qualification.checks[0].evidenceIds[0]
+    } else { "" }
     ProductShellIntegrity = [string]$portable.productShellIntegrity
     CoreExtensionIntegrity = [string]$portable.coreExtensionIntegrity
     Signed = $false
@@ -750,6 +789,291 @@ function Assert-ExistingInstallerSchema([string]$Root) {
         "hpi-windows-portable.v3"
       )) {
     throw "Another Hunter Pi release is active; use hpi update apply instead of overwriting it."
+  }
+}
+
+function Get-BootstrapQualificationEvidencePath([string]$SourceRoot) {
+  $candidate = Read-StrictReleaseCandidate (
+    Join-Path $SourceRoot "portable-release-candidate.json"
+  ) "Bootstrap release candidate"
+  $checks = @($candidate.qualification.checks)
+  if (-not [StringComparer]::Ordinal.Equals([string]$candidate.qualification.status, "PASS") -or
+      $checks.Count -ne 1 -or
+      -not [StringComparer]::Ordinal.Equals([string]$checks[0].name, "windows-portable-ci") -or
+      -not [StringComparer]::Ordinal.Equals([string]$checks[0].outcome, "PASS")) {
+    throw "Bootstrap migration requires one qualified Windows portable release."
+  }
+  $evidenceIds = @($checks[0].evidenceIds)
+  if ($evidenceIds.Count -ne 1 -or
+      [string]$evidenceIds[0] -cnotmatch "^evidence_main-ci-(\d+)-portable$") {
+    throw "Bootstrap migration candidate does not bind one hosted qualification Evidence receipt."
+  }
+  $runId = $Matches[1]
+  $evidencePath = Join-Path $SourceRoot (".hpi-update\qualification-evidence\" + $runId + ".json")
+  if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+    throw "Bootstrap migration qualification Evidence is missing."
+  }
+  $evidenceItem = Get-Item -LiteralPath $evidencePath -Force
+  if (($evidenceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "Bootstrap migration qualification Evidence must be one physical file."
+  }
+  return $evidencePath
+}
+
+function Assert-PublishedDev1RollbackReady(
+  [string]$InstalledRoot,
+  [object]$InstalledRelease,
+  [object]$InstalledCandidate
+) {
+  $publishedArtifactFingerprint = "sha256:5091110764aa5e7499f4b00e9e9b800cab6d739a17303d8b547dd8827186b983"
+  $publishedArtifactByteLength = 64936745
+  $publishedCandidateIdentityFingerprint = "sha256:a4c95e75ac5396aa1e5f3ee453143defa45e38fc50e14833febf0f9d535bc52d"
+  $publishedQualificationJournalName = (
+    "000000000001-96afeefd86dabe24bb3880ff3c3a7236bfe2efae2058576f22b312072409d5e0.json"
+  )
+  $publishedQualificationJournalSha256 = (
+    "f08a51c8b6cb2b5b8bfc9c95f23226c7bca66f71354e22588193a6c0508c5c18"
+  )
+  if (-not [StringComparer]::Ordinal.Equals(
+        [string]$InstalledRelease.ArtifactFingerprint,
+        $publishedArtifactFingerprint
+      ) -or
+      [long]$InstalledRelease.ArtifactByteLength -ne $publishedArtifactByteLength -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$InstalledCandidate.artifact.fingerprint,
+        $publishedArtifactFingerprint
+      ) -or
+      [long]$InstalledCandidate.artifact.byteLength -ne $publishedArtifactByteLength) {
+    throw "The installed dev.1 artifact is not the published release artifact."
+  }
+  $qualificationChecks = @($InstalledCandidate.qualification.checks)
+  if ($qualificationChecks.Count -ne 1 -or
+      -not [StringComparer]::Ordinal.Equals([string]$qualificationChecks[0].name, "windows-portable-ci") -or
+      -not [StringComparer]::Ordinal.Equals([string]$qualificationChecks[0].outcome, "PASS") -or
+      @($qualificationChecks[0].evidenceIds).Count -ne 1 -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$qualificationChecks[0].evidenceIds[0],
+        "evidence_main-ci-31643808274-portable"
+      ) -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$InstalledCandidate.qualification.qualifiedAt,
+        "2026-08-12T21:52:32Z"
+      )) {
+    throw "The installed dev.1 qualification does not match the published release."
+  }
+  $evidencePath = Join-Path $InstalledRoot ".hpi-update\qualification-evidence\31643808274.json"
+  $evidence = Read-JsonObject $evidencePath "Published dev.1 qualification Evidence"
+  Assert-ExactProperties $evidence @(
+    "schemaVersion", "evidenceId", "repository", "sourceCommit",
+    "candidateIdentityFingerprint", "artifact", "run", "observedAt"
+  ) "Published dev.1 qualification Evidence"
+  Assert-ExactProperties $evidence.artifact @("name", "fingerprint", "byteLength") (
+    "Published dev.1 qualification Evidence artifact"
+  )
+  Assert-ExactProperties $evidence.run @(
+    "id", "attempt", "event", "headBranch", "headSha", "workflowName",
+    "status", "conclusion", "updatedAt", "url", "jobs"
+  ) "Published dev.1 qualification Evidence run"
+  if (-not [StringComparer]::Ordinal.Equals(
+        [string]$evidence.schemaVersion,
+        "hpi-windows-portable-qualification-evidence.v2"
+      ) -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.evidenceId, "evidence_main-ci-31643808274-portable") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.repository, "hunterzheng1/hunter-pi") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.sourceCommit, "d9f2d931b9fc42d23ceae60fada2aee811caf2ec") -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$evidence.candidateIdentityFingerprint,
+        $publishedCandidateIdentityFingerprint
+      ) -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.artifact.name, "hpi-windows-x64-portable") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.artifact.fingerprint, $publishedArtifactFingerprint) -or
+      [long]$evidence.artifact.byteLength -ne $publishedArtifactByteLength -or
+      [long]$evidence.run.id -ne 31643808274 -or
+      [long]$evidence.run.attempt -ne 1 -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.event, "push") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.headBranch, "main") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.headSha, [string]$evidence.sourceCommit) -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.workflowName, "CI") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.status, "completed") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.conclusion, "success") -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.run.updatedAt, "2026-08-12T21:52:32Z") -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$evidence.run.url,
+        "https://github.com/hunterzheng1/hunter-pi/actions/runs/31643808274"
+      ) -or
+      -not [StringComparer]::Ordinal.Equals([string]$evidence.observedAt, "2026-08-12T21:52:32Z") -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$InstalledCandidate.qualification.qualifiedAt,
+        [string]$evidence.run.updatedAt
+      )) {
+    throw "The installed dev.1 qualification Evidence is not the published hosted receipt."
+  }
+  Assert-JsonArray $evidence.run.jobs "Published dev.1 qualification Evidence jobs"
+  $candidateIdentity = [ordered]@{
+    schemaVersion = $InstalledCandidate.schemaVersion
+    releaseId = $InstalledCandidate.releaseId
+    productVersion = $InstalledCandidate.productVersion
+    channel = $InstalledCandidate.channel
+    artifact = $InstalledCandidate.artifact
+    engine = $InstalledCandidate.engine
+    updatePolicy = $InstalledCandidate.updatePolicy
+    licenses = $InstalledCandidate.licenses
+  }
+  if (-not [StringComparer]::Ordinal.Equals(
+      [string]$evidence.candidateIdentityFingerprint,
+      (Get-CanonicalJsonFingerprint ([PSCustomObject]$candidateIdentity))
+    )) {
+    throw "The installed dev.1 candidate does not bind its hosted qualification Evidence."
+  }
+  $requiredJobs = @(
+    "Tests / ubuntu-latest", "Tests / windows-latest",
+    "Quality + platform Evidence / ubuntu-latest", "Quality + platform Evidence / windows-latest",
+    "Windows x64 portable artifact", "Windows external package smoke",
+    "Windows clean locked install", "Pi + Task 9 + Task 10 Evidence / Windows + Ubuntu identity",
+    "Task 7 containment / ubuntu-latest", "Task 7 containment / windows-latest",
+    "Task 7 Evidence / Windows + Ubuntu identity", "CI gate"
+  )
+  $jobs = @($evidence.run.jobs)
+  if ($jobs.Count -ne $requiredJobs.Count) {
+    throw "The installed dev.1 qualification Evidence job set is incomplete."
+  }
+  foreach ($requiredJob in $requiredJobs) {
+    $matches = @($jobs | Where-Object {
+      Assert-ExactProperties $_ @("name", "status", "conclusion") (
+        "Published dev.1 qualification Evidence job"
+      )
+      [StringComparer]::Ordinal.Equals([string]$_.name, $requiredJob) -and
+      [StringComparer]::Ordinal.Equals([string]$_.status, "completed") -and
+      [StringComparer]::Ordinal.Equals([string]$_.conclusion, "success")
+    })
+    if ($matches.Count -ne 1) {
+      throw "The installed dev.1 qualification Evidence job set is invalid."
+    }
+  }
+  $journalPath = Join-Path $InstalledRoot (
+    ".hpi-update\manager\journal\" + $publishedQualificationJournalName
+  )
+  if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+    throw "The installed dev.1 qualification journal receipt is missing."
+  }
+  $journalItem = Get-Item -LiteralPath $journalPath -Force
+  if (($journalItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      -not [StringComparer]::Ordinal.Equals(
+        (Get-Sha256Hex $journalPath),
+        $publishedQualificationJournalSha256
+      )) {
+    throw "The installed dev.1 qualification journal receipt is not the published receipt."
+  }
+}
+
+function Invoke-SourceUpdateCli(
+  [string]$SourceRoot,
+  [string]$TargetRoot,
+  [string]$SourceReleaseId,
+  [string[]]$Arguments
+) {
+  $sourceVersionRoot = Join-Path $SourceRoot ("versions\" + $SourceReleaseId)
+  Assert-PhysicalDirectoryIfPresent $sourceVersionRoot "Bootstrap migration source version"
+  $nodePath = Join-Path $sourceVersionRoot "node.exe"
+  $cliPath = Join-Path $sourceVersionRoot "node_modules\@hunter-pi\cli\dist\hpi.js"
+  foreach ($required in @($nodePath, $cliPath)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+      throw "Bootstrap migration runtime is incomplete."
+    }
+    $requiredItem = Get-Item -LiteralPath $required -Force
+    if (($requiredItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Bootstrap migration runtime contains a redirected file."
+    }
+  }
+  $portableRootWasPresent = Test-Path Env:HUNTER_PI_PORTABLE_ROOT
+  $originalPortableRoot = $env:HUNTER_PI_PORTABLE_ROOT
+  try {
+    $env:HUNTER_PI_PORTABLE_ROOT = $TargetRoot
+    $env:HUNTER_PI_INSTALLER_BOOTSTRAP = "dev1-to-dev2"
+    $output = @(& $nodePath $cliPath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    if ($portableRootWasPresent) {
+      $env:HUNTER_PI_PORTABLE_ROOT = $originalPortableRoot
+    } else {
+      Remove-Item Env:HUNTER_PI_PORTABLE_ROOT -ErrorAction SilentlyContinue
+    }
+    Remove-Item Env:HUNTER_PI_INSTALLER_BOOTSTRAP -ErrorAction SilentlyContinue
+  }
+  if ($exitCode -ne 0 -or $output.Count -eq 0) {
+    throw "Bootstrap migration update manager rejected the operation."
+  }
+  try {
+    return ConvertFrom-HpiJson ([string]$output[-1])
+  }
+  catch {
+    throw "Bootstrap migration update manager returned an invalid receipt."
+  }
+}
+
+function Invoke-BootstrapUpdate(
+  [string]$SourceRoot,
+  [string]$TargetRoot,
+  [object]$Release
+) {
+  $candidatePath = Join-Path $SourceRoot "portable-release-candidate.json"
+  $artifactPath = Join-Path $SourceRoot "update.bundle.tgz"
+  $evidencePath = Get-BootstrapQualificationEvidencePath $SourceRoot
+  $receipt = Invoke-SourceUpdateCli $SourceRoot $TargetRoot ([string]$Release.ReleaseId) @(
+    "update", "apply",
+    "--candidate", $candidatePath,
+    "--artifact", $artifactPath,
+    "--installer-bootstrap-evidence", $evidencePath,
+    "--json"
+  )
+  $outcomeIsAccepted = (
+    [StringComparer]::Ordinal.Equals([string]$receipt.outcome, "APPLIED") -or
+    [StringComparer]::Ordinal.Equals([string]$receipt.outcome, "NOOP")
+  )
+  if (-not [StringComparer]::Ordinal.Equals([string]$receipt.schemaVersion, "hpi-update-receipt.v1") -or
+      -not [StringComparer]::Ordinal.Equals([string]$receipt.action, "APPLY") -or
+      -not $outcomeIsAccepted -or
+      -not [StringComparer]::Ordinal.Equals([string]$receipt.activeReleaseId, [string]$Release.ReleaseId)) {
+    throw "Bootstrap migration update manager did not activate the requested release."
+  }
+  $active = Read-PortableActiveRelease $TargetRoot
+  if (-not [StringComparer]::Ordinal.Equals([string]$active.ReleaseId, [string]$Release.ReleaseId) -or
+      -not [StringComparer]::Ordinal.Equals([string]$active.ProductVersion, [string]$Release.ProductVersion) -or
+      -not [StringComparer]::Ordinal.Equals([string]$active.EngineVersion, [string]$Release.EngineVersion) -or
+      -not [StringComparer]::Ordinal.Equals([string]$active.ArtifactFingerprint, [string]$Release.ArtifactFingerprint) -or
+      [long]$active.ArtifactByteLength -ne [long]$Release.ArtifactByteLength -or
+      -not [StringComparer]::Ordinal.Equals([string]$active.QualificationStatus, "PASS") -or
+      -not [StringComparer]::Ordinal.Equals(
+        [string]$active.QualificationEvidenceId,
+        [string]$Release.QualificationEvidenceId
+      )) {
+    throw "Bootstrap migration active release verification failed."
+  }
+}
+
+function Invoke-BootstrapRollback(
+  [string]$SourceRoot,
+  [string]$TargetRoot,
+  [string]$SourceReleaseId,
+  [string]$PreviousReleaseId
+) {
+  $receipt = Invoke-SourceUpdateCli $SourceRoot $TargetRoot $SourceReleaseId @(
+    "update", "rollback", $PreviousReleaseId, "--json"
+  )
+  $outcomeIsAccepted = (
+    [StringComparer]::Ordinal.Equals([string]$receipt.outcome, "APPLIED") -or
+    [StringComparer]::Ordinal.Equals([string]$receipt.outcome, "NOOP")
+  )
+  if (-not [StringComparer]::Ordinal.Equals([string]$receipt.schemaVersion, "hpi-update-receipt.v1") -or
+      -not [StringComparer]::Ordinal.Equals([string]$receipt.action, "ROLLBACK") -or
+      -not $outcomeIsAccepted -or
+      -not [StringComparer]::Ordinal.Equals([string]$receipt.activeReleaseId, $PreviousReleaseId)) {
+    throw "Bootstrap migration rollback did not restore the previous release."
+  }
+  $active = Read-PortableActiveRelease $TargetRoot
+  if (-not [StringComparer]::Ordinal.Equals([string]$active.ReleaseId, $PreviousReleaseId)) {
+    throw "Bootstrap migration rollback verification failed."
   }
 }
 
@@ -940,6 +1264,7 @@ function Test-StableCommand([string]$InstallPath, [object]$ExpectedRelease) {
 }
 
 $temporaryRoot = ""
+$bootstrapTemporaryRoot = ""
 try {
   if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
@@ -1002,23 +1327,111 @@ try {
 
   $status = "INSTALLED"
   $newInstallPublished = $false
+  $bootstrapPreviousReleaseId = ""
   if (Test-Path -LiteralPath $InstallRoot) {
     Assert-PhysicalDirectoryIfPresent $InstallRoot "Existing installation"
     Assert-ExistingInstallerSchema $InstallRoot
     $installedBootstrap = Read-PortableRelease $InstallRoot $false
     $installedRelease = Read-PortableActiveRelease $InstallRoot
-    if (-not [StringComparer]::Ordinal.Equals([string]$installedRelease.ReleaseId, [string]$release.ReleaseId) -or
-        -not [StringComparer]::Ordinal.Equals([string]$installedRelease.ProductVersion, [string]$release.ProductVersion) -or
-        -not [StringComparer]::Ordinal.Equals([string]$installedRelease.EngineVersion, [string]$release.EngineVersion) -or
-        -not [StringComparer]::Ordinal.Equals([string]$installedBootstrap.SourceCommit, [string]$release.SourceCommit)) {
-      throw "A different Hunter Pi release is active; use hpi update apply instead of overwriting it."
+    $activeMatchesRequested = (
+      [StringComparer]::Ordinal.Equals([string]$installedRelease.ReleaseId, [string]$release.ReleaseId) -and
+      [StringComparer]::Ordinal.Equals([string]$installedRelease.ProductVersion, [string]$release.ProductVersion) -and
+      [StringComparer]::Ordinal.Equals([string]$installedRelease.EngineVersion, [string]$release.EngineVersion)
+    )
+    if ($activeMatchesRequested) {
+      if ([StringComparer]::Ordinal.Equals([string]$installedBootstrap.SourceCommit, [string]$release.SourceCommit)) {
+        Assert-InstalledPayloadMatches $LocalSource $InstallRoot
+      } elseif (-not [StringComparer]::Ordinal.Equals([string]$installedBootstrap.ProductVersion, "0.1.0-dev.1") -or
+                -not [StringComparer]::Ordinal.Equals([string]$release.ProductVersion, "0.1.0-dev.2")) {
+        throw "Installed bootstrap identity does not match the active release."
+      } else {
+        $installedDev1Candidate = Read-StrictReleaseCandidate (
+          Join-Path $InstallRoot "versions\release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc\.hpi-candidate.json"
+        ) "Published dev.1 installed candidate" $false
+        Assert-PublishedDev1RollbackReady $InstallRoot $installedBootstrap $installedDev1Candidate
+        $bootstrapTemporaryRoot = Join-Path ([IO.Path]::GetTempPath()) (
+          "HunterPiBootstrap-" + [guid]::NewGuid().ToString("N")
+        )
+        New-Item -ItemType Directory -Path $bootstrapTemporaryRoot | Out-Null
+        $frozenSource = Join-Path $bootstrapTemporaryRoot "source"
+        Copy-ReleaseTree $LocalSource $frozenSource
+        if ((Assert-ReleaseFiles $frozenSource) -ne $sourceInventoryFingerprint) {
+          throw "Bootstrap migration source changed after verification."
+        }
+        $frozenRelease = Read-PortableRelease $frozenSource
+        if (-not [StringComparer]::Ordinal.Equals([string]$frozenRelease.ReleaseId, [string]$release.ReleaseId)) {
+          throw "Bootstrap migration frozen source identity changed."
+        }
+        Invoke-BootstrapUpdate $frozenSource $InstallRoot $frozenRelease
+      }
+      $stableBin = Assert-StableBinPhysical $InstallRoot $true
+      if (-not (Test-StableCommand $InstallRoot $release)) {
+        throw "Installed hpi command failed its version probe."
+      }
+      $status = "ALREADY_INSTALLED"
+    } elseif ([StringComparer]::Ordinal.Equals([string]$installedRelease.ReleaseId, "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc") -and
+              [StringComparer]::Ordinal.Equals([string]$installedBootstrap.ReleaseId, "release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc") -and
+              [StringComparer]::Ordinal.Equals([string]$installedBootstrap.SourceCommit, "d9f2d931b9fc42d23ceae60fada2aee811caf2ec") -and
+              [StringComparer]::Ordinal.Equals([string]$installedRelease.ArtifactFingerprint, [string]$installedBootstrap.ArtifactFingerprint) -and
+              [long]$installedRelease.ArtifactByteLength -eq [long]$installedBootstrap.ArtifactByteLength -and
+              [StringComparer]::Ordinal.Equals([string]$installedRelease.QualificationStatus, "PASS") -and
+              [StringComparer]::Ordinal.Equals([string]$installedBootstrap.QualificationStatus, "PASS") -and
+              [StringComparer]::Ordinal.Equals([string]$installedRelease.QualificationEvidenceId, "evidence_main-ci-31643808274-portable") -and
+              [StringComparer]::Ordinal.Equals([string]$installedBootstrap.QualificationEvidenceId, "evidence_main-ci-31643808274-portable") -and
+              [StringComparer]::Ordinal.Equals([string]$release.ProductVersion, "0.1.0-dev.2") -and
+              [StringComparer]::Ordinal.Equals([string]$installedRelease.EngineVersion, [string]$release.EngineVersion)) {
+      $installedDev1Candidate = Read-StrictReleaseCandidate (
+        Join-Path $InstallRoot "versions\release_hunter-pi-0.1.0-dev.1-d9f2d931b9fc\.hpi-candidate.json"
+      ) "Published dev.1 installed candidate" $false
+      Assert-PublishedDev1RollbackReady $InstallRoot $installedRelease $installedDev1Candidate
+      $bootstrapPreviousReleaseId = [string]$installedRelease.ReleaseId
+      $bootstrapTemporaryRoot = Join-Path ([IO.Path]::GetTempPath()) (
+        "HunterPiBootstrap-" + [guid]::NewGuid().ToString("N")
+      )
+      New-Item -ItemType Directory -Path $bootstrapTemporaryRoot | Out-Null
+      $frozenSource = Join-Path $bootstrapTemporaryRoot "source"
+      Copy-ReleaseTree $LocalSource $frozenSource
+      if ((Assert-ReleaseFiles $frozenSource) -ne $sourceInventoryFingerprint) {
+        throw "Bootstrap migration source changed after verification."
+      }
+      $frozenRelease = Read-PortableRelease $frozenSource
+      if (-not [StringComparer]::Ordinal.Equals([string]$frozenRelease.ReleaseId, [string]$release.ReleaseId)) {
+        throw "Bootstrap migration frozen source identity changed."
+      }
+      try {
+        Invoke-BootstrapUpdate $frozenSource $InstallRoot $frozenRelease
+        $stableBin = Assert-StableBinPhysical $InstallRoot $true
+        if (-not (Test-StableCommand $InstallRoot $release)) {
+          throw "Bootstrap migration installed command failed its version probe."
+        }
+      }
+      catch {
+        $bootstrapFailure = $_
+        $rollbackRequired = $true
+        try {
+          $activeAfterFailure = Read-PortableActiveRelease $InstallRoot
+          $rollbackRequired = -not [StringComparer]::Ordinal.Equals(
+            [string]$activeAfterFailure.ReleaseId,
+            $bootstrapPreviousReleaseId
+          )
+        }
+        catch {
+          $rollbackRequired = $true
+        }
+        if ($rollbackRequired) {
+          try {
+            Invoke-BootstrapRollback $frozenSource $InstallRoot ([string]$frozenRelease.ReleaseId) $bootstrapPreviousReleaseId
+          }
+          catch {
+            throw "Bootstrap migration failed and the previous release could not be restored."
+          }
+        }
+        throw $bootstrapFailure
+      }
+      $status = "UPDATED"
+    } else {
+      throw "A different Hunter Pi release is active; use hpi update instead of overwriting it."
     }
-    Assert-InstalledPayloadMatches $LocalSource $InstallRoot
-    $stableBin = Assert-StableBinPhysical $InstallRoot $true
-    if (-not (Test-StableCommand $InstallRoot $release)) {
-      throw "Installed hpi command failed its version probe."
-    }
-    $status = "ALREADY_INSTALLED"
   } else {
     $parent = Split-Path -Parent $InstallRoot
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -1084,6 +1497,14 @@ try {
         throw "PATH update failed and the new installation could not be rolled back."
       }
     }
+    if ($status -eq "UPDATED" -and -not [string]::IsNullOrWhiteSpace($bootstrapPreviousReleaseId)) {
+      try {
+        Invoke-BootstrapRollback $frozenSource $InstallRoot ([string]$frozenRelease.ReleaseId) $bootstrapPreviousReleaseId
+      }
+      catch {
+        throw "PATH update failed and the previous Hunter Pi release could not be restored."
+      }
+    }
     throw $pathFailure
   }
   if ($conflicts.Count -gt 0 -and -not $Json) {
@@ -1108,7 +1529,7 @@ try {
     updateChannel = "developer-preview"
     signed = $false
     providerRequestPerformed = $false
-    existingHunterPiStateTouched = $false
+    existingHunterPiStateTouched = $status -eq "UPDATED"
   }
   if ($Json) {
     $receipt | ConvertTo-Json -Compress
@@ -1124,5 +1545,8 @@ catch {
 finally {
   if (-not [string]::IsNullOrWhiteSpace($temporaryRoot) -and (Test-Path -LiteralPath $temporaryRoot)) {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
+  }
+  if (-not [string]::IsNullOrWhiteSpace($bootstrapTemporaryRoot) -and (Test-Path -LiteralPath $bootstrapTemporaryRoot)) {
+    Remove-Item -LiteralPath $bootstrapTemporaryRoot -Recurse -Force
   }
 }

@@ -255,12 +255,11 @@ Implemented portable commands:
 hpi update
 hpi update status
 hpi update check --candidate <file> --artifact <file> --json
-hpi update apply --candidate <file> --artifact <file> --json
 hpi update rollback <release-id> --json
 hpi version
 ```
 
-The plain `hpi update` command discovers the newest qualified release in the configured official channel, downloads its strict candidate and artifact, verifies them, and applies them through the existing rollback-safe transaction. The path-bearing `check` and `apply` forms remain advanced offline/Evidence interfaces. `--json` selects a stable machine representation where supported; it is not an authority flag.
+The plain `hpi update` command discovers the newest qualified release in the configured official channel, downloads its strict candidate and artifact, verifies them, and applies them through the existing rollback-safe transaction. The path-bearing `check` form is a non-mutating advanced inspection interface; local files have no public force-apply command. `--json` selects a stable machine representation where supported; it is not an authority flag.
 
 An update summary must identify:
 

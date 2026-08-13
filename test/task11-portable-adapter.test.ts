@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -199,6 +199,98 @@ describe("Task 11 Windows portable release adapter", () => {
     ).rejects.toThrow(/bind the exact release Evidence/iu);
   });
 
+  it("blocks apply and replay when durable hosted qualification Evidence is absent", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-apply-evidence-",
+    );
+    roots.push(root);
+    const fixture = portableCandidate("release_task11-portable-apply-evidence");
+    const portableRoot = join(root, "portable");
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    const manager = managerFor(
+      root,
+      adapter,
+      new Map([[fixture.candidate.releaseId, fixture.artifact]]),
+    );
+    const request = {
+      schemaVersion: "hpi-update-apply.v1" as const,
+      operationId: "op_task11-portable-apply-without-evidence",
+      operationFingerprint: sha256Fingerprint("portable-apply-without-evidence"),
+      candidate: fixture.candidate,
+      observedAt: fixtureTimestamp,
+    };
+
+    await expect(manager.apply(request)).resolves.toMatchObject({ outcome: "BLOCKED" });
+    await adapter.retainQualificationEvidence(
+      fixture.candidate,
+      fixture.evidence,
+      fixture.artifact,
+    );
+    await expect(
+      manager.apply({
+        ...request,
+        operationId: "op_task11-portable-apply-with-evidence",
+        operationFingerprint: sha256Fingerprint("portable-apply-with-evidence"),
+      }),
+    ).resolves.toMatchObject({
+      outcome: "APPLIED",
+      activeReleaseId: fixture.candidate.releaseId,
+    });
+    await rm(join(portableRoot, ".hpi-update", "qualification-evidence"), {
+      recursive: true,
+      force: true,
+    });
+    await expect(
+      manager.apply({
+        ...request,
+        operationId: "op_task11-portable-replay-without-evidence",
+        operationFingerprint: sha256Fingerprint("portable-replay-without-evidence"),
+      }),
+    ).resolves.toMatchObject({ outcome: "BLOCKED" });
+  });
+
+  it("blocks same-release replay when the prior APPLY receipt is missing", async () => {
+    const root = await createTemporaryTestDirectory(
+      tmpdir(),
+      "hunter-pi-task11-portable-replay-journal-",
+    );
+    roots.push(root);
+    const fixture = portableCandidate("release_task11-portable-replay-journal");
+    const portableRoot = join(root, "portable");
+    const adapter = new FileWindowsPortableReleaseAdapter({
+      installationRoot: portableRoot,
+      targetPlatform: "win32-x64",
+      healthCheck: () => Promise.resolve({ status: "PASS" }),
+    });
+    await adapter.retainQualificationEvidence(
+      fixture.candidate,
+      fixture.evidence,
+      fixture.artifact,
+    );
+    const staged = await adapter.stage(fixture.candidate, fixture.artifact);
+    await adapter.activate(staged);
+    const manager = managerFor(
+      root,
+      adapter,
+      new Map([[fixture.candidate.releaseId, fixture.artifact]]),
+    );
+
+    await expect(
+      manager.apply({
+        schemaVersion: "hpi-update-apply.v1",
+        operationId: "op_task11-portable-replay-journal",
+        operationFingerprint: sha256Fingerprint("portable-replay-journal"),
+        candidate: fixture.candidate,
+        observedAt: fixtureTimestamp,
+      }),
+    ).resolves.toMatchObject({ outcome: "BLOCKED", activeReleaseId: fixture.candidate.releaseId });
+  });
+
   it("atomically activates version directories, persists migration state, and rolls back", async () => {
     const root = await createTemporaryTestDirectory(tmpdir(), "hunter-pi-task11-portable-");
     roots.push(root);
@@ -222,6 +314,10 @@ describe("Task 11 Windows portable release adapter", () => {
       healthCheck: () => Promise.resolve({ status: "PASS" }),
     });
     const manager = managerFor(root, adapter, artifacts);
+    await Promise.all([
+      adapter.retainQualificationEvidence(first.candidate, first.evidence, first.artifact),
+      adapter.retainQualificationEvidence(second.candidate, second.evidence, second.artifact),
+    ]);
 
     await expect(
       manager.apply({
@@ -296,6 +392,7 @@ describe("Task 11 Windows portable release adapter", () => {
     const installed = await adapter.stage(initial.candidate, initial.artifact);
     await adapter.activate(installed);
     const manager = managerFor(root, adapter, artifacts);
+    await adapter.retainQualificationEvidence(update.candidate, update.evidence, update.artifact);
     await expect(
       manager.apply({
         schemaVersion: "hpi-update-apply.v1",
@@ -341,6 +438,7 @@ describe("Task 11 Windows portable release adapter", () => {
       healthCheck: () => Promise.resolve({ status: "PASS" }),
     });
     const manager = managerFor(root, adapter, artifacts);
+    await adapter.retainQualificationEvidence(active.candidate, active.evidence, active.artifact);
     await manager.apply({
       schemaVersion: "hpi-update-apply.v1",
       operationId: "op_task11-portable-active",
@@ -382,6 +480,10 @@ describe("Task 11 Windows portable release adapter", () => {
       healthCheck: () => Promise.resolve({ status: "PASS" }),
     });
     const manager = managerFor(root, adapter, artifacts);
+    await Promise.all([
+      adapter.retainQualificationEvidence(first.candidate, first.evidence, first.artifact),
+      adapter.retainQualificationEvidence(second.candidate, second.evidence, second.artifact),
+    ]);
     for (const [index, candidate] of [first.candidate, second.candidate].entries()) {
       await manager.apply({
         schemaVersion: "hpi-update-apply.v1",

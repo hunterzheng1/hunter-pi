@@ -434,7 +434,7 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
-    if (activeReleaseId === undefined || this.#adapter.installedCandidate === undefined) {
+    if (activeReleaseId === undefined) {
       return this.#append({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
@@ -702,6 +702,19 @@ export class FileUpdateManager implements UpdateManager {
         observedAt: parsed.observedAt,
       });
     }
+    try {
+      await this.#adapter.assertQualificationEvidence(candidate, artifact);
+    } catch (error) {
+      return this.#append({
+        operationId: parsed.operationId,
+        operationFingerprint: parsed.operationFingerprint,
+        action: "APPLY",
+        candidate,
+        outcome: "BLOCKED",
+        reason: safeFailureReason(error, "qualification Evidence is missing or invalid"),
+        observedAt: parsed.observedAt,
+      });
+    }
     let previousReleaseId: DistributionReleaseId | undefined;
     try {
       previousReleaseId = await this.#adapter.current();
@@ -717,6 +730,47 @@ export class FileUpdateManager implements UpdateManager {
       });
     }
     if (previousReleaseId === candidate.releaseId) {
+      try {
+        const installed = await this.#adapter.installedCandidate({
+          releaseId: candidate.releaseId,
+        });
+        if (installed === undefined) {
+          throw new Error("active release candidate is missing");
+        }
+        if (canonicalJson(installed) !== canonicalJson(candidate)) {
+          throw new Error("active release candidate differs from the requested candidate");
+        }
+      } catch (error) {
+        return this.#append({
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          action: "APPLY",
+          candidate,
+          outcome: "FAILED",
+          activeReleaseId: previousReleaseId,
+          reason: safeFailureReason(error, "active release verification failed"),
+          observedAt: parsed.observedAt,
+        });
+      }
+      const priorApply = entries.find(
+        (entry) =>
+          entry.receipt.action === "APPLY" &&
+          entry.receipt.outcome === "APPLIED" &&
+          entry.receipt.candidateReleaseId === candidate.releaseId &&
+          entry.receipt.previousReleaseId !== undefined,
+      );
+      if (priorApply === undefined) {
+        return this.#append({
+          operationId: parsed.operationId,
+          operationFingerprint: parsed.operationFingerprint,
+          action: "APPLY",
+          candidate,
+          outcome: "BLOCKED",
+          activeReleaseId: previousReleaseId,
+          reason: "active release has no prior APPLY receipt preserving its rollback target",
+          observedAt: parsed.observedAt,
+        });
+      }
       return this.#append({
         operationId: parsed.operationId,
         operationFingerprint: parsed.operationFingerprint,
@@ -934,10 +988,7 @@ export class FileUpdateManager implements UpdateManager {
             )
             .at(-1)?.candidate;
     const expectedInstalledCandidate = historyCandidate ?? qualifiedFallbackCandidate;
-    if (
-      expectedInstalledCandidate !== undefined &&
-      this.#adapter.installedCandidate !== undefined
-    ) {
+    if (expectedInstalledCandidate !== undefined) {
       try {
         const installed = await this.#adapter.installedCandidate({
           releaseId: parsed.targetReleaseId,

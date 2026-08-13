@@ -2,7 +2,7 @@
 
 ## 结论
 
-2026-08-13，本地源码快照完成 `docs/13-real-machine-test-findings.md` 中七项已确认问题的实现与自动化验证。状态为 **IMPLEMENTED，待发布后实机验证**。
+2026-08-13，本地源码快照完成 `docs/13-real-machine-test-findings.md` 中八项已确认问题的实现与自动化验证。状态为 **IMPLEMENTED，待发布后实机验证**。
 
 不得由本记录推导出以下结论：
 
@@ -20,14 +20,15 @@
 - 自动更新同时验证严格候选、包摘要和与候选及包字节绑定的 Windows portable qualification Evidence，再复用现有原子切换、健康检查和回滚事务。
 - 发布资产生成器只在资格状态为 `PASS` 时，从同一冻结快照导出 candidate、bundle 和 qualification Evidence；预资格 CI 不发布可被自动更新消费的三项资产。
 - 固定版本的单行安装命令在执行前校验 `install.ps1` SHA-256；安装器保留 ZIP、清单与包内完整性校验，并在 TLS 失败时报告可获得的域名和底层错误类型，不关闭证书验证。
+- dev.1 无法自行运行新的裸更新入口，因此 dev.2 安装器提供一次受限的迁移通道：只接受绑定 hosted Windows qualification Evidence 的精确 dev.2 发布，通过同一个更新管理器切换 active release，保留 dev.1，并在健康检查或 PATH 失败时回滚。dev.2 之后恢复为裸 `hpi update` 的普通路径。
 
 ## 自动化证据
 
 定向回归：
 
 ```text
-Test Files  6 passed (6)
-Tests       103 passed (103)
+Test Files  4 passed (4)
+Tests       90 passed (90)
 ```
 
 完整门禁：
@@ -35,7 +36,7 @@ Tests       103 passed (103)
 ```text
 npm run verify
 Test Files  74 passed (74)
-Tests       766 passed (766)
+Tests       773 passed (773)
 Strict compiler smoke passed (TS2322, TS2375; NodeNext ESM policy).
 External package smoke passed (13 packages).
 Single-artifact hpi smoke passed (0.1.0-dev.2, Pi 0.84.1, Doctor BLOCKED, raw Pi unchanged).
@@ -49,8 +50,8 @@ ProviderIndependentProbe=SUPPORTED; RealProvider=NOT_PROVEN
 
 发布 `v0.1.0-dev.2` 后，在原反馈机器至少验证：
 
-1. 从固定 Release URL 执行带安装器 SHA-256 的单行安装命令。
+1. 在已安装 dev.1 的隔离或原反馈环境，从固定 dev.2 Release URL 执行带安装器 SHA-256 的单行命令，确认返回 `UPDATED`，且 dev.1 仍可回滚；在全新目录重复验证首次安装。
 2. 运行 `hpi version`、`hpi doctor` 和裸 `hpi`，确认人工输出、首次登录和 Quick Session 行为。
-3. 从 `0.1.0-dev.2` 之后的合格预览版本运行裸 `hpi update`，验证正常更新、无更新、TLS 失败和摘要错误路径。
+3. 在 dev.2 运行裸 `hpi update` 验证无更新路径；从 dev.2 之后的合格预览版本验证正常更新、TLS 失败和摘要错误路径。
 4. 对更新后的版本运行 `hpi update rollback <release-id> --json`，确认原版本可恢复。
 5. 将原始命令、非敏感输出和环境信息追加到实机问题记录；只有对应行为实际通过后，才将条目改为“已验证”。

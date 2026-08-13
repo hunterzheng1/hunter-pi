@@ -83,9 +83,19 @@ function adapterFor() {
   });
   const discard = vi.fn(() => Promise.resolve());
   const current = vi.fn(() => Promise.resolve(activeReleaseId));
+  const installedCandidates = new Map<DistributionReleaseId, ReleaseCandidate>();
+  const assertQualificationEvidence = vi.fn(() => Promise.resolve());
+  const installedCandidate = vi.fn((release: { readonly releaseId: DistributionReleaseId }) =>
+    Promise.resolve(installedCandidates.get(release.releaseId)),
+  );
   const adapter: ReleaseAdapter = {
     current,
-    stage,
+    assertQualificationEvidence,
+    installedCandidate,
+    stage: vi.fn((candidate: ReleaseCandidate) => {
+      installedCandidates.set(candidate.releaseId, candidate);
+      return stage(candidate);
+    }),
     healthCheck,
     migrate,
     activate,
@@ -94,6 +104,8 @@ function adapterFor() {
   };
   return {
     adapter,
+    assertQualificationEvidence,
+    installedCandidate,
     current,
     stage,
     healthCheck,

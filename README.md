@@ -33,10 +33,12 @@ Pi 0.84.1 的发布身份、资产哈希、CI、失败历史和适用边界见[�
 不需要预装 Node.js、npm 或 Pi。发布 `v0.1.0-dev.2` 后，普通用户只需复制这一行；它从固定 Release 下载脚本，脚本仍会校验 ZIP SHA-256 和包内清单：
 
 ```powershell
-$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "2186508544178ad78c02dc9a669dcb332d5d15411469f479d1b00d46a6275c59") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
+$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "e89b3f3dc15db9fb98248584a882d1dcad24ef0b688b4c85413fc4b2e6dfd530") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
 ```
 
 希望执行前检查脚本时，可以先单独下载上述 `install.ps1`，阅读后再运行。TLS 证书信任失败时不要关闭证书校验；安装器会显示失败域名，并提示检查系统证书、HTTPS 检查代理和 GitHub 访问。离线 ZIP 流程见操作手册。
+
+已安装 `0.1.0-dev.1` 的用户也运行同一条 dev.2 安装命令一次。它会验证 dev.2 的 hosted qualification Evidence，通过更新事务切换版本，并保留 dev.1 供回滚；从 dev.2 开始，后续普通升级直接运行 `hpi update`。
 
 脚本下载精确 Release 的 ZIP 和 SHA-256 文件，校验后安装到：
 

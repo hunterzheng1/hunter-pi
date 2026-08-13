@@ -40,7 +40,7 @@ hpi plugin doctor
 Windows x64 用户不需要预装 Node.js、npm 或 Pi。发布 `v0.1.0-dev.2` 后，普通安装只需复制这一行：
 
 ```powershell
-$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "aac477a17d6525704be0e69151403dd3152cf584975d91031cd418005fa69103") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
+$i = Join-Path $env:TEMP "hunter-pi-install-v0.1.0-dev.2.ps1"; Invoke-WebRequest -UseBasicParsing "https://github.com/hunterzheng1/hunter-pi/releases/download/v0.1.0-dev.2/install.ps1" -OutFile $i; if ((Get-FileHash $i -Algorithm SHA256).Hash.ToLowerInvariant() -ne "2186508544178ad78c02dc9a669dcb332d5d15411469f479d1b00d46a6275c59") { Remove-Item $i -Force; throw "Hunter Pi installer SHA-256 mismatch" }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $i
 ```
 
 脚本从该精确 GitHub Release 下载 `hpi-windows-x64.zip` 和 `hpi-windows-x64.zip.sha256`，先验证 SHA-256，再安装。默认根目录为 `%LOCALAPPDATA%\HunterPi`；稳定命令位于 `%LOCALAPPDATA%\HunterPi\bin\hpi.cmd`，该 `bin` 目录会幂等加入用户 `PATH`。
